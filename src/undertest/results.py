@@ -2,6 +2,7 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_ai.scorer import CORRECT, INCORRECT
@@ -12,8 +13,9 @@ def summarize(log_dir: Path, output: Path) -> list[dict]:
     output.mkdir(parents=True, exist_ok=True)
     for info in sorted(list_eval_logs(str(log_dir), recursive=True), key=lambda info: info.name):
         log = read_eval_log(info.name)
+        log_path = Path(unquote(urlsplit(info.name).path)) if info.name.startswith("file://") else Path(info.name)
         common = {
-            "log": str(Path(info.name).resolve()),
+            "log": str(log_path.resolve()),
             "eval_created": str(log.eval.created),
             "eval_status": log.status,
             "task": log.eval.task,
@@ -22,7 +24,8 @@ def summarize(log_dir: Path, output: Path) -> list[dict]:
         if not log.samples:
             rows.append({**common, "sample_status": "no_samples", "error": log.error.message if log.error else ""})
         for sample in log.samples or []:
-            identity = f"{Path(info.name).name}:{sample.id}:{sample.epoch}"
+            relative_log = log_path.absolute().relative_to(log_dir.absolute())
+            identity = f"{relative_log}:{sample.id}:{sample.epoch}"
             key = hashlib.sha256(identity.encode()).hexdigest()[:20]
             artifacts = output / "artifacts" / key
             artifacts.mkdir(parents=True, exist_ok=True)

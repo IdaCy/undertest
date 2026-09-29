@@ -66,6 +66,7 @@ def main() -> None:
     rows = summarize(args.output / "logs", args.output)
     assert len(rows) == 8
     assert sum(row["sample_status"] == "error" for row in rows) == 2
+    assert all(Path(row["log"]).is_file() for row in rows)
     assert all((Path(row["artifacts"]) / "report.py").is_file() for row in rows)
     print("Passed: correct/incorrect scoring, independent checks, fresh sandboxes, error capture, artifacts, CSV export.")
 
