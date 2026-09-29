@@ -68,6 +68,7 @@ def main() -> None:
     assert sum(row["sample_status"] == "error" for row in rows) == 2
     assert all(Path(row["log"]).is_file() for row in rows)
     assert all((Path(row["artifacts"]) / "report.py").is_file() for row in rows)
+    assert all("attachment://" not in (Path(row["artifacts"]) / "messages.json").read_text() for row in rows)
     print("Passed: correct/incorrect scoring, independent checks, fresh sandboxes, error capture, artifacts, CSV export.")
 
 

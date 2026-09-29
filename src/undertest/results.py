@@ -12,7 +12,7 @@ def summarize(log_dir: Path, output: Path) -> list[dict]:
     rows = []
     output.mkdir(parents=True, exist_ok=True)
     for info in sorted(list_eval_logs(str(log_dir), recursive=True), key=lambda info: info.name):
-        log = read_eval_log(info.name)
+        log = read_eval_log(info.name, resolve_attachments=True)
         log_path = Path(unquote(urlsplit(info.name).path)) if info.name.startswith("file://") else Path(info.name)
         common = {
             "log": str(log_path.resolve()),
