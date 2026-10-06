@@ -109,7 +109,8 @@ def contrast(assignment, labels, release=False, family_size=11):
             'cells': cells, **bounded_inference(lower, upper, math.sqrt(inverse_reps/(2*count**2)), family_size, release)}
 
 
-def contrast_family(assignments, labels, release=False, *, expected_factors=None, family_size=11):
+def contrast_family(assignments, labels, release=False, *, expected_factors=None, family_size=11,
+                    ineligible_factors=None):
     if len({row['factor'] for row in assignments}) != len(assignments):
         raise ValueError('duplicate_contrast_name')
     actual = {row['factor'] for row in assignments}
@@ -120,11 +121,25 @@ def contrast_family(assignments, labels, release=False, *, expected_factors=None
         raise ValueError('frozen_family_membership_mismatch')
     if len(assignments) > family_size or (release and len(assignments) != family_size):
         raise ValueError('frozen_family_size_mismatch')
-    results = [contrast(row, labels, release, family_size) for row in assignments]
-    for key in ('approximate_p', 'hoeffding_sensitivity_p'):
-        adjusted = holm({row['factor']: row[key] for row in results}) if release else {}
+    if ineligible_factors is not None and not isinstance(ineligible_factors, dict):
+        raise ValueError('invalid_ineligible_factors')
+    ineligible = dict(ineligible_factors or {})
+    if not set(ineligible) <= actual or any(not isinstance(reason, str) or not reason.strip()
+                                           for reason in ineligible.values()):
+        raise ValueError('invalid_ineligible_factors')
+    results = [contrast(row, labels, release and row['factor'] not in ineligible, family_size)
+               for row in assignments]
+    if ineligible:
         for row in results:
-            row[key + '_holm'] = adjusted.get(row['factor'])
+            excluded = row['factor'] in ineligible
+            row.update(inference_eligible=not excluded,
+                       ineligibility_reason=ineligible.get(row['factor']),
+                       multiplicity_placeholder=1.0 if excluded else None)
+    for key in ('approximate_p', 'hoeffding_sensitivity_p'):
+        adjusted = holm({row['factor']: 1.0 if row['factor'] in ineligible else row[key]
+                         for row in results}) if release else {}
+        for row in results:
+            row[key + '_holm'] = None if row['factor'] in ineligible else adjusted.get(row['factor'])
     return results
 
 
