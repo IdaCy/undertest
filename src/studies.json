@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-10-06",
+  "studies": [
+    {
+      "id": "report_control",
+      "area": "shared",
+      "module": "shared.report_control.eval_cue",
+      "scope": "Report repair task, paired cue runner, exported logs and artifacts.",
+      "implementation": "runner"
+    },
+    {
+      "id": "recipe_controls",
+      "area": "causes",
+      "module": "causes.recipe_controls.effects_controls",
+      "scope": "Recipe and validator factorial tasks, fixed control designs, reconciliation and diagnostics.",
+      "implementation": "runner_and_analysis"
+    },
+    {
+      "id": "cue_factors",
+      "area": "causes",
+      "module": "causes.cue_factors.summaries",
+      "scope": "Registered endpoint statistics and missingness summaries for caller-validated saved frames.",
+      "implementation": "analysis_kernels"
+    },
+    {
+      "id": "task_contexts",
+      "area": "causes",
+      "module": "causes.task_contexts.metadata",
+      "scope": "Exact selected metadata pin verification; original host launchers are outside the public interface.",
+      "implementation": "input_validation"
+    },
+    {
+      "id": "layout_labels",
+      "area": "causes",
+      "module": "causes.layout_labels.analyze",
+      "scope": "Fixed 720-position, 240-triple frame and two-contrast analysis.",
+      "implementation": "saved_frame_analysis"
+    },
+    {
+      "id": "visible_history",
+      "area": "causes",
+      "module": "causes.visible_history.saved_output",
+      "scope": "Exact saved-response text verification for the visible-history diagnostic.",
+      "implementation": "analysis_kernel"
+    },
+    {
+      "id": "resampling",
+      "area": "characteristics",
+      "module": "characteristics.resampling.source_structure",
+      "scope": "Source structure and object-renaming signatures; signature equality is not equivalence proof.",
+      "implementation": "analysis_kernels"
+    },
+    {
+      "id": "coherence",
+      "area": "characteristics",
+      "module": "characteristics.coherence.repeat_table",
+      "scope": "Fixed 56-original repeated action/label description with separate NULL states.",
+      "implementation": "saved_frame_analysis"
+    },
+    {
+      "id": "continuations",
+      "area": "characteristics",
+      "module": "characteristics.continuations.run",
+      "scope": "Frozen continuation/restoration preparation, execution interface and analysis.",
+      "implementation": "runner_and_analysis"
+    },
+    {
+      "id": "downstream_effects",
+      "area": "characteristics",
+      "module": "characteristics.downstream_effects.full_continuations.describe",
+      "scope": "Fixed 24-position full-continuation projection, assigned-cue summaries and recipe effort/history.",
+      "implementation": "saved_frame_analysis"
+    },
+    {
+      "id": "reasoning",
+      "area": "signals",
+      "module": "signals.reasoning.run_monitor",
+      "scope": "Saved observations, monitors, situation annotations and explicit V1/V3 checkpoint evidence validation.",
+      "implementation": "measurement"
+    },
+    {
+      "id": "self_reports",
+      "area": "signals",
+      "module": "signals.self_reports.run",
+      "scope": "Actor verbalization, interviews, probability parsing and prompted finite-frame intervals.",
+      "implementation": "measurement"
+    },
+    {
+      "id": "behavioral",
+      "area": "signals",
+      "module": "signals.behavioral.planning.dual_grade",
+      "scope": "Independent sequential STRIPS grading, nullable saved outcomes and Python outcome extraction.",
+      "implementation": "measurement"
+    },
+    {
+      "id": "validation",
+      "area": "signals",
+      "module": "signals.validation.controls.analyze",
+      "scope": "Controlled signal calibration, reader comparison, graded/binary crosswalks and frozen analysis.",
+      "implementation": "validation"
+    },
+    {
+      "id": "released_checkpoints",
+      "area": "emergence",
+      "module": "emergence.checkpoints.calibration.run_panel",
+      "scope": "Calibration panels, fresh registry readers, saved inference adapters and explicit broad-probe labeling worker.",
+      "implementation": "runner_and_analysis"
+    },
+    {
+      "id": "training_methods",
+      "area": "emergence",
+      "module": "emergence.training.protocol",
+      "scope": "Matched-data and group/reward contracts, versioned terminal parsers, release reader, original schedule geometry and numerical kernels.",
+      "implementation": "contracts_and_kernels"
+    }
+  ],
+  "limits": [
+    "Implementation availability does not establish accepted experimental results.",
+    "Protocol versions and assigned experimental units remain distinct.",
+    "The complete training campaign launcher and host-specific orchestration are not public interfaces."
+  ]
+}

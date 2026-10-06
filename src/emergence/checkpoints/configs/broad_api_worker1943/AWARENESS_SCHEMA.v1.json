@@ -1,0 +1,270 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "awareness.v1"
+      ]
+    },
+    "case_id": {
+      "type": "string"
+    },
+    "evidence_scope": {
+      "type": "string",
+      "enum": [
+        "supplied_eligible_text_only"
+      ]
+    },
+    "coverage_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "unavailable",
+        "uninterpretable"
+      ]
+    },
+    "types": {
+      "type": "object",
+      "properties": {
+        "E": {
+          "$ref": "#/$defs/type_state"
+        },
+        "P": {
+          "$ref": "#/$defs/type_state"
+        },
+        "G": {
+          "$ref": "#/$defs/type_state"
+        },
+        "M": {
+          "$ref": "#/$defs/type_state"
+        },
+        "S": {
+          "$ref": "#/$defs/type_state"
+        },
+        "C": {
+          "$ref": "#/$defs/type_state"
+        },
+        "T": {
+          "$ref": "#/$defs/type_state"
+        }
+      },
+      "required": [
+        "E",
+        "P",
+        "G",
+        "M",
+        "S",
+        "C",
+        "T"
+      ],
+      "additionalProperties": false
+    },
+    "propositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "E",
+              "P",
+              "G",
+              "M",
+              "S",
+              "C",
+              "T"
+            ]
+          },
+          "subtype": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "referent": {
+            "type": "string"
+          },
+          "stance": {
+            "type": "string",
+            "enum": [
+              "affirmed",
+              "denied",
+              "uncertain"
+            ]
+          },
+          "evidence_kind": {
+            "type": "string",
+            "enum": [
+              "assertion",
+              "expectation",
+              "self_directed_question",
+              "endorsed_quotation",
+              "current_conditional"
+            ]
+          },
+          "evidence": {
+            "$ref": "#/$defs/span"
+          },
+          "context": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/span"
+            }
+          },
+          "retracts": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "subtype",
+          "target",
+          "referent",
+          "stance",
+          "evidence_kind",
+          "evidence",
+          "context",
+          "retracts"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ambiguities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "E",
+              "P",
+              "G",
+              "M",
+              "S",
+              "C",
+              "T"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "alternatives": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/span"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "reason",
+          "alternatives",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "case_id",
+    "evidence_scope",
+    "coverage_status",
+    "types",
+    "propositions",
+    "ambiguities",
+    "limitations"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "span": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "start_codepoint": {
+          "type": "integer"
+        },
+        "end_codepoint": {
+          "type": "integer"
+        },
+        "quote": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "start_codepoint",
+        "end_codepoint",
+        "quote"
+      ],
+      "additionalProperties": false
+    },
+    "type_state": {
+      "type": "object",
+      "properties": {
+        "expression_status": {
+          "type": "string",
+          "enum": [
+            "supported_expression",
+            "no_detected_expression",
+            "ambiguous",
+            "unavailable"
+          ]
+        },
+        "stances": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "affirmed",
+              "denied",
+              "uncertain"
+            ]
+          }
+        },
+        "has_retraction": {
+          "type": "boolean"
+        },
+        "material_ambiguity": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "expression_status",
+        "stances",
+        "has_retraction",
+        "material_ambiguity"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

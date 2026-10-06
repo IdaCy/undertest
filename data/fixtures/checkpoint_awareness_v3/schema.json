@@ -1,0 +1,677 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:undertest:traindev:annotation-coder-output:v3",
+  "title": "Expressed-awareness coder output V3",
+  "description": "Structural contract. Exact packet binding, codepoint slices, eligible reasoning containment, emission-time context, referents, stance, material ambiguity and actual-reference qualification also require semantic/provenance validation.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "traindev.annotation_coder_output.v3"
+    },
+    "rubric_version": {
+      "const": "V3"
+    },
+    "coder_id": {
+      "type": "string"
+    },
+    "packet_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "view": {
+      "type": "string"
+    },
+    "source_only": {
+      "type": "boolean"
+    },
+    "access_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "phase": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact",
+          "sha256",
+          "phase"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "rubric_version",
+    "coder_id",
+    "packet_sha256",
+    "view",
+    "source_only",
+    "access_history",
+    "cases"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "span": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "start_codepoint": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_codepoint": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "literal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id",
+        "start_codepoint",
+        "end_codepoint",
+        "literal"
+      ],
+      "additionalProperties": false
+    },
+    "current_scope": {
+      "type": "object",
+      "properties": {
+        "applies": {
+          "type": "boolean"
+        },
+        "anchor_proposition_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "anchor_spans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/span"
+          }
+        },
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "applies",
+        "anchor_proposition_ids",
+        "anchor_spans",
+        "condition"
+      ],
+      "additionalProperties": false
+    },
+    "ambiguity": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "enum": [
+            "none",
+            "low"
+          ]
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "level",
+        "alternatives",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "proposition": {
+      "type": "object",
+      "properties": {
+        "proposition_id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "E",
+            "P",
+            "G",
+            "M",
+            "S",
+            "C",
+            "T"
+          ]
+        },
+        "subtype": {
+          "type": "string"
+        },
+        "stance": {
+          "enum": [
+            "affirmed",
+            "denied",
+            "uncertain"
+          ]
+        },
+        "evidence_kind": {
+          "enum": [
+            "assertion",
+            "expectation",
+            "self_directed_question",
+            "instruction",
+            "intention",
+            "presupposition",
+            "quotation",
+            "hypothetical",
+            "endorsed_quotation"
+          ]
+        },
+        "support_level": {
+          "enum": [
+            "direct",
+            "semantically_entailed"
+          ]
+        },
+        "current_scope": {
+          "$ref": "#/$defs/current_scope"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "object": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "horizon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "start_codepoint": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_codepoint": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "literal": {
+          "type": "string"
+        },
+        "additional_evidence_spans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/span"
+          }
+        },
+        "context_spans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/span"
+          }
+        },
+        "supporting_proposition_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "referent": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "observer": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "learner": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "learner_resolution": {
+              "enum": [
+                null,
+                "explicit_model",
+                "context_resolved_model",
+                "explicit_human",
+                "unresolved"
+              ]
+            },
+            "property_literal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "property_normalized": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "subject",
+            "observer",
+            "learner",
+            "learner_resolution",
+            "property_literal",
+            "property_normalized"
+          ],
+          "additionalProperties": false
+        },
+        "ambiguity": {
+          "$ref": "#/$defs/ambiguity"
+        },
+        "retracts_proposition_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "proposition_id",
+        "type",
+        "subtype",
+        "stance",
+        "evidence_kind",
+        "support_level",
+        "current_scope",
+        "target",
+        "object",
+        "horizon",
+        "message_id",
+        "start_codepoint",
+        "end_codepoint",
+        "literal",
+        "additional_evidence_spans",
+        "context_spans",
+        "supporting_proposition_ids",
+        "referent",
+        "ambiguity",
+        "retracts_proposition_id"
+      ],
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "properties": {
+        "candidate_id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "E",
+            "P",
+            "G",
+            "M",
+            "S",
+            "C",
+            "T"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 2
+        },
+        "evidence_spans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/span"
+          },
+          "minItems": 1
+        },
+        "context_spans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/span"
+          }
+        },
+        "affected_reference": {
+          "const": "this_type_and_any_selected_types_aggregate_containing_it"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "type",
+        "reason",
+        "alternatives",
+        "evidence_spans",
+        "context_spans",
+        "affected_reference"
+      ],
+      "additionalProperties": false
+    },
+    "reference": {
+      "type": "object",
+      "properties": {
+        "annotation_eligible": {
+          "type": "boolean"
+        },
+        "actual_reference_eligible": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "annotation_eligible",
+        "actual_reference_eligible",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "type_state": {
+      "type": "object",
+      "properties": {
+        "proposition_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "material_candidate_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "state": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "affirmed",
+              "denied",
+              "uncertain",
+              "materially_ambiguous",
+              "no_detected_expression",
+              "unavailable"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "no_expression_reference": {
+          "$ref": "#/$defs/reference"
+        }
+      },
+      "required": [
+        "proposition_ids",
+        "material_candidate_ids",
+        "state",
+        "no_expression_reference"
+      ],
+      "additionalProperties": false
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable",
+            "uninterpretable"
+          ]
+        },
+        "saved_view_complete": {
+          "type": "boolean"
+        },
+        "actual_window_complete": {
+          "type": "boolean"
+        },
+        "source_qualification": {
+          "enum": [
+            "source_fixture_no_model",
+            "not_established_by_exporter",
+            "owner_qualified_actual_runtime"
+          ]
+        },
+        "owner_qualification_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "known_empty": {
+          "type": "boolean"
+        },
+        "missingness_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "status",
+        "saved_view_complete",
+        "actual_window_complete",
+        "source_qualification",
+        "owner_qualification_ref",
+        "known_empty",
+        "missingness_reasons"
+      ],
+      "additionalProperties": false
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "context_id": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "spans": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/span"
+          },
+          "minItems": 1
+        },
+        "affected_types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "E",
+              "P",
+              "G",
+              "M",
+              "S",
+              "C",
+              "T"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "reason_not_primary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context_id",
+        "category",
+        "spans",
+        "affected_types",
+        "reason_not_primary"
+      ],
+      "additionalProperties": false
+    },
+    "case": {
+      "type": "object",
+      "properties": {
+        "blind_id": {
+          "type": "string"
+        },
+        "view": {
+          "type": "string"
+        },
+        "propositions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/proposition"
+          }
+        },
+        "material_ambiguity_candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/candidate"
+          }
+        },
+        "context_records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/context"
+          }
+        },
+        "per_type_states": {
+          "type": "object",
+          "properties": {
+            "E": {
+              "$ref": "#/$defs/type_state"
+            },
+            "P": {
+              "$ref": "#/$defs/type_state"
+            },
+            "G": {
+              "$ref": "#/$defs/type_state"
+            },
+            "M": {
+              "$ref": "#/$defs/type_state"
+            },
+            "S": {
+              "$ref": "#/$defs/type_state"
+            },
+            "C": {
+              "$ref": "#/$defs/type_state"
+            },
+            "T": {
+              "$ref": "#/$defs/type_state"
+            }
+          },
+          "required": [
+            "E",
+            "P",
+            "G",
+            "M",
+            "S",
+            "C",
+            "T"
+          ],
+          "additionalProperties": false
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "all_selected_types_reference": {
+          "type": "object",
+          "properties": {
+            "selected_types": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "E",
+                  "P",
+                  "G",
+                  "M",
+                  "S",
+                  "C",
+                  "T"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "annotation_eligible": {
+              "type": "boolean"
+            },
+            "actual_reference_eligible": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "selected_types",
+            "annotation_eligible",
+            "actual_reference_eligible",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "blind_id",
+        "view",
+        "propositions",
+        "material_ambiguity_candidates",
+        "context_records",
+        "per_type_states",
+        "coverage",
+        "all_selected_types_reference"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

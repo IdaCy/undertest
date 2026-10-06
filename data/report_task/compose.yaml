@@ -1,8 +1,27 @@
 services:
   default:
-    build: .
+    build:
+      context: .
+      target: actor
     init: true
     network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 128
+  checker:
+    build:
+      context: .
+      target: checker
+    init: true
+    network_mode: none
+    read_only: true
+    user: root
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     cpus: 1.0
     mem_limit: 512m
     pids_limit: 128

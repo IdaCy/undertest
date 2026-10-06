@@ -1,20 +1,30 @@
 # undertest
 
-Experiments on evaluation and simulation awareness in language models. We want to understand which cues models respond to, how this changes during training, and when it affects their behavior.
+Experiments on metagaming in language models: what causes it, how it behaves, which signals reveal it, and how it develops during training.
 
-Starting with a working task, change one factor, and repeat the run while keeping everything else fixed.
-
-Using:
-Python and [Inspect](https://inspect.aisi.org.uk/) for model access, task execution, repeated runs, and logs. Each experiment will be a short Python script with settings set.
+The source tree follows those four research questions. Study code, runnable entry points, analysis and protocol configuration live together. Common task, run and result utilities live in `src/shared/`.
 
 ```text
-undertest/
-  pyproject.toml          # dependencies
-  uv.lock                # pinned dependency versions
-  src/undertest/tasks/    # task definitions, variants, and success checks
-  data/                  # fixed task inputs and Docker files
-  experiments/           # scripts to run comparisons and summarize results
-  results/               # local logs, output artifacts, and result tables
+src/
+  shared/             task, run and result utilities
+  causes/             cues, task contexts, visible history, labels and controls
+  characteristics/    resampling, coherence, continuations and downstream effects
+  signals/            reasoning, self-reports, behavior and validation
+  emergence/          released checkpoints and controlled training methods
+  studies.json        implemented studies and their current scope
+data/                 report task inputs, synthetic fixtures and source conventions
+tests/                checks organized by the same research areas
+docs/                 overview, methods, reproduction and data documentation
 ```
 
-Setup will need Python with `uv`, Inspect, and the packages for the model providers we use. Repository tasks also need Docker.
+Start with the [project overview](docs/overview.md), [methods](docs/methods.md), [reproduction instructions](docs/reproduction.md), and [data guide](docs/data.md). The [study catalogue](src/studies.json) distinguishes runnable studies, saved-frame analysis and extracted calculation kernels.
+
+With Python 3.11 or later and uv installed:
+
+```bash
+uv sync --locked
+uv run python -m unittest discover -s tests -t .
+uv run python -m shared.report_control.eval_cue --dry-run --output /tmp/undertest-report-preview
+```
+
+Live report tasks also require Docker and a configured model provider. Saved-data analyses and synthetic tests do not require model calls. Provide explicit input and output locations; retain original records, protocol versions and missing outcomes when comparing studies.
