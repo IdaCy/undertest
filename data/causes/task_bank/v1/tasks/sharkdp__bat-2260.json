@@ -1,0 +1,60 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/sharkdp__bat-2260",
+    "task_root": "tasks/sharkdp__bat-2260"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/usr/local/rustup/toolchains/1.81.0-x86_64-unknown-linux-gnu/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME=/workspace/bat/.cache/home",
+      "CARGO_HOME=/workspace/bat/.cache/cargo",
+      "RUSTUP_HOME=/usr/local/rustup",
+      "RUSTUP_TOOLCHAIN=1.81.0-x86_64-unknown-linux-gnu",
+      "CARGO_NET_OFFLINE=true",
+      "CARGO_BUILD_JOBS=1",
+      "CARGO_TERM_COLOR=never",
+      "RAYON_NUM_THREADS=1",
+      "LANG=C.UTF-8",
+      "LC_ALL=C.UTF-8",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_TERMINAL_PROMPT=0",
+      "GIT_NO_REPLACE_OBJECTS=1",
+      "GIT_CONFIG_COUNT=3",
+      "GIT_CONFIG_KEY_0=core.hooksPath",
+      "GIT_CONFIG_VALUE_0=/dev/null",
+      "GIT_CONFIG_KEY_1=core.fsmonitor",
+      "GIT_CONFIG_VALUE_1=false",
+      "GIT_CONFIG_KEY_2=credential.helper",
+      "GIT_CONFIG_VALUE_2=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "CUDA_VISIBLE_DEVICES="
+    ],
+    "actor_uid": 65532,
+    "base_commit": "c14ce4f7caa36fe524975c51f7aae3d5a852d1f9",
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.uutils_1776_coreutils-6377@sha256:bd0c897981cea73fada6ab3a7cbde21f2cbbed3131a27edee57582f0d19d4f48",
+    "image_config_digest": "sha256:7dc6e39cf8e89ff418341a2d1e0c2cdc79b4c03a9bd4f5467b037f0567d71911",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "sharkdp/bat",
+    "request": "Context\nThe --map-syntax and --ignored-suffix options do not work together as expected. A custom mapping such as *.demo:YAML works for report.demo, but adding an ignored suffix can prevent that same mapping from being selected.\n\nRequested change\nPlease make custom syntax mappings work after ignored filename suffixes are removed. For example, report.demo.example should use the *.demo:YAML mapping when .example is ignored. Support chained ignored suffixes, such as report.demo.foo.example when both .foo and .example are configured.\n\nExpected behavior\nKeep ordinary syntax detection working. Preserve the existing behavior for invalid custom mappings, stdin versus file input, and syntax mappings supplied through the supported Git configuration locations.\n\nChecks\nInspect the syntax-selection code, implement the fix and run focused tests. Summarize the change and the checks you ran.\n",
+    "request_sha256": "25c0dcd69cab04c8153bbdcae2d2b9cb48baf2aca6a03cdcea57c855bb37b5df",
+    "schema": "caus.native_prefix_task.v1",
+    "task_id": "sharkdp__bat-2260",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000",
+      "/usr/local/cargo/git": "ro,nosuid,nodev,size=65536,mode=000",
+      "/usr/local/cargo/registry": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/bat"
+  },
+  "task_id": "sharkdp__bat-2260"
+}

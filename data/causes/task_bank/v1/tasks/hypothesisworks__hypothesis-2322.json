@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/hypothesisworks__hypothesis-2322",
+    "task_root": "tasks/hypothesisworks__hypothesis-2322"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "7b40929a3f5ca285e058267c42ea3d3ad947ed98",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:670b80add6ad1104334bb8ca7e016df810805b1f7577ab68b10457513800c9a4",
+    "cpus": 1,
+    "image": "swerebenchv2/hypothesisworks-hypothesis@sha256:dce9634a16e5bc108ff4a44af295ac0d61d1dc78697213d163a5c7bc8cd070d5",
+    "image_id": "sha256:dce9634a16e5bc108ff4a44af295ac0d61d1dc78697213d163a5c7bc8cd070d5",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/hypothesis",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "HypothesisWorks/hypothesis",
+    "request": "`from_type(Set[Decimal])` raises an internal error because signalling NaN is not hashable\nI've gotten `from_type(Set[Hashable])` to reliably fail during generation. It seems that `Hashable` generates `Decimal` objects, which is fine. However, hypothesis fails when trying to hash signaling NaNs.\r\n\r\nI'm not too familiar with the inner workings of strategy generation, but I think it would be reasonable to \"turn off\" signaling NaNs in composite strategies whenever they might need to be hashed (`sets`, `frozensets`, the keys of `dictionaries`, etc...).\r\n\r\nHere's a minimal example.\r\n\r\n```py\r\nPython 3.7.4 (default, Sep  7 2019, 18:27:02) \r\n[Clang 10.0.1 (clang-1001.0.46.4)] on darwin\r\nType \"help\", \"copyright\", \"credits\" or \"license\" for more information.\r\n>>> import hypothesis\r\n>>> hypothesis.__version__\r\n'5.1.5'\r\n>>> from hypothesis.strategies import decimals, sets\r\n>>> s = sets(decimals())\r\n>>> s.example()\r\n{Decimal('-NaN'), Decimal('-0.5'), Decimal('0.294355'), Decimal('Infinity'), Decimal('3.00472547')}\r\n>>> s.example()\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/strategies.py\", line 314, in example\r\n    example_generating_inner_function()\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/strategies.py\", line 302, in example_generating_inner_function\r\n    @settings(\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/core.py\", line 1080, in wrapped_test\r\n    raise the_error_hypothesis_found\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/core.py\", line 1049, in wrapped_test\r\n    state.run_engine()\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/core.py\", line 723, in run_engine\r\n    runner.run()\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/engine.py\", line 420, in run\r\n    self._run()\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/engine.py\", line 815, in _run\r\n    self.generate_new_examples()\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/engine.py\", line 667, in generate_new_examples\r\n    self.test_function(data)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/engine.py\", line 155, in test_function\r\n    self.__stoppable_test_function(data)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/engine.py\", line 137, in __stoppable_test_function\r\n    self._test_function(data)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/core.py\", line 676, in _execute_once_for_engine\r\n    escalate_hypothesis_internal_error()\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/core.py\", line 647, in _execute_once_for_engine\r\n    result = self.execute_once(data)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/core.py\", line 602, in execute_once\r\n    result = self.test_runner(data, run)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/executors.py\", line 52, in default_new_style_executor\r\n    return function(data)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/core.py\", line 543, in run\r\n    args, kwargs = data.draw(self.search_strategy)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 879, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/collections.py\", line 57, in do_draw\r\n    return tuple(data.draw(e) for e in self.element_strategies)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/collections.py\", line 57, in <genexpr>\r\n    return tuple(data.draw(e) for e in self.element_strategies)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/strategies.py\", line 639, in do_draw\r\n    result = self.pack(data.draw(self.mapped_strategy))\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/lazy.py\", line 150, in do_draw\r\n    return data.draw(self.wrapped_strategy)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/strategies.py\", line 639, in do_draw\r\n    result = self.pack(data.draw(self.mapped_strategy))\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/collections.py\", line 57, in do_draw\r\n    return tuple(data.draw(e) for e in self.element_strategies)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/collections.py\", line 57, in <genexpr>\r\n    return tuple(data.draw(e) for e in self.element_strategies)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/lazy.py\", line 150, in do_draw\r\n    return data.draw(self.wrapped_strategy)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/strategies.py\", line 639, in do_draw\r\n    result = self.pack(data.draw(self.mapped_strategy))\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/lazy.py\", line 150, in do_draw\r\n    return data.draw(self.wrapped_strategy)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/internal/conjecture/data.py\", line 874, in draw\r\n    return strategy.do_draw(self)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/collections.py\", line 158, in do_draw\r\n    data=data, filter_strategy=filtered\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/strategies.py\", line 352, in do_filtered_draw\r\n    return filter_strategy.default_do_filtered_draw(data)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/strategies.py\", line 729, in default_do_filtered_draw\r\n    if self.condition(value):\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/collections.py\", line 153, in <lambda>\r\n    key(val) not in seen for (key, seen) in zip(self.keys, seen_sets)\r\n  File \"/usr/local/lib/python3.7/site-packages/hypothesis/strategies/_internal/collections.py\", line 153, in <genexpr>\r\n    key(val) not in seen for (key, seen) in zip(self.keys, seen_sets)\r\nTypeError: Cannot hash a signaling NaN value\r\n```\r\n\r\nThanks for such an awesome library! If this is an easy fix, I'm happy to take it... but a quick scan of the relevant code seemed a bit complex.",
+    "request_sha256": "dcbc35584595ffa7d258989bd51b6c0565dc590f41b052928824680298b8452f",
+    "schema": "caus.future_native12_source_prefix_task.v1",
+    "task_id": "hypothesisworks__hypothesis-2322",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/hypothesis": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "hypothesisworks__hypothesis-2322"
+}

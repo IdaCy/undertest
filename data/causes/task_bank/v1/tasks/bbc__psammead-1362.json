@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/bbc__psammead-1362",
+    "task_root": "tasks/bbc__psammead-1362"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "14583a2522eeeedf8207c817bddcd2b2212e23a0",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:1b09f3286e20ea62f7dbe21117cb05d5dbda9bd3d8c07eb18459b449ac0c2e59",
+    "cpus": 1,
+    "image": "swerebenchv2/bbc-psammead@sha256:51aae89fa1c49d783593fdafea188f011ed93c7b4c68f8befc5d4a9f05e9f679",
+    "image_id": "sha256:51aae89fa1c49d783593fdafea188f011ed93c7b4c68f8befc5d4a9f05e9f679",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/psammead",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "bbc/psammead",
+    "request": "SiteWideLinks should not use inline link styling\n**Is your feature request related to a problem? Please describe.**\r\nUX have confirmed that the SiteWideLinks component should not use the same styling as the inline link component. This is because the inline link is designed to be used in the body of the article and therefore has styling (such as using `border-bottom` rather than `text-decoration: underline`) that is meant to improve legibility when amongst other text. \r\n\r\nTherefore for consistency the SiteWideLink hover & focus styling should use text-decoration rather than border-bottom similar to how the [storyPromo `Link`](https://github.com/bbc/psammead/blob/latest/packages/components/psammead-story-promo/src/index.jsx#L238-L241) works\r\n\r\n**Describe the solution you'd like**\r\nChange the border-bottom styling on site-wide-links to be text-decoration: underline for consistency with links not in the article body (front-pages and promo components)\r\n\r\n**Describe alternatives you've considered**\r\nN/A\r\n\r\n**Testing notes**\r\n[Tester to complete]\r\n\r\nDev insight: Regression of the site-wide-links component in storybook\r\n\r\n**Additional context**\r\nN/A\r\n",
+    "request_sha256": "73c850f537e158587cd6b3195436cd9525e8ef97d7c52dd90447058bd491a4e1",
+    "schema": "caus.future_native12_source_prefix_task.v1",
+    "task_id": "bbc__psammead-1362",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/psammead": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "bbc__psammead-1362"
+}

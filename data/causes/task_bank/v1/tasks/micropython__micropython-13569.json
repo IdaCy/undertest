@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/micropython__micropython-13569",
+    "task_root": "tasks/micropython__micropython-13569"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "2d7fb9a715d8c9f1f7ba73a62cfd587fa6ffc24a",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.micropython_1776_micropython-13569@sha256:8ddaaa748ac5a9fe106312f999ff1d11a57e8ad49c7616b169af1551b7053af7",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "micropython/micropython",
+    "request": "Strange bug in try - finally block\nThis snippet is not working properly on Micropython compared to CPython:\r\n\r\n```python\r\nclass IDGenerator:\r\n    def __init__(self, max_id: int):\r\n        self._i = 0\r\n        self._mi = max_id\r\n\r\n    def get(self):\r\n        try:\r\n            return self._i\r\n        finally:\r\n            self._i += 1\r\n            if self._i > self._mi:\r\n                self._i = 0\r\n\r\nid_gen = IDGenerator(10)\r\nprint(id_gen.get())\r\n```\r\n\r\nThe output on Micropython `v1.22.1` is:\r\n\r\n```python\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\n  File \"<stdin>\", line 11, in get\r\nAttributeError: 'int' object has no attribute '_i'\r\n```\n",
+    "request_sha256": "8451c6d1ce3358bbc2298f4245eb3a863c85420f252ae3eae500f64277aea20d",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "micropython__micropython-13569",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "micropython__micropython-13569"
+}

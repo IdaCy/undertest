@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/jqlang__jq-2728",
+    "task_root": "tasks/jqlang__jq-2728"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "87e3dfddb80015bd71259a4a295ca73bed398bd2",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.jqlang_1776_jq-2728@sha256:4b4d58407beba3970dc4a64c4d993b0cb907db9c09c705bf83a7b133b06d5517",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "jqlang/jq",
+    "request": "Context\nI use jq inside a terminal wrapper and want to disable automatic ANSI colors through the environment. Adding a special command-line flag in every caller is inconvenient.\n\nRequested change\nPlease support the NO_COLOR environment variable. A nonempty value should disable automatic color output. An unset variable or an empty value should leave the normal terminal-based color choice unchanged.\n\nExpected behavior\nExplicit command-line choices still take precedence: -C can request colors even when NO_COLOR is set, and -M requests monochrome output. Preserve the ordinary output content and the existing jq and regular-expression behavior.\n\nChecks\nInspect the color-selection code, make the change and run the relevant checks. Include a check that uses a terminal so automatic color selection is exercised. Summarize the change and the checks you ran.\n",
+    "request_sha256": "00969211bad86ce257351fc3a2798b7cb890c1e5a6a7060f992ddbbf060b6614",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "jqlang__jq-2728",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "jqlang__jq-2728"
+}

@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/laravel__framework-48573",
+    "task_root": "tasks/laravel__framework-48573"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "0bf186a30279212a44d6818f8db6ddf70baa4d1a",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.laravel_1776_framework-48573@sha256:286ec2640a60413c554c7009e41577c804810cec451967564fd8a9bfeb1108da",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "laravel/framework",
+    "request": "Context\nArrayStore cache entries can expire at the wrong time when they are written partway through a second. Rounding the clock to whole seconds does not preserve the requested lifetime.\n\nRequested change\nPlease make ArrayStore calculate and check expiration with fractional-second precision. An entry written at 00:00:00.500 with a one-second lifetime should still be available at 00:00:01.499 and should be expired at 00:00:01.500. Expiration should occur at the deadline, not only after it.\n\nExpected behavior\nPreserve the existing zero-expiration and forever behavior. Keep the other ArrayStore operations and its existing lock behaviors working. This request concerns the in-memory ArrayStore; it does not require changes to another cache backend.\n\nChecks\nInspect the expiration handling, implement the fix and run the ArrayStore tests. Summarize the change and the checks you ran.\n",
+    "request_sha256": "33fddb2759d785cc8628f67de14a89f898b6072a6c82d7e5619142645177249b",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "laravel__framework-48573",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "laravel__framework-48573"
+}

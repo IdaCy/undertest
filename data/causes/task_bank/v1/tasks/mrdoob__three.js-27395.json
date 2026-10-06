@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/mrdoob__three.js-27395",
+    "task_root": "tasks/mrdoob__three.js-27395"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "b99b3fd955864f534b1e2649518112f7e50fef21",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.mrdoob_1776_three.js-27395@sha256:ac7d66d87f2d38b70255b656975a77d7e806a70a4a32b4fd71540edb93a22f89",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "mrdoob/three.js",
+    "request": "Class Sphere is missing property isSphere\n### Description\n\nBox3 has this.isBox3 = true;\r\nSphere does not have this.isSphere;\n\n### Reproduction steps\n\nI need it for \r\nif(collider.isSphere)\n\n### Code\n\na = new Sphere()\r\nif(a.isSphere){ debugger }\n\n### Live example\n\nno example\n\n### Screenshots\n\n_No response_\n\n### Version\n\nr159\n\n### Device\n\n_No response_\n\n### Browser\n\n_No response_\n\n### OS\n\n_No response_\n",
+    "request_sha256": "9392d4183d6bb099e9e2e8a5de1e253926f681e1a72f868631363baacf6c2af4",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "mrdoob__three.js-27395",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "mrdoob__three.js-27395"
+}

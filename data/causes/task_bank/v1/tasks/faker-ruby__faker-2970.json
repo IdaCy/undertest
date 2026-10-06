@@ -1,0 +1,47 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/faker-ruby__faker-2970",
+    "task_root": "tasks/faker-ruby__faker-2970"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "37a7ea2cdceae530d79197d887a347a877cd3dd4",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:8989ab774bc3b6df7b4392d054915476acd6b9e8b63493b02c992d75917497d9",
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.faker-ruby_1776_faker-2970@sha256:68c75227cb16598d8033d058e714a68ee3faa18871301515d4f559548f22afcf",
+    "image_id": "sha256:68c75227cb16598d8033d058e714a68ee3faa18871301515d4f559548f22afcf",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "faker-ruby/faker",
+    "request": "Latest version generates invalid email addresses\n## Describe the bug\r\n\r\nWhen letting faker generate email addresses based on names, it now generates invalid email addresses, where older versions did not.\r\n\r\nExample:\r\n\r\n```ruby\r\n# Faker 3.4.1\r\nFaker::Internet.unique.email(name: \" Msgr. Titus Harvey\")\r\n# => \"harvey.msgr..titus@russel-von.example\"\r\n```\r\n\r\nThe email is invalid as two sequential dots appear.\r\n\r\n```ruby\r\n# Faker 3.3.1\r\nFaker::Internet.unique.email(name: \" Msgr. Titus Harvey\")\r\n# => \"harvey_msgr_titus@corwin.example\"\r\n```\r\n\r\n## To Reproduce\r\n\r\nSee code samples above\r\n\r\n## Expected behavior\r\n\r\nFactory should keep generating valid email addresses, as a major escape is to populate databases with valid looking data.\r\n\r\n## Additional context\r\n\r\nNone\r\n\n",
+    "request_sha256": "c51ac2e5ea695404eb57f0ed854871dc63019ea6de4aac4ea14518380bcacf15",
+    "schema": "caus.future_native12_source_prefix_task.v1",
+    "task_id": "faker-ruby__faker-2970",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "faker-ruby__faker-2970"
+}

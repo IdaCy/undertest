@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/jqlang__jq-2235",
+    "task_root": "tasks/jqlang__jq-2235"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "b8816caf0a7f58c6483f4344e222a6fea47732e8",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.jqlang_1776_jq-2235@sha256:de8642fb3c448f91f5971847957a7363d845483f3100d1d10b5894dc5bdd49eb",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "jqlang/jq",
+    "request": "Add -0 command-line option\nIt'd be nice to be able to use ASCII `NUL` instead of `LF` for non-raw-output mode for use with `xargs -0` and such.  In raw output mode, of course, one can use `-j` and output `\"\\u0000\"` as necessary.\r\n\r\nAs a workaround until this is done, use raw-output mode and output raw values, but pipe all strings to `tojson` first: `jq -rj '... | if type==\"string\" then tojson else . end'`.\n",
+    "request_sha256": "85db5c6365845dde02a036aba63f2aaefe0bf50aa5cf5ea5b004728b7a7cb815",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "jqlang__jq-2235",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "jqlang__jq-2235"
+}

@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/caddyserver__caddy-6345",
+    "task_root": "tasks/caddyserver__caddy-6345"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "f6d2c293e752254769efe21c8d06a16ebad4845e",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.caddyserver_1776_caddy-6345@sha256:5e0a75313a48aeb38fe6bf758db9341e5513898d5fdbd7be2dc6bf261d3667ed",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "caddyserver/caddy",
+    "request": "Set `sign_with_root` via Caddyfile\nPlease make the `sign_with_root` option [from the JSON config](https://caddyserver.com/docs/json/apps/tls/automation/policies/issuers/internal/#sign_with_root) available in the Caddyfile  \r\nMaybe related: https://github.com/caddyserver/caddy/issues/6290#issuecomment-2090785745\n",
+    "request_sha256": "819dbfad5e339301fe3ae323d3e64de0c112f9a0bda438f3e4e7c2e14348264b",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "caddyserver__caddy-6345",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "caddyserver__caddy-6345"
+}

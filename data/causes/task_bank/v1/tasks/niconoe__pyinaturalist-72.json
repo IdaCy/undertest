@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/niconoe__pyinaturalist-72",
+    "task_root": "tasks/niconoe__pyinaturalist-72"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "3cd4a4f40a62aa28e19d3fdcd58bdc2bf7def373",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:3949ea4aaa4830e4b373b6e0ca60d2e3c024e52e9a564ba7c6bcb61e13db4aa9",
+    "cpus": 1,
+    "image": "swerebenchv2/niconoe-pyinaturalist@sha256:e757fa2065863c222cd4de5d6e6bb08bb55e1ec3c0bc67647b39608c0c29f9d1",
+    "image_id": "sha256:e757fa2065863c222cd4de5d6e6bb08bb55e1ec3c0bc67647b39608c0c29f9d1",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/pyinaturalist",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "niconoe/pyinaturalist",
+    "request": "Add support for providing credentials via environment variables\nAs an alternative to passing user credentials as arguments to `rest_api.get_access_token()`, it would be useful to also have the option of providing these via shell environment variables, for example:\r\n```\r\nexport INAT_USERNAME=\"\"\r\nexport INAT_PASSWORD=\"\"\r\nexport INAT_APP_ID=\"\"\r\nexport INAT_APP_SECRET=\"\"\r\n```\r\n\r\nThis is a pretty common pattern in other applications (for example, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html)), since environment variables offer a bit more flexibility. For example, creds can be stored in the system keychain or other secure format and then loaded with something like `export INAT_PASSWORD=$(secret-tool lookup ...)`.\r\n\r\nThere is also the python [keyring](https://github.com/jaraco/keyring) package that provides convenient integration with the system keyring, but that could be a separate issue (EDIT: created #69 for this).\r\n\r\nIf both function arguments and environment variables were to be specified, function arguments would take precedence.",
+    "request_sha256": "a50935851eb486784d26af72b8b0dabdd34c3b26daca170c0a27fb4254330da0",
+    "schema": "caus.future_native12_source_prefix_task.v1",
+    "task_id": "niconoe__pyinaturalist-72",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/pyinaturalist": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "niconoe__pyinaturalist-72"
+}

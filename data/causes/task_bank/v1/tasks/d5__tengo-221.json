@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/d5__tengo-221",
+    "task_root": "tasks/d5__tengo-221"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "2e74690f5ec73e6707606fd92bca02f7f17c452f",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:7f7a879d9ecfeebd1b22389fc722e983b3bfc0fdd102cc79aada9695dd951a19",
+    "cpus": 1,
+    "image": "swerebenchv2/d5-tengo@sha256:c8f21fb6f09a429916cbb4d5febb744cbdb2cfefc1dd6b237564eb1ad36cedb8",
+    "image_id": "sha256:c8f21fb6f09a429916cbb4d5febb744cbdb2cfefc1dd6b237564eb1ad36cedb8",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/tengo",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "d5/tengo",
+    "request": "add hex and base64 encoding\nI'm currently working on a [crypto module](https://github.com/Ma124/tengo/tree/stdlib-crypto) #135 and often you want your encrypted data base64 encoded or your hashes as hex.\r\n\r\nWhich is why I suggest adding these features to the text module or an encoding module with support for base64 encoding and hex because the only way I known to hex encode bytes at the moment is `sprintf(\"%x\", bin)` which is neither immediately obvious nor efficient.\r\n\r\nWith some featback from @d5 I can create a pull request.",
+    "request_sha256": "5d5ac208028ef7dc92eac4f2ae08890c99c21cd86a89eca284e268c5d5611ac1",
+    "schema": "caus.future_native12_source_prefix_task.v1",
+    "task_id": "d5__tengo-221",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/tengo": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "d5__tengo-221"
+}

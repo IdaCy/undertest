@@ -1,0 +1,45 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/immutable-js__immutable-js-2006",
+    "task_root": "tasks/immutable-js__immutable-js-2006"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "493afba6ec17d9c999dc5a15ac80c71c6bdba1c3",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.immutable-js_1776_immutable-js-2006@sha256:1ac139875abc24e7660edf19827b8071492f9f26b37f559ff6bd67566f09602a",
+    "image_id": "sha256:1ac139875abc24e7660edf19827b8071492f9f26b37f559ff6bd67566f09602a",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "immutable-js/immutable-js",
+    "request": "filter followed by slice with negative begin not working\n### What happened\r\n\r\nI would expect the following code\r\n\r\n`Immutable.Range(0, 10).filter($ => true).slice(-2).toArray()`\r\n\r\nto return\r\n\r\n`[8, 9]`\r\n\r\nbut instead it returns\r\n\r\n`[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]`\r\n\r\ni.e. the slice operation is ignored.\r\n\r\nIf you remove the filter operation, the slice works as expected.\r\n\r\nIf you slice with a positive begin value, it works as expected.\r\n\r\n<!-- Shortly summarize what went wrong. Be sure to include not just what\r\n  happened, but what you expected to happen as well. -->\r\n\r\n### How to reproduce\r\n\r\nRun the above code snippets in the Chrome debug console on the [immutable-js.com](https://immutable-js.com) website, which embeds the Immutable library.\n",
+    "request_sha256": "931e3496b2e6ebc4a453b9a332f6ad50e8d250b0e9ed3bbc4fd0b1b80c187565",
+    "schema": "caus.future_source_prefix_task.v1",
+    "task_id": "immutable-js__immutable-js-2006",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "immutable-js__immutable-js-2006"
+}

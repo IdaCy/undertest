@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/apache__lucene-12196",
+    "task_root": "tasks/apache__lucene-12196"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "0651d25713dde144df6541663b18accbc93cdc64",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.apache_1776_lucene-12196@sha256:076572487ebcf3f0dfbedc84ee564e53e6004642b48bab051ef65af5d4584829",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "apache/lucene",
+    "request": "Slop is missing when boost is passed to MultiFieldQueryParser (Since Lucene 5.4.0)\n### Description\n\nOn Lucene 5.3.2, If I run \r\n```java\r\nString[] fields = new String[]{ \"field1\"};\r\nAnalyzer analyzer = new StandardAnalyzer();\r\nMap<String, Float> boosts = Map.of(\"field1\", 1.5f);\r\nMultiFieldQueryParser parser = new MultiFieldQueryParser(fields, analyzer, boosts);\r\nQuery query = parser.parse(\"\\\"hello world\\\"~1\");\r\nSystem.out.println(query);\r\n```\r\nOutput is _field1:\"hello world\"~1^1.5_\r\n\r\nIf I run the same code with Lucene 5.4.0 or later, the output is _field1:\"hello world\"^1.5_\r\nAs you can see, the slop is missing from output.\r\n\r\nHowever when I don't pass boosts to MultiFieldQueryParser, slop is working as expected.\r\n\r\n```java\r\nString[] fields = new String[]{ \"field1\"};\r\nAnalyzer analyzer = new StandardAnalyzer();\r\nMultiFieldQueryParser parser = new MultiFieldQueryParser(fields, analyzer);\r\nQuery query = parser.parse(\"\\\"hello world\\\"~1\");\r\nSystem.out.println(query);\r\n```\r\n\r\nOutput: _field1:\"hello world\"~1_\n\n### Version and environment details\n\nLucene 5.3.2 and Lucene 5.4.0\r\nOS: Windows\n",
+    "request_sha256": "3b03dcd656444be17bd54cd1b8b8eb243cc4e14695fe0ba3ee5118e6aed4310f",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "apache__lucene-12196",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "apache__lucene-12196"
+}
