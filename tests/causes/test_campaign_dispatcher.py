@@ -316,6 +316,32 @@ class DispatcherTests(unittest.TestCase):
         self.assertTrue(dispatcher.route_ready(item))
         self.assertFalse(dispatcher.quarantines)
 
+    def test_closed_unmounted_container_retained_for_evidence_is_not_recorder_failure(self):
+        dispatcher = self.dispatcher([], lambda *args: None)
+        dispatcher.meta.mkdir()
+        item = job('retained_evidence')
+        summary = finish(item['spec'], item['variant'], self.config, item['allocation'], self.output / 'retained_evidence',
+                         sandbox_closure={'state': 'closed', 'closure_errors': [],
+                                          'overlay_mounted': False, 'retained_container': True})
+        future = concurrent.futures.Future()
+        future.set_result(summary)
+        dispatcher.complete(future, item)
+        self.assertFalse(dispatcher.quarantines)
+        finished = next(e for e in self.events() if e['event'] == 'episode_finished')
+        self.assertFalse(finished['technical_failure'])
+
+    def test_actual_closure_errors_still_quarantine_recorder(self):
+        dispatcher = self.dispatcher([], lambda *args: None)
+        dispatcher.meta.mkdir()
+        item = job('closure_failure')
+        summary = finish(item['spec'], item['variant'], self.config, item['allocation'], self.output / 'closure_failure',
+                         sandbox_closure={'state': 'closure_requires_review', 'closure_errors': ['unmount_failed'],
+                                          'overlay_mounted': True, 'retained_container': True})
+        future = concurrent.futures.Future()
+        future.set_result(summary)
+        dispatcher.complete(future, item)
+        self.assertIn(dispatcher.routes(item)[2], dispatcher.quarantines)
+
     def test_extension_determinism_preserves_full_selection_and_input(self):
         prototypes = [job('prototype', True)]
         frozen = copy.deepcopy(prototypes)

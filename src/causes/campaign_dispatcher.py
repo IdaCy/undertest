@@ -256,7 +256,7 @@ class Dispatcher:
                 route_faults[model_route] = {'immediate': is_protocol or prior.get('immediate', False), 'fault_kind': 'probe_infrastructure_or_unusable_instrument'}
         closure = result.get('sandbox_closure', {})
         if (result.get('sandbox_close_error') or closure.get('state') == 'closure_requires_review'
-                or closure.get('overlay_mounted') or closure.get('retained_container')
+                or closure.get('overlay_mounted') or closure.get('closure_errors')
                 or any(result.get(stage + '_workspace_status') == 'failed' for stage in ('early', 'end'))):
             route_faults[recorder_route] = {'immediate': True, 'fault_kind': 'snapshot_or_closure_integrity'}
         failed = bool(route_faults)
