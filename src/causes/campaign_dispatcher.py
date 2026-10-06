@@ -18,6 +18,7 @@ import uuid
 
 _SOURCE = Path(__file__).read_bytes()
 _SOURCE_SHA = hashlib.sha256(_SOURCE).hexdigest()
+_SUCCESSION_PREDECESSOR = '5dbbe46249b6ab3e86ce09a55b66d86038ade23fcd4264bd716b890dea29bd3d'
 
 
 def encoded(value):
@@ -55,6 +56,53 @@ def save_new(path, value):
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def pinned_json(path, expected_sha256):
+    path = Path(path)
+    if (not path.is_absolute() or path.resolve() != path
+            or any(part.is_symlink() for part in (path, *path.parents))):
+        raise ValueError('noncanonical_admission_control_path')
+    raw = path.read_bytes()
+    if len(raw) > 1024 * 1024 or hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError('admission_control_pin_mismatch')
+    return json.loads(raw), {'path': str(path), 'bytes': len(raw), 'sha256': expected_sha256}
+
+
+class AdmissionHolds:
+    def __init__(self, path, expected_sha256):
+        value, self.pin = pinned_json(path, expected_sha256)
+        if value.get('schema') != 'caus.admission_holds.v1' or not isinstance(value.get('holds'), list):
+            raise ValueError('invalid_admission_holds')
+        self.holds = value['holds']
+        ids = set()
+        for row in self.holds:
+            if (not isinstance(row.get('hold_id'), str) or not row['hold_id'] or row['hold_id'] in ids
+                    or not isinstance(row.get('task_id'), str) or not row['task_id']
+                    or any(not re.fullmatch('[a-f0-9]{64}', str(row.get(key, '')))
+                           for key in ('stimulus_sha256', 'definition_sha256'))):
+                raise ValueError('invalid_admission_hold_binding')
+            ids.add(row['hold_id'])
+        self.seen = set()
+
+    def verify(self):
+        _, current = pinned_json(self.pin['path'], self.pin['sha256'])
+        if current != self.pin:
+            raise ValueError('admission_holds_changed')
+
+    def matches(self, job):
+        task, variant = job['spec'].get('task_id'), job['variant']
+        stimulus, definition = variant.get('stimulus_sha256'), variant.get('definition_sha256')
+        result = []
+        for row in self.holds:
+            if row['task_id'] != task:
+                continue
+            if definition == row['definition_sha256'] and stimulus != row['stimulus_sha256']:
+                raise ValueError('held_definition_stimulus_drift')
+            # A canonical alias of the same physical stimulus is also held.
+            if stimulus == row['stimulus_sha256']:
+                result.append(row['hold_id'])
+        return result
 
 
 def validate_job(job):
@@ -102,7 +150,9 @@ def extension_block(prototypes, config, block_index):
 
 class Dispatcher:
     def __init__(self, jobs, config, output, workers=8, max_full=2, extension_prototypes=None,
-                 pause_file=None, runner=None, free_bytes=None, poll_seconds=2):
+                 pause_file=None, runner=None, free_bytes=None, poll_seconds=2,
+                 admission_holds=None, admission_holds_sha256=None,
+                 code_succession=None, code_succession_sha256=None):
         if type(workers) is not int or workers < 1 or type(max_full) is not int or not 0 <= max_full <= workers:
             raise ValueError('invalid_worker_limits')
         self.jobs = copy.deepcopy(jobs)
@@ -132,6 +182,10 @@ class Dispatcher:
         self.claimed, self.done, self.failures, self.quarantines = {}, set(), {}, {}
         self.disk_wait = False
         self.controller_id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S') + '_' + uuid.uuid4().hex[:12]
+        if bool(admission_holds) != bool(admission_holds_sha256) or bool(code_succession) != bool(code_succession_sha256):
+            raise ValueError('admission_control_pin_required')
+        self.admission_holds = AdmissionHolds(admission_holds, admission_holds_sha256) if admission_holds else None
+        self.code_succession = pinned_json(code_succession, code_succession_sha256) if code_succession else None
 
     def event(self, kind, **fields):
         value = {'at': now(), 'controller_id': self.controller_id, 'event': kind, **fields}
@@ -209,6 +263,8 @@ class Dispatcher:
                 'recorder:' + sha(str(self.output)))
 
     def route_ready(self, job):
+        if self.admission_held(job):
+            return False
         for route in self.routes(job):
             quarantine = self.quarantines.get(route)
             if not quarantine:
@@ -229,6 +285,62 @@ class Dispatcher:
                     pass
             return False
         return True
+
+    def admission_held(self, job):
+        if self.admission_holds is None:
+            return False
+        holds = self.admission_holds.matches(job)
+        run_id = job['allocation']['run_id']
+        if holds and run_id not in self.admission_holds.seen:
+            self.event('admission_held', run_id=run_id, job_sha256=sha(job), hold_ids=holds,
+                       admission_holds=self.admission_holds.pin, consumed_assignment=False)
+            self.admission_holds.seen.add(run_id)
+        return bool(holds)
+
+    def authorize_succession(self, identity_path, predecessor, identity):
+        if self.code_succession is None or self.admission_holds is None:
+            raise RuntimeError('queue_identity_changed_use_new_output')
+        receipt, receipt_pin = self.code_succession
+        raw = identity_path.read_bytes()
+        predecessor_pin = {'path': str(identity_path), 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+        old_code, new_code = predecessor.get('execution_code', {}), identity['execution_code']
+        if (receipt.get('schema') != 'caus.dispatcher_code_succession.v1'
+                or receipt.get('output_root') != str(self.output)
+                or receipt.get('predecessor_queue_identity') != predecessor_pin
+                or receipt.get('successor_execution_code') != new_code
+                or receipt.get('admission_holds') != self.admission_holds.pin
+                or not receipt.get('independent_review')
+                or old_code.get('dispatcher_sha256') != _SUCCESSION_PREDECESSOR
+                or {k: v for k, v in old_code.items() if k != 'dispatcher_sha256'} != {k: v for k, v in new_code.items() if k != 'dispatcher_sha256'}
+                or {k: v for k, v in predecessor.items() if k != 'execution_code'} != {k: v for k, v in identity.items() if k != 'execution_code'}):
+            raise RuntimeError('unapproved_queue_code_succession')
+        review = receipt['independent_review']
+        _, observed_review = pinned_json(review['path'], review['sha256'])
+        if observed_review != review:
+            raise RuntimeError('code_succession_review_pin_mismatch')
+        self.admission_holds.verify()
+        current, current_pin = pinned_json(receipt_pin['path'], receipt_pin['sha256'])
+        if current != receipt or current_pin != receipt_pin:
+            raise RuntimeError('code_succession_changed')
+        saved = self.meta / 'code_successions' / (receipt_pin['sha256'] + '.json')
+        if saved.exists():
+            if json.loads(saved.read_bytes()) != receipt:
+                raise RuntimeError('saved_code_succession_changed')
+        else:
+            save_new(saved, receipt)
+        return receipt_pin
+
+    def bind_admission_control(self):
+        path = self.meta / 'admission_control.json'
+        expected = {'schema': 'caus.dispatcher_admission_control.v1',
+                    'admission_holds': self.admission_holds.pin if self.admission_holds else None}
+        if path.exists():
+            if json.loads(path.read_bytes()) != expected:
+                raise RuntimeError('persisted_admission_control_changed')
+        elif self.admission_holds is not None:
+            # Publish before the first queue identity: a crash cannot leave a
+            # fresh held queue restartable without its admission control.
+            save_new(path, expected)
 
     def complete(self, future, job):
         run_id = job['allocation']['run_id']
@@ -295,6 +407,7 @@ class Dispatcher:
         try:
             self.meta.mkdir(exist_ok=True)
             fsync_directory(self.output)
+            self.bind_admission_control()
             code = {'dispatcher_sha256': _SOURCE_SHA}
             for name in ('campaign_runner.py', 'campaign_sandbox.py'):
                 path = Path(__file__).with_name(name)
@@ -303,10 +416,16 @@ class Dispatcher:
             identity = {'jobs_sha256': sha(self.jobs), 'config_sha256': sha(self.config),
                         'prototypes_sha256': sha(self.prototypes), 'execution_code': code}
             identity_path = self.meta / 'queue_identity.json'
+            succession = None
             if identity_path.exists():
-                if json.loads(identity_path.read_bytes()) != identity:
-                    raise RuntimeError('queue_identity_changed_use_new_output')
+                predecessor = json.loads(identity_path.read_bytes())
+                if predecessor != identity:
+                    succession = self.authorize_succession(identity_path, predecessor, identity)
+                elif self.code_succession is not None:
+                    raise RuntimeError('code_succession_not_applicable')
             else:
+                if self.code_succession is not None:
+                    raise RuntimeError('code_succession_requires_existing_queue')
                 save_new(identity_path, identity)
             self.load_history()
             controller = self.meta / 'controllers' / self.controller_id
@@ -320,6 +439,9 @@ class Dispatcher:
                      'pause_file': str(self.pause_file), 'disk_floor_bytes': self.disk_floor,
                      'route_failure_threshold': self.failure_threshold, 'route_recovery': 'explicit_qualification_receipt_required'})
             self.event('controller_started', **identity, **code)
+            if self.admission_holds is not None:
+                self.event('admission_holds_bound', admission_holds=self.admission_holds.pin,
+                           code_succession=succession, predecessor_queue_identity_retained=True)
             pending = [job for job in self.jobs if not self.reconcile(job)]
             blocks = sorted((self.meta / 'blocks').glob('[0-9]*.json')) if (self.meta / 'blocks').exists() else []
             next_block = 0
@@ -335,6 +457,8 @@ class Dispatcher:
             idle_seen = False
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as pool:
                 while True:
+                    if self.admission_holds is not None:
+                        self.admission_holds.verify()
                     for future in list(active):
                         if future.done():
                             self.complete(future, active.pop(future))
@@ -383,6 +507,11 @@ class Dispatcher:
                         job = pending.pop(candidate)
                         if self.reconcile(job):
                             continue
+                        if self.admission_holds is not None:
+                            self.admission_holds.verify()
+                            if self.admission_held(job):
+                                pending.insert(candidate, job)
+                                continue
                         run_id = job['allocation']['run_id']
                         self.event('claimed', run_id=run_id, job_sha256=sha(job), config_sha256=sha(self.config),
                                    full=job['allocation'].get('continue_to_end', False), stage=job['allocation'].get('stage'),
@@ -410,11 +539,17 @@ def main():
     parser.add_argument('--max-full', type=int, default=2)
     parser.add_argument('--extension-prototypes', required=True)
     parser.add_argument('--pause-file', required=True)
+    parser.add_argument('--admission-holds')
+    parser.add_argument('--admission-holds-sha256')
+    parser.add_argument('--code-succession')
+    parser.add_argument('--code-succession-sha256')
     args = parser.parse_args()
     jobs = json.loads(Path(args.jobs).read_bytes())
     config = json.loads(Path(args.config).read_bytes())
     prototypes = json.loads(Path(args.extension_prototypes).read_bytes())
-    result = Dispatcher(jobs, config, args.output, args.workers, args.max_full, prototypes, args.pause_file).run()
+    result = Dispatcher(jobs, config, args.output, args.workers, args.max_full, prototypes, args.pause_file,
+                        admission_holds=args.admission_holds, admission_holds_sha256=args.admission_holds_sha256,
+                        code_succession=args.code_succession, code_succession_sha256=args.code_succession_sha256).run()
     print(json.dumps(result))
 
 
