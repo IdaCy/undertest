@@ -152,7 +152,7 @@ class Dispatcher:
     def __init__(self, jobs, config, output, workers=8, max_full=2, extension_prototypes=None,
                  pause_file=None, runner=None, free_bytes=None, poll_seconds=2,
                  admission_holds=None, admission_holds_sha256=None,
-                 code_succession=None, code_succession_sha256=None):
+                 code_succession=None, code_succession_sha256=None, global_pause_file=None, start_barrier_file=None):
         if type(workers) is not int or workers < 1 or type(max_full) is not int or not 0 <= max_full <= workers:
             raise ValueError('invalid_worker_limits')
         self.jobs = copy.deepcopy(jobs)
@@ -170,6 +170,10 @@ class Dispatcher:
         self.output.mkdir(parents=True, exist_ok=True)
         self.meta = self.output / '.dispatcher'
         self.pause_file = Path(pause_file) if pause_file else self.output / 'PAUSE'
+        self.global_pause_file = Path(global_pause_file) if global_pause_file is not None else None
+        self.start_barrier_file = Path(start_barrier_file) if start_barrier_file is not None else None
+        if self.start_barrier_file is not None and not self.start_barrier_file.is_file():
+            raise ValueError('startup_barrier_required_on_owner_start')
         self.workers, self.max_full = workers, max_full
         self.policy = self.config.get('dispatcher', {})
         self.disk_floor = self.policy.get('disk_floor_bytes', 80 * 1024**3)
@@ -186,6 +190,12 @@ class Dispatcher:
             raise ValueError('admission_control_pin_required')
         self.admission_holds = AdmissionHolds(admission_holds, admission_holds_sha256) if admission_holds else None
         self.code_succession = pinned_json(code_succession, code_succession_sha256) if code_succession else None
+
+    def admission_paused(self):
+        return self.pause_file.exists() or (self.global_pause_file is not None and self.global_pause_file.exists())
+
+    def admission_barred(self):
+        return self.start_barrier_file is not None and self.start_barrier_file.exists()
 
     def event(self, kind, **fields):
         value = {'at': now(), 'controller_id': self.controller_id, 'event': kind, **fields}
@@ -436,7 +446,9 @@ class Dispatcher:
                 from causes.campaign_runner import run_episode
                 self.runner = run_episode
             save_new(controller / 'identity.json', {**identity, **code, 'workers': self.workers, 'max_full': self.max_full,
-                     'pause_file': str(self.pause_file), 'disk_floor_bytes': self.disk_floor,
+                     'pause_file': str(self.pause_file), 'global_pause_file': str(self.global_pause_file) if self.global_pause_file is not None else None,
+                     'start_barrier_file': str(self.start_barrier_file) if self.start_barrier_file is not None else None,
+                     'disk_floor_bytes': self.disk_floor,
                      'route_failure_threshold': self.failure_threshold, 'route_recovery': 'explicit_qualification_receipt_required'})
             self.event('controller_started', **identity, **code)
             if self.admission_holds is not None:
@@ -454,6 +466,7 @@ class Dispatcher:
                     next_block += 1
             active = {}
             pause_seen = False
+            barrier_seen = False
             idle_seen = False
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as pool:
                 while True:
@@ -462,7 +475,14 @@ class Dispatcher:
                     for future in list(active):
                         if future.done():
                             self.complete(future, active.pop(future))
-                    paused = self.pause_file.exists()
+                    paused = self.admission_paused()
+                    barrier = self.admission_barred()
+                    if barrier and not barrier_seen:
+                        self.event('admission_barrier_waiting', barrier_file=str(self.start_barrier_file), active=len(active), pending=len(pending))
+                        barrier_seen = True
+                    elif not barrier and barrier_seen:
+                        self.event('admission_barrier_released', barrier_file=str(self.start_barrier_file))
+                        barrier_seen = False
                     if paused and not pause_seen:
                         self.event('pause_seen', active=len(active), pending=len(pending), admission_stopped=True)
                         pause_seen = True
@@ -474,7 +494,7 @@ class Dispatcher:
                         return (not job['allocation'].get('continue_to_end', False) or full_active < self.max_full) and self.route_ready(job)
                     blocked_backlog = (pending and not any(admissible(job) for job in pending)
                         and any(job.get('eligible', True) and admissible(job) for job in self.prototypes))
-                    if not paused and len(active) < self.workers and (not pending or blocked_backlog):
+                    if not paused and not barrier and len(active) < self.workers and (not pending or blocked_backlog):
                         block = extension_block(self.prototypes, self.config, next_block)
                         if block['jobs']:
                             save_new(self.meta / 'blocks' / f'{next_block:012d}.json', block)
@@ -485,7 +505,7 @@ class Dispatcher:
                         elif not idle_seen:
                             self.event('waiting_for_operator_pause_no_eligible_extensions')
                             idle_seen = True
-                    while not paused and len(active) < self.workers and pending:
+                    while not paused and not barrier and len(active) < self.workers and pending:
                         full_active = sum(job['allocation'].get('continue_to_end', False) for job in active.values())
                         candidate = next((i for i, job in enumerate(pending)
                                           if self.route_ready(job) and (not job['allocation'].get('continue_to_end', False) or full_active < self.max_full)), None)
@@ -501,8 +521,11 @@ class Dispatcher:
                         if self.disk_wait:
                             self.event('disk_floor_recovered', free_bytes=free)
                             self.disk_wait = False
-                        if self.pause_file.exists():
+                        if self.admission_paused():
                             paused = True
+                            break
+                        if self.admission_barred():
+                            barrier = True
                             break
                         job = pending.pop(candidate)
                         if self.reconcile(job):
@@ -512,6 +535,10 @@ class Dispatcher:
                             if self.admission_held(job):
                                 pending.insert(candidate, job)
                                 continue
+                        if self.admission_barred():
+                            pending.insert(candidate, job)
+                            barrier = True
+                            break
                         run_id = job['allocation']['run_id']
                         self.event('claimed', run_id=run_id, job_sha256=sha(job), config_sha256=sha(self.config),
                                    full=job['allocation'].get('continue_to_end', False), stage=job['allocation'].get('stage'),
@@ -519,7 +546,7 @@ class Dispatcher:
                         self.claimed[run_id] = sha(job)
                         future = pool.submit(self.runner, job['spec'], job['variant'], self.config, job['allocation'], self.output / run_id)
                         active[future] = job
-                    if not self.pause_file.exists() and not pending and len(active) < self.workers and any(job.get('eligible', True) for job in self.prototypes):
+                    if not self.admission_paused() and not self.admission_barred() and not pending and len(active) < self.workers and any(job.get('eligible', True) for job in self.prototypes):
                         continue
                     if active:
                         concurrent.futures.wait(active, timeout=self.poll_seconds, return_when=concurrent.futures.FIRST_COMPLETED)
@@ -539,6 +566,8 @@ def main():
     parser.add_argument('--max-full', type=int, default=2)
     parser.add_argument('--extension-prototypes', required=True)
     parser.add_argument('--pause-file', required=True)
+    parser.add_argument('--global-pause-file')
+    parser.add_argument('--start-barrier-file')
     parser.add_argument('--admission-holds')
     parser.add_argument('--admission-holds-sha256')
     parser.add_argument('--code-succession')
@@ -549,7 +578,8 @@ def main():
     prototypes = json.loads(Path(args.extension_prototypes).read_bytes())
     result = Dispatcher(jobs, config, args.output, args.workers, args.max_full, prototypes, args.pause_file,
                         admission_holds=args.admission_holds, admission_holds_sha256=args.admission_holds_sha256,
-                        code_succession=args.code_succession, code_succession_sha256=args.code_succession_sha256).run()
+                        code_succession=args.code_succession, code_succession_sha256=args.code_succession_sha256,
+                        global_pause_file=args.global_pause_file, start_barrier_file=args.start_barrier_file).run()
     print(json.dumps(result))
 
 
