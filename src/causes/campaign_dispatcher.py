@@ -152,7 +152,8 @@ class Dispatcher:
     def __init__(self, jobs, config, output, workers=8, max_full=2, extension_prototypes=None,
                  pause_file=None, runner=None, free_bytes=None, poll_seconds=2,
                  admission_holds=None, admission_holds_sha256=None,
-                 code_succession=None, code_succession_sha256=None, global_pause_file=None, start_barrier_file=None):
+                 code_succession=None, code_succession_sha256=None, global_pause_file=None, start_barrier_file=None,
+                 corpus_continuation=None, corpus_continuation_sha256=None):
         if type(workers) is not int or workers < 1 or type(max_full) is not int or not 0 <= max_full <= workers:
             raise ValueError('invalid_worker_limits')
         self.jobs = copy.deepcopy(jobs)
@@ -190,6 +191,21 @@ class Dispatcher:
             raise ValueError('admission_control_pin_required')
         self.admission_holds = AdmissionHolds(admission_holds, admission_holds_sha256) if admission_holds else None
         self.code_succession = pinned_json(code_succession, code_succession_sha256) if code_succession else None
+        self.continuation = None
+        self.continuation_control = None
+        if bool(corpus_continuation) != bool(corpus_continuation_sha256):
+            raise ValueError('continuation_control_pin_required')
+        if corpus_continuation is not None:
+            if self.jobs:
+                raise ValueError('continuation_requires_empty_initial_queue')
+            from causes.corpus_continuation import CorpusContinuation
+            control, self.continuation_control = pinned_json(corpus_continuation, corpus_continuation_sha256)
+            self.continuation = CorpusContinuation.from_control(control, self.prototypes, self.config)
+
+    def make_extension_block(self, index):
+        if self.continuation is not None:
+            return self.continuation.block(index)
+        return extension_block(self.prototypes, self.config, index)
 
     def admission_paused(self):
         return self.pause_file.exists() or (self.global_pause_file is not None and self.global_pause_file.exists())
@@ -425,6 +441,11 @@ class Dispatcher:
                     code[name + '_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
             identity = {'jobs_sha256': sha(self.jobs), 'config_sha256': sha(self.config),
                         'prototypes_sha256': sha(self.prototypes), 'execution_code': code}
+            if self.continuation is not None:
+                for name in ('corpus_allocation.py', 'corpus_continuation.py'):
+                    code[name + '_sha256'] = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                identity['corpus_continuation'] = {'control': self.continuation_control,
+                                                   'binding': self.continuation.binding}
             identity_path = self.meta / 'queue_identity.json'
             succession = None
             if identity_path.exists():
@@ -460,10 +481,18 @@ class Dispatcher:
             if blocks:
                 for block_path in blocks:
                     last = json.loads(block_path.read_bytes())
-                    if last['block_index'] != next_block or last != extension_block(self.prototypes, self.config, next_block):
+                    if last['block_index'] != next_block or last != self.make_extension_block(next_block):
                         raise RuntimeError('extension_block_identity_mismatch')
+                    if self.continuation is not None:
+                        self.continuation.accept(last)
                     pending.extend(job for job in last['jobs'] if not self.reconcile(job))
                     next_block += 1
+            if self.continuation is not None:
+                journal = (self.meta / 'journal.jsonl').read_bytes()
+                for index in self.continuation.check_history(journal):
+                    self.event('extension_block_created', block_index=index,
+                               block_sha256=self.continuation.block_hashes[index],
+                               jobs=len(self.prototypes), recovered_persisted_unclaimed_block=True)
             active = {}
             pause_seen = False
             barrier_seen = False
@@ -495,10 +524,12 @@ class Dispatcher:
                     blocked_backlog = (pending and not any(admissible(job) for job in pending)
                         and any(job.get('eligible', True) and admissible(job) for job in self.prototypes))
                     if not paused and not barrier and len(active) < self.workers and (not pending or blocked_backlog):
-                        block = extension_block(self.prototypes, self.config, next_block)
+                        block = self.make_extension_block(next_block)
                         if block['jobs']:
                             save_new(self.meta / 'blocks' / f'{next_block:012d}.json', block)
                             self.event('extension_block_created', block_index=next_block, block_sha256=sha(block), jobs=len(block['jobs']))
+                            if self.continuation is not None:
+                                self.continuation.accept(block)
                             next_block += 1
                             pending.extend(job for job in block['jobs'] if not self.reconcile(job))
                             idle_seen = False
@@ -568,6 +599,8 @@ def main():
     parser.add_argument('--pause-file', required=True)
     parser.add_argument('--global-pause-file')
     parser.add_argument('--start-barrier-file')
+    parser.add_argument('--corpus-continuation')
+    parser.add_argument('--corpus-continuation-sha256')
     parser.add_argument('--admission-holds')
     parser.add_argument('--admission-holds-sha256')
     parser.add_argument('--code-succession')
@@ -579,7 +612,9 @@ def main():
     result = Dispatcher(jobs, config, args.output, args.workers, args.max_full, prototypes, args.pause_file,
                         admission_holds=args.admission_holds, admission_holds_sha256=args.admission_holds_sha256,
                         code_succession=args.code_succession, code_succession_sha256=args.code_succession_sha256,
-                        global_pause_file=args.global_pause_file, start_barrier_file=args.start_barrier_file).run()
+                        global_pause_file=args.global_pause_file, start_barrier_file=args.start_barrier_file,
+                        corpus_continuation=args.corpus_continuation,
+                        corpus_continuation_sha256=args.corpus_continuation_sha256).run()
     print(json.dumps(result))
 
 
