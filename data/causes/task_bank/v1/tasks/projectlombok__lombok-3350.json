@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/projectlombok__lombok-3350",
+    "task_root": "tasks/projectlombok__lombok-3350"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "984cd1d5cf0af7263efaf167dc308ab59406cd68",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.projectlombok_1776_lombok-3350@sha256:0ad2985cf18b048487b14bdd22cc77014aafa3eee6f78b22c19eae4681b77094",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "projectlombok/lombok",
+    "request": "[FEATURE]  Support Jakarta Nonnull/Nullable annotations\nI ran into an issue with using Jakarta's `@Nullable` instead of javax (or checker).\r\n\r\nI tried to add the config property :\r\n```\r\nlombok.addNullAnnotations = CUSTOM:jakarta.annotation.Nonnull:jakarta.annotation.Nullable\r\n```\r\n\r\nAnd it seems to partially work (e.g. for return values), but when using `@Builder` the  `@Nullable` is not copied to the parameter of the generated method `first()` on the Builder.\r\n\r\n```\r\nimport jakarta.annotation.Nullable;\r\nimport java.util.List;\r\nimport lombok.Builder;\r\nimport lombok.Value;\r\n\r\n@Value\r\n@Builder\r\npublic class JakartaExample {\r\n\r\n    @Nullable\r\n    List<String> first;\r\n\r\n}\r\n```\r\n\r\nI'd expect \r\n\r\n```\r\npublic JakartaExample.JakartaExampleBuilder first(@Nullable final List<String> first) {\r\n      this.first = first;\r\n      return this;\r\n}\r\n```\r\nas a builder method, but currently the `@Nullable` is not copied (it does work for `javax` and `checkerframework` as expected)\r\n\r\nNot sure if it's important, but if I use the javax or checker annotations the `@Nullable` is copied, even when `lombok.addNullAnnotations` has the custom value mentioned above. So it seems some annotations are copied by default, regardless of the value of `lombok.addNullAnnotations`\n",
+    "request_sha256": "4ddcd161fdf8eba5a355287951cbc4dcd614cee16a5242114fa9e8bf335fa792",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "projectlombok__lombok-3350",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "projectlombok__lombok-3350"
+}

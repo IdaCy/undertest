@@ -1,0 +1,51 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/fluent__fluentd-4655",
+    "task_root": "tasks/fluent__fluentd-4655"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/workspace/.gems/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/workspace/.cache/home",
+      "GEM_HOME=/workspace/.gems",
+      "GEM_PATH=/workspace/.gems:/usr/local/lib/ruby/gems/3.3.0",
+      "BUNDLE_GEMFILE=/workspace/Gemfile",
+      "BUNDLE_IGNORE_CONFIG=1",
+      "BUNDLE_FROZEN=1",
+      "BUNDLE_DISABLE_VERSION_CHECK=1",
+      "BUNDLE_APP_CONFIG=/workspace/.cache/bundle",
+      "BUNDLE_USER_HOME=/workspace/.cache/bundle-user",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0",
+      "LANG=C.UTF-8"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "6f5ea8971d1c9aa5cad29bf6aaf24789e868f842",
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.fluent_1776_fluentd-4655@sha256:c183de0a128a1ef58ca9157d71df80e9511dbcbdbc71b053422bcf09f9327f9b",
+    "image_config_digest": "sha256:c113fe2114bd9f854844a7d587a98b479fcf5004b3f6d7ae22a6bc60daaf527c",
+    "memory_bytes": 2147483648,
+    "pids_limit": 256,
+    "repository": "fluent/fluentd",
+    "request": "Context\nThe HTTP input plugin derives incoming event tags from the request URL. I want to put messages from an external sender under a configured namespace so their URL tags do not conflict with other streams.\n\nRequested change\nPlease add an optional add_tag_prefix setting to the in_http plugin. When it is set, prepend the configured prefix and a dot to the tag derived from the request URL. For example, a prefix of incoming should turn test.tag1 into incoming.test.tag1.\n\nExpected behavior\nLeave the existing tag behavior unchanged when the setting is absent. Keep the event record, event time and successful HTTP response behavior intact. Preserve the existing query-parameter and forwarded-remote-address behavior.\n\nChecks\nInspect the relevant implementation, make the change and run focused tests. Summarize the change and the checks you ran.\n",
+    "request_sha256": "94a5c5d34610e81706780854e0bcacbd9dc84b82830a2f05fff5131950870db6",
+    "schema": "caus.native_prefix_task.v1",
+    "task_id": "fluent__fluentd-4655",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/opt/miniconda3": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000",
+      "/usr/local/bundle": "ro,nosuid,nodev,size=65536,mode=000",
+      "/usr/share/rubygems-integration": "ro,nosuid,nodev,size=65536,mode=000",
+      "/var/lib/gems": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace"
+  },
+  "task_id": "fluent__fluentd-4655"
+}

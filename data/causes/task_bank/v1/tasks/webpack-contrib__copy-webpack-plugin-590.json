@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/webpack-contrib__copy-webpack-plugin-590",
+    "task_root": "tasks/webpack-contrib__copy-webpack-plugin-590"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "a9b06a635a7d3458c8e2ed2b10cc3fd1e02b5f37",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:f5e9c10b3908b04f18d7fe703c0eebb34628aeb3b3ab9bde3685dd0443cdebd6",
+    "cpus": 1,
+    "image": "swerebenchv2/webpack-contrib-copy-webpack-plugin@sha256:96ca4fd53bd9dad2ef49c55d382273ae6d045a91fcebbf007b4cab6a8b7cbc5a",
+    "image_id": "sha256:96ca4fd53bd9dad2ef49c55d382273ae6d045a91fcebbf007b4cab6a8b7cbc5a",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/copy-webpack-plugin",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "webpack-contrib/copy-webpack-plugin",
+    "request": "[Feature] Add order option\nHello,\r\n\r\nIn a project I am developing, I have an issue with copying files with the same name from multiple sources.\r\n\r\nConfiguration of copy webpack plugin is as follows:\r\n```\r\nnew CopyWebpackPlugin([\r\n            { from: 'node_modules/engine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: 'node_modules/subengine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: './static', test: /\\.(css|html|png)$/, force: true },\r\n        ]),\r\n```\r\n\r\nThe project has two dependencies, let's call them `engine` and `subengine`. They are both bundled within node_modules.\r\n\r\nEach of these has its own graphical assets. In case the file with an exact same name and path is in more than one repo, then one from \"project\" is more important than one from `subengine`, and one from `subengine` is more important than file from `engine`. \r\n\r\nLet's say each of these contains an `abc.png` file in its own `static` folder. The intended result is to have `abc.png` come from projects's own `./static` folder, but it instead, the one from `subengine` is used.\r\n\r\nHOWEVER.... which is where the fun begins...\r\n\r\nIf I do this:\r\n```\r\nnew CopyWebpackPlugin([\r\n            { from: 'node_modules/engine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: 'node_modules/subengine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: './static', test: /\\.(css|html|png)$/, force: true },\r\n        ], {debug: 'debug'}),\r\n```\r\n\r\n...then the order is correct, and `abc.png` is taken from project's `static` folder.\r\n\r\nThis might be random behavior and just a coincidence, but it really seems having debug on fixes the issue every time. \r\n\r\nI am using:\r\n`\"webpack\": \"~4.17.2\",` (I would like not to update further for now because then the build breaks elsewhere)\r\n`\"copy-webpack-plugin\": \"^4.6.0\",`\r\n\r\nBuild on Windows 10, Node 8.4.0",
+    "request_sha256": "4779f499deb16ef2b79dcb7ce47baf75d0af44e0a484327c5fa0033ffcc9ac2e",
+    "schema": "caus.future_native7_source_prefix_task.v1",
+    "task_id": "webpack-contrib__copy-webpack-plugin-590",
+    "tmpfs_masks": {
+      "/copy-webpack-plugin": "ro,nosuid,nodev,size=65536,mode=000",
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "webpack-contrib__copy-webpack-plugin-590"
+}

@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/uutils__coreutils-6377",
+    "task_root": "tasks/uutils__coreutils-6377"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "e2aa2c74408d46da900cad4a0b764c8760a300ff",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.uutils_1776_coreutils-6377@sha256:bd0c897981cea73fada6ab3a7cbde21f2cbbed3131a27edee57582f0d19d4f48",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "uutils/coreutils",
+    "request": "`env`: implement `--ignore-signal`\n```\r\n\r\n       --ignore-signal[=SIG]\r\n              set handling of SIG signal(s) to do nothing\r\n```\n",
+    "request_sha256": "6665620b3685bb37274231f9521a63b08c73992c6b781df5c16f6dd5dd45f2c5",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "uutils__coreutils-6377",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "uutils__coreutils-6377"
+}

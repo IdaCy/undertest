@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/pypa__twine-1066",
+    "task_root": "tasks/pypa__twine-1066"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "4a1fc064a7899872ee845df6a8810bb51a6845ac",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:02f70029a3db8530a4bfc26ca82736bc5c7f56511a87f0b34e57c6e40bfb459c",
+    "cpus": 1,
+    "image": "swerebenchv2/pypa-twine@sha256:7291fa9f195c079dbd1762a84626acc506767d19900fc045cf09d6bde84320d3",
+    "image_id": "sha256:7291fa9f195c079dbd1762a84626acc506767d19900fc045cf09d6bde84320d3",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/twine",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "pypa/twine",
+    "request": "Twine uploads with `provides_extras` field, not `provides_extra`\n### Is there an existing issue for this?\n\n- [X] I have searched the existing issues (open and closed), and could not find an existing issue\n\n### What keywords did you use to search existing issues?\n\nprovides_extra, provides_extras\n\n### What operating system are you using?\n\nOther\n\n### If you selected 'Other', describe your Operating System here\n\n_No response_\n\n### What version of Python are you running?\n\n```console\n$ python --version\r\nPython 3.11.8\n```\n\n\n### How did you install twine? Did you use your operating system's package manager or pip or something else?\n\n```console\n$ python -m pip install twine\n```\n\n\n### What version of twine do you have installed (include the complete output)\n\n```console\n$ twine --version\r\ntwine version 5.0.0 (importlib-metadata: 7.0.1, keyring: 24.3.0, pkginfo: 1.10.0, requests: 2.31.0, requests-toolbelt: 1.0.0, urllib3: 2.1.0)\n```\n\n\n### Which package repository are you using?\n\nPyPI\n\n### Please describe the issue that you are experiencing\n\nTwine does not correctly `POST` the `Provides-Extra` field when it is present in package metadata.\n\n### Please list the steps required to reproduce this behaviour\n\n1. Build a package with [`Provides-Extra`](https://packaging.python.org/en/latest/specifications/core-metadata/#provides-extra-multiple-use) metadata field ([example](https://files.pythonhosted.org/packages/57/90/4bcbd9d539d1b92cf38accb9e910ffa770ea4d28e7b4afce3b398f79cae6/pyroblack-2.3.48-py3-none-any.whl));\r\n2. Upload it with `twine`;\r\n3. Observe that twine `POST`s the field `provides_extras`, and not `provides_extra`;\r\n4. Observe that PyPI does not record the `Provides-Extra` values.\n\n### Anything else you'd like to mention?\n\nI introduced this bug [six years ago](https://github.com/pypa/twine/commit/7369e6219af6b61c82bfb68afac57250f5664577), so my apologies 🙂.",
+    "request_sha256": "f725000be5e763393bb65e430ffc36b78fa46d249f4c1d9c994a68d01c72b24e",
+    "schema": "caus.future_native12_source_prefix_task.v1",
+    "task_id": "pypa__twine-1066",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000",
+      "/twine": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "pypa__twine-1066"
+}

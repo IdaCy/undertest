@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/micropython__micropython-10095",
+    "task_root": "tasks/micropython__micropython-10095"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "cc26bf7406dac7822de347d14a9935c101d7e8aa",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.micropython_1776_micropython-10095@sha256:fa80c1103d4dc19707a2152841ecc2c869e1a2a2e10c07601a9eabca3490f644",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "micropython/micropython",
+    "request": "Context\nMicroPython currently accepts some function calls with duplicate keyword names when the arguments are unpacked. For example, calling a function with **{'one': 1} and **{'one': 2} can silently keep one value instead of reporting the duplicate.\n\nRequested change\nPlease make duplicate keyword arguments raise TypeError, including duplicates introduced by unpacked dictionaries or other supported mappings. Handle collisions with explicit keyword arguments as well as collisions between unpacked arguments.\n\nExpected behavior\nCalls with distinct keyword names should continue to work. Preserve the existing behavior of ordinary positional arguments, keyword-only arguments and function defaults. The change should work with the Unix interpreter in this repository.\n\nChecks\nInspect the argument handling, implement the fix and run the relevant function-call tests. Summarize the change and the checks you ran.\n",
+    "request_sha256": "197d959f2d40786b1618bb205a04973cd4ef572722aaedb6198c4ec67f8d2ccf",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "micropython__micropython-10095",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "micropython__micropython-10095"
+}

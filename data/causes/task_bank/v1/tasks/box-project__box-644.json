@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/box-project__box-644",
+    "task_root": "tasks/box-project__box-644"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "a41f20979a19741f9de8b436ad46b6daa71e53e5",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:831cbf3ff2146b025025da0a46c4f630266a0db261ca306d846aaad9c96c7b49",
+    "cpus": 1,
+    "image": "swerebenchv2/box-project-box@sha256:87158f0b5e695624b4630c3dcaf8be19613a1b26d02bebd5a6b6b3b6cc9bce6e",
+    "image_id": "sha256:87158f0b5e695624b4630c3dcaf8be19613a1b26d02bebd5a6b6b3b6cc9bce6e",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/box",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "box-project/box",
+    "request": "Docker support with PHP 8\nAs latest version 3.16.0, Box is supposed to support both PHP 7.x and 8.x\r\n\r\nBut when you look inside [DockerFileGenerator](https://github.com/box-project/box/blob/3.16.0/src/DockerFileGenerator.php#L43-L49) no images are defined for PHP 8.0 and 8.1\r\n\r\nIs it just forgotten ? `8.0-cli-alpine` and `8.1-cli-alpine` images are available on DockerHub",
+    "request_sha256": "361c92a804bae3b8a96125af7ea79097972cf91cc8ff47a3ae952e9f26f6b73d",
+    "schema": "caus.future_native7_source_prefix_task.v1",
+    "task_id": "box-project__box-644",
+    "tmpfs_masks": {
+      "/box": "ro,nosuid,nodev,size=65536,mode=000",
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "box-project__box-644"
+}

@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/elastic__synthetics-316",
+    "task_root": "tasks/elastic__synthetics-316"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "f52f0bf3d18ca418d1eec4afd1370751fdd914ce",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:28f354de7ea10968ddf130a5d6238bc45df1f1629fc62d9caa3895dafd8a31a7",
+    "cpus": 1,
+    "image": "swerebenchv2/elastic-synthetics@sha256:43dec4337c7e470deff79db238b03e914f8a5234277b52ec7f3fd414e8978883",
+    "image_id": "sha256:43dec4337c7e470deff79db238b03e914f8a5234277b52ec7f3fd414e8978883",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/synthetics",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "elastic/synthetics",
+    "request": "propagate errors from `beforeAll` and `afterAll` hooks\n+ Now error in the `beforeAll` and `afterAll` hooks would be captured and reported as error, but they will not be associated with the reporters in the correct way. \r\n+ Without associating these errors, the Uptime UI will have no information about what happened during the context of a single execution. \r\n\r\nWe have to figure out a way to solve this problem. ",
+    "request_sha256": "c13ddfb010eb74c73e89a0757096434e92638bcc10a0c2e3d38cb976eb7dc77d",
+    "schema": "caus.future_native7_source_prefix_task.v1",
+    "task_id": "elastic__synthetics-316",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/synthetics": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "elastic__synthetics-316"
+}

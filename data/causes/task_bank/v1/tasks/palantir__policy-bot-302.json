@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/palantir__policy-bot-302",
+    "task_root": "tasks/palantir__policy-bot-302"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "d7bcb2fb9542c3b67f3e444d8085fdb2b6453ef0",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:e750d38d13240c7a82d9b72a278911f9a285d512328a2cc03ce217ab3d5a4166",
+    "cpus": 1,
+    "image": "swerebenchv2/palantir-policy-bot@sha256:c0e534294902e9ce3f991192a1fa9d442de794b4cf55765acfaaa21346844596",
+    "image_id": "sha256:c0e534294902e9ce3f991192a1fa9d442de794b4cf55765acfaaa21346844596",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/policy-bot",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "palantir/policy-bot",
+    "request": "Stop re-requesting reviews when all-users mode is used\nWe've encountered the following issues on a GitHub repository today:\r\n- We have a PR that modifies a single file.\r\n- That file is configured to require approval from a GitHub team, and the requesting mode is set to `all-users`.\r\n- policy-bot requests the review from all the users of that GitHub team, as expected.\r\n- A member reviews the PR (in this case the PR is rejected asking for changes).\r\n- policy-bot immediately re-requests a review from the member that reviewed.\r\n\r\nThis triggers more email notifications than are necessary, but more importantly the state the PR is left in looks like it needs to be reviewed (i.e. action pending on the reviewing team) when it actually isn't.",
+    "request_sha256": "066155c48506d9ab5773c15ebc9a10e864c8c9ffdde43c618a08898751e5905a",
+    "schema": "caus.future_native12_source_prefix_task.v1",
+    "task_id": "palantir__policy-bot-302",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/policy-bot": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "palantir__policy-bot-302"
+}

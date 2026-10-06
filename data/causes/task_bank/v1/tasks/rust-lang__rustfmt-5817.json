@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/rust-lang__rustfmt-5817",
+    "task_root": "tasks/rust-lang__rustfmt-5817"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "d9a09925d7ecfb46fb6a218dbf5479b51acc67c6",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:5fe0c723afef5a664229ad5a4cd1fe9d9f2e9d42188d52a3acf9126c4efce403",
+    "cpus": 1,
+    "image": "swerebenchv2/rust-lang-rustfmt@sha256:85d51c552bb7835417eb39da971126bcdf9234af6c5b071932830c346eb47cff",
+    "image_id": "sha256:85d51c552bb7835417eb39da971126bcdf9234af6c5b071932830c346eb47cff",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/rustfmt",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "rust-lang/rustfmt",
+    "request": "skip_macro_invocations: Cannot configure from `rustfmt.toml`\n`skip_macro_invocations` option doesn't parse as [documented](https://rust-lang.github.io/rustfmt/?version=master&search=macro#skip_macro_invocations). \r\n\r\nWriting `skip_macro_invocations=[\"*\", \"println\"]` in `rustfmt.toml` leads to this error:\r\n\r\n```\r\nError: Decoding config file failed:\r\nunknown variant `*`, expected `Name` or `All`\r\nin `skip_macro_invocations`\r\n\r\nPlease check your config file.\r\n```\r\n\r\nIt seems that parsing rules are not what is actually designed (`*` or some name), but more like tagged serde enum. These config files work:\r\n\r\n```toml\r\n[[skip_macro_invocations]]\r\nName=\"aboba\"\r\n```\r\n\r\n```toml\r\nskip_macro_invocations = [\"All\"]\r\n```",
+    "request_sha256": "5f728ca345b32436671e35479fd2381de457fb3a89d86bcc928422453fc6f955",
+    "schema": "caus.future_native7_source_prefix_task.v1",
+    "task_id": "rust-lang__rustfmt-5817",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/rustfmt": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "rust-lang__rustfmt-5817"
+}

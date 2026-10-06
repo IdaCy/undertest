@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/sindresorhus__execa-490",
+    "task_root": "tasks/sindresorhus__execa-490"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "e4b929547ade335b0dd9d7afe1a35989e19fbc8a",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:d82ad839c2286c6b3aa315fdf18d429a0401d054ca433444cdb47873b3bed2f4",
+    "cpus": 1,
+    "image": "swerebenchv2/sindresorhus-execa@sha256:c866971916c31961d25b46058038af1a45f0a4df40444bba2fc5be6c5a5d3e6c",
+    "image_id": "sha256:c866971916c31961d25b46058038af1a45f0a4df40444bba2fc5be6c5a5d3e6c",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/execa",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "sindresorhus/execa",
+    "request": "Support `AbortController`\nNode.js is adopting it for everything, so I think we should support it too.\r\n\r\nhttps://developer.mozilla.org/en-US/docs/Web/API/AbortController\r\n\r\nNode.js just added support for it in `.spawn()`: https://nodejs.org/en/blog/release/v15.5.0/\r\n\r\nThis would not replace the current `.cancel()` function, in the near-term at least.",
+    "request_sha256": "267af4f5a9aae9929c975b87afc9fae22f8506fdabb4811f8bca2362be07d42d",
+    "schema": "caus.future_native7_source_prefix_task.v1",
+    "task_id": "sindresorhus__execa-490",
+    "tmpfs_masks": {
+      "/execa": "ro,nosuid,nodev,size=65536,mode=000",
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "sindresorhus__execa-490"
+}

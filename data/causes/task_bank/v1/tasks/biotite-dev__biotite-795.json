@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/biotite-dev__biotite-795",
+    "task_root": "tasks/biotite-dev__biotite-795"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "53770139237370ffd438c11bac551f38fd11e98c",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:9ea51a2df10c64a87d82cccd02f9b74709f6f95a941a8dedd9d1ba579742ca77",
+    "cpus": 1,
+    "image": "swerebenchv2/biotite-dev-biotite@sha256:b6b4f1195746471f7a77b1c50020c306e7aa1fe1a036572fa299e805e7a75de8",
+    "image_id": "sha256:b6b4f1195746471f7a77b1c50020c306e7aa1fe1a036572fa299e805e7a75de8",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/biotite",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "biotite-dev/biotite",
+    "request": "altloc_id missing from get_structure() output\nThe last few recent commits have altered the behavior of get_structure() so that its output is missing the altloc_id annotation. I can't tell if this is expected behavior or a bug, however the docstring implies that its a bug.\n```\n    altloc : {'first', 'occupancy', 'all'}\n        This parameter defines how *altloc* IDs are handled:\n            - ``'first'`` - Use atoms that have the first *altloc* ID\n              appearing in a residue.\n            - ``'occupancy'`` - Use atoms that have the *altloc* ID\n              with the highest occupancy for a residue.\n            - ``'all'`` - Use all atoms.\n              Note that this leads to duplicate atoms.\n              When this option is chosen, the ``altloc_id`` annotation\n              array is added to the returned structure.\n```\n\nSo it seems that either its a bug or the docstring should get updated.\n\nMinimal example to reproduce:\n\n```\nfrom biotite.database import rcsb\nimport biotite.structure.io.pdbx as pdbx\n\nciffile = rcsb.fetch(\"4zxb\", \"cif\")\ncif = pdbx.CIFFile.read(ciffile)\narray = pdbx.get_structure(\n    cif,\n    model=1,\n    altloc=\"all\",\n    use_author_fields=False,\n)\narray.get_annotation_categories()\n```\n\ncurrent output from the latest commit is\n```\n['chain_id',\n 'res_id',\n 'ins_code',\n 'res_name',\n 'hetero',\n 'atom_name',\n 'element']\n```\nrolling back to `d0ae83d` gives\n```\n['chain_id',\n 'res_id',\n 'ins_code',\n 'res_name',\n 'hetero',\n 'atom_name',\n 'element',\n 'altloc_id']\n```",
+    "request_sha256": "6dedbbfea31328ee072e1b5573ec0e39a7333795460e2fe17af46d43dc62f7e4",
+    "schema": "caus.future_native7_source_prefix_task.v1",
+    "task_id": "biotite-dev__biotite-795",
+    "tmpfs_masks": {
+      "/biotite": "ro,nosuid,nodev,size=65536,mode=000",
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "biotite-dev__biotite-795"
+}

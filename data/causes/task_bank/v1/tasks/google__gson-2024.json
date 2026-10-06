@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/google__gson-2024",
+    "task_root": "tasks/google__gson-2024"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "16b42ff5805074126c2e5484450c182773e408a2",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.google_1776_gson-2024@sha256:df1b872da86c0271b4b16463915117bba3a13e825c1f1dbe052750a834ece287",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "google/gson",
+    "request": "New FieldNamingPolicy: UPPER_CASE_WITH_UNDERSCORES\nHi,\r\n\r\ncurrently, I do try to integrate a service that uses a UPPER_CASE_WITH_UNDERSCORES naming scheme for their field names, e.g.:\r\n\r\n```\r\n{\r\n  \"PRODUCT_LIST\" : {\r\n    \"PRODUCT\" : [\r\n      {\r\n      \"APPLICATION_CODE\" : \"secret application code\",\r\n      \"PRODUCT_TYPE\" : \"product type value\",\r\n      \"PRODUCT_NAME\" : \"product name\"\r\n      }\r\n    ]\r\n  }\r\n}\r\n```\r\n\r\nCurrently, GSON only supports LOWER_CASE_WITH_UNDERSCORES by default, so I would have to implement my own FieldNamingStategy class and possibly duplicate some code, like this:\r\n\r\n```\r\nthis.gson = new GsonBuilder()\r\n                .setFieldNamingStrategy(\r\n                        f -> FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES.translateName(f).toUpperCase(Locale.ENGLISH))\r\n                .create();\r\n```\r\n\r\nSo, ideally, something like this would be supported by GSON itself and I could use a new enum value.\n",
+    "request_sha256": "7b3a51f7d20d0f976a698f108bb44ea498fc2b3587c6c30cf86c7f7dfbba8b50",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "google__gson-2024",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "google__gson-2024"
+}

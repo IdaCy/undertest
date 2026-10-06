@@ -1,0 +1,48 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/gradleup__shadow-1448",
+    "task_root": "tasks/gradleup__shadow-1448"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "b829b78e37d1f0befe314f1683abfdb7bb2944f0",
+    "baseline_external_links": {},
+    "config_image_id": "sha256:d98c96704d251332838cc362747234315b2e245d4d521b88c5329e51a3f54bf7",
+    "cpus": 1,
+    "image": "swerebenchv2/gradleup-shadow@sha256:52353ba817792131d0f4aaf893d36ea6ce826693fbc42dbc9661d2995de1d733",
+    "image_id": "sha256:52353ba817792131d0f4aaf893d36ea6ce826693fbc42dbc9661d2995de1d733",
+    "image_id_basis": "Observed Docker29.8.2 containerd store uses platform manifest image IDs; exact ID and RepoDigest will be checked after pull, with no automatic substitution.",
+    "image_source_workspace": "/shadow",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "GradleUp/shadow",
+    "request": "Trouble compiling against older kotlin versions\n### Expected and Results\n\nWe'd expect at least support for kotlin versions in the Gradle 8 family, but we're seeing \n```\nClass 'com.github.jengelman.gradle.plugins.shadow.ShadowJavaPlugin' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.1.0, but the compiler version 1.9.0 can read versions up to 2.0.0.\n```\nwhile compiling against Kotlin 1.9.20 and Gradle 8.6\n\n### Related environment and versions\n\n_No response_\n\n### Reproduction steps\n\n1. Create a gradle plugin\n2. Set the gradle version to 8.14\n3. Set the kotlin gradle plugin version to 1.9.25\n4. Observe issue\n\n```\n`/example/gradle-shadow-old-kotlin/plugin/src/main/kotlin/org/example/GradleShadowOldKotlinPlugin.kt:17:17 Class 'kotlin.Unit' was compiled with an incompatible version of Kotlin. The actual metadata version is 2.1.0, but the compiler version 1.9.0 can read versions up to 2.0.0.\nThe class is loaded from /Users/cwalker/.gradle/wrapper/dists/gradle-9.0.0-milestone-8-bin/9sf1y14o9rs7csri8q5psfb7a/gradle-9.0.0-milestone-8/lib/kotlin-stdlib-2.1.21.jar!/kotlin/Unit.class\n```\n\n### Anything else?\n\n_No response_",
+    "request_sha256": "44dbf4fcb48871b800e6057c5f162c0a09328b757b75afa3170310ddb58a6304",
+    "schema": "caus.future_native7_source_prefix_task.v1",
+    "task_id": "gradleup__shadow-1448",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/shadow": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "gradleup__shadow-1448"
+}

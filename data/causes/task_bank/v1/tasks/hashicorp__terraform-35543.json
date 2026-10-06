@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/hashicorp__terraform-35543",
+    "task_root": "tasks/hashicorp__terraform-35543"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "24833a2b062126a71ef30a86a6d1fc3823afdfdb",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.hashicorp_1776_terraform-35543@sha256:57ddad71c2bc85a20fb9e353e0012aec6ef747fd4e1744a30f20804b70acf1b6",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "hashicorp/terraform",
+    "request": "terraform validate does not validate import blocks\n### Terraform Version\n\n```shell\nTerraform v1.9.3\r\non linux_amd64\n```\n\n\n### Terraform Configuration Files\n\n```terraform\r\nresource \"null_resource\" \"undef-local\" {\r\n}\r\n\r\nresource \"null_resource\" \"undef-var\" {\r\n}\r\n\r\nimport {\r\n  to = null_resource.undef-local\r\n  id = local.something_not_defined\r\n}\r\n\r\nimport {\r\n  to = null_resource.undef-var\r\n  id = var.some_other_undefined_thing\r\n}\r\n\r\nimport {\r\n    to = null_resource.not-a-real-resource\r\n    id = \"blah\"\r\n}\r\n```\r\n\n\n### Debug Output\n\nhttps://gist.github.com/TylerReid/1b83440cd5dc79d76e7092bea3ed4158\n\n### Expected Behavior\n\nI expected `terraform validate` to catch undefined variables and resources in `import` blocks\n\n### Actual Behavior\n\n`validate` returns `Success! The configuration is valid.`\n\n### Steps to Reproduce\n\n1. `terraform validate`\n\n### Additional Context\n\n_No response_\n\n### References\n\n_No response_\n",
+    "request_sha256": "8b2fbeb23e79905f7f27a5b9012368d62ea1797a0c13a7a2ba0d7c05f6e08039",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "hashicorp__terraform-35543",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "hashicorp__terraform-35543"
+}

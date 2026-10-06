@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import causes.campaign_dispatcher as module
 from causes.campaign_dispatcher import Dispatcher, extension_block, sha
-from test_campaign_dispatcher import job, finish
+from tests.causes.test_campaign_dispatcher import job, finish
 
 
 class AdmissionHoldTests(unittest.TestCase):

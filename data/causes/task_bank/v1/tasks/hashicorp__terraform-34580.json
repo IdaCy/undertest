@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "module_path": null,
+    "seed_path": "seeds/hashicorp__terraform-34580",
+    "task_root": "tasks/hashicorp__terraform-34580"
+  },
+  "schema": "causes.portable_task.v1",
+  "spec": {
+    "actor_env": [
+      "PATH=/tools:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+      "HOME=/tmp/home",
+      "LANG=C.UTF-8",
+      "TZ=Etc/UTC",
+      "CUDA_VISIBLE_DEVICES=",
+      "NVIDIA_VISIBLE_DEVICES=void",
+      "PYTHONDONTWRITEBYTECODE=1",
+      "GIT_CONFIG_NOSYSTEM=1",
+      "GIT_CONFIG_GLOBAL=/dev/null",
+      "GIT_CONFIG_SYSTEM=/dev/null",
+      "GIT_TERMINAL_PROMPT=0"
+    ],
+    "actor_uid": 65532,
+    "base_commit": "8faa757e20d8df6c458a002c6bd4e1bc26f41581",
+    "baseline_external_links": {},
+    "cpus": 1,
+    "image": "swebench/sweb.eval.x86_64.hashicorp_1776_terraform-34580@sha256:0180a97fd96c956ed14db41bcc9fb579236fa27b49abb17f14664fe5469b24cb",
+    "image_source_workspace": "/testbed",
+    "memory_bytes": 4294967296,
+    "pids_limit": 256,
+    "repository": "hashicorp/terraform",
+    "request": "`terraform fmt` does not handle `.tfmock.hcl` files\n### Terraform Version\r\n\r\n```shell\r\nTerraform v1.7.1\r\n```\r\n\r\n\r\n### Use Cases\r\n\r\nWhen using the Terraform 1.7 mocks feature as suggested in the official tutorial: https://developer.hashicorp.com/terraform/language/tests/mocking#mock-provider-data\r\n\r\nTerraform formatting does not apply to the `.tfmock.hcl` files\r\n\r\n```shell\r\nterraform fmt tests/aws/data.tfmock.hcl\r\n╷\r\n│ Error: Only .tf, .tfvars, and .tftest.hcl files can be processed with terraform fmt\r\n│ \r\n│ \r\n╵\r\n```\r\n\r\n### Attempted Solutions\r\n\r\nRenaming the file with `.tftest.hcl` extension before formatting is a workaround to get it formatted with:\r\n`terraform fmt tests/aws/data.tftest.hcl`\r\n\r\n### Proposal\r\n\r\nExtending `fmt` subcommand to `.tfmock.hcl` files\r\n\r\n### References\r\n\r\n_No response_\n",
+    "request_sha256": "2e461b00d33f79f8767f1d2094412d19440c56bc4af93bbb4f9529597ffa381c",
+    "schema": "caus.source_prefix_task.v1",
+    "task_id": "hashicorp__terraform-34580",
+    "tmpfs_masks": {
+      "/home": "ro,nosuid,nodev,size=65536,mode=000",
+      "/root": "ro,nosuid,nodev,size=65536,mode=000",
+      "/swebench_matterhorn": "ro,nosuid,nodev,size=65536,mode=000",
+      "/testbed": "ro,nosuid,nodev,size=65536,mode=000"
+    },
+    "workspace": "/workspace/project"
+  },
+  "task_id": "hashicorp__terraform-34580"
+}
