@@ -51,6 +51,87 @@ class AdmissionTests(unittest.TestCase):
         new['host_cuts'][0]['started_at']=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(seconds=181)).isoformat()
         with self.assertRaisesRegex(ValueError,'stale'):a.reservation_unchanged(old,new)
 
+    def evidence_fixture(self, action, current_change=None, ready_change=None):
+        old=self.reservation()
+        stale=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=1)).isoformat()
+        old['host_cuts']=[dict(host=host,started_at=stale,finished_at=stale) for host in ('one','two')]
+        current=copy.deepcopy(old)
+        current['host_cuts']=[dict(host=host,started_at=h.now(),finished_at=h.now()) for host in ('one','two')]
+        current['capture_pins']=[{'path':'/fixture/new-cut','bytes':1,'sha256':'new'}]
+        if current_change:current_change(current)
+        output='/fixture/finite';transfer={'original_roots':['q4','q8','main']};provider={'fixture':'same-provider'}
+        complete=dict(host_transfer=transfer,roots={output:{}},all_expected_terminal_custody=True,
+                      all_closed_verified=True,technical_missingness_preserved=True,no_unresolved_terminal_records=True)
+        foundation=dict(at=h.now(),host_transfer=transfer,provider=provider,legacy_owners=['one','two'],
+                        donor_cuts=[],evidence_pins=[],**{key:True for key in (
+                            'legacy_two_owners_healthy','provider_tunnels_healthy','original_transfer_present',
+                            'unused_MI_output_absent','donor_histories_clear','native_no_active_owned_work')})
+        policy=dict(predecessors=[{'output_root':output}],host_transfer=transfer,provider=provider,
+                    census_hosts=['one','two'],census_configs={'before_start':{'fixture':'MI13/JP3'},
+                                                             'waiting_release':{'fixture':'MI13/JP4'}},
+                    legacy_owners=['one','two'],history={'donor_scopes':[]},donor_histories=[],acceptance_rules={})
+        inputs={}
+        for name,value in [('prior_custody',complete),('precreation_reservation',old),
+                           ('fresh_reservation',current),('foundation',foundation)]:
+            evidence=self.save(name+'.json',value);flag='accepted_'+name
+            review={flag:True,'evidence':evidence}
+            if name=='fresh_reservation':review['census_config']=policy['census_configs']['before_start' if action==a.START else 'waiting_release']
+            inputs[name]={'evidence':evidence,'review':self.save(name+'_review.json',review)}
+            policy['acceptance_rules'][name]={'flag':flag,'binding_key':'evidence'}
+        if action==a.RELEASE:
+            process={'pid':1,'process_starttime_ticks':'2','argv':['fixture']}
+            owned=self.save('owned.json',{'fixture':'marker'})
+            launch=self.save('launch.json',{'process':process,'owned_barrier':owned})
+            registration=self.save('registration.json',{'controller':{'process':process,'launch_receipt':launch},'donor_histories':[]})
+            pointer=self.save('pointer.json',{'registration':registration})
+            ready=dict(at=h.now(),launch=launch,owned_barrier=owned,registration=registration,
+                       authorization_pointer=pointer,monitor_policy=self.save('monitor.json',{}),
+                       watcher_cycle=self.save('cycle.json',{}),MI_sync_roots=self.save('mi_roots.json',{}),
+                       JP_sync_roots=self.save('jp_roots.json',{}),**{key:True for key in (
+                           'zero_initial_claims','zero_persisted_blocks','legacy_MI_Tex_healthy',
+                           'mandatory_JP_companion_valid','all_13_MI_roots_requested','all_4_JP_roots_requested',
+                           'same_owned_watcher_successor')})
+            if ready_change:ready_change(ready)
+            evidence=self.save('readiness.json',ready)
+            inputs.update(launch=launch,startup={'evidence':evidence,'review':self.save('readiness_review.json',
+                {'accepted_continuous_startup_watch':True,'readiness':evidence})})
+        operator=a.ContinuousAdmission.__new__(a.ContinuousAdmission)
+        operator.policy=policy;operator.inputs=inputs
+        return operator,complete,old
+
+    def test_start_evidence_accepts_stale_precreation_with_fresh_equal_current(self):
+        operator,complete,old=self.evidence_fixture(a.START)
+        before=copy.deepcopy(old)
+        with patch.object(a.ContinuousAdmission,'live',side_effect=AssertionError('no live inspection')):
+            self.assertEqual(operator.evidence(a.START),complete)
+        self.assertEqual(h.checked(operator.inputs['precreation_reservation']['evidence']),before)
+
+    def test_start_and_release_reject_stale_or_changed_current_reservation(self):
+        stale=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(seconds=181)).isoformat()
+        mutations=[lambda r:r['host_cuts'][0].update(started_at=stale),
+                   lambda r:r['host_cuts'][1].update(finished_at=stale),
+                   lambda r:r['allocation_identities'][0].update(seed=1.0),
+                   lambda r:(r['allocation_identities'][0].update(seed=5),r.update(allocation_seeds=[2,3,4,5])),
+                   lambda r:(r['allocation_identities'][0].update(run_id='new'),r.update(run_ids=['new'])),
+                   lambda r:r.update(frozen_input_pins=[{'path':'/fixture/different-frozen','bytes':1,'sha256':'new'}])]
+        for action in (a.START,a.RELEASE):
+            for index,change in enumerate(mutations):
+                operator,_,_=self.evidence_fixture(action,current_change=change)
+                with self.subTest(action=action,change=index),self.assertRaises(ValueError):operator.evidence(action)
+
+    def test_release_keeps_fresh_startup_and_registered_owner_requirements(self):
+        operator,complete,_=self.evidence_fixture(a.RELEASE)
+        # Registration's extensive static policy check has its own qualification;
+        # exercise the exact evidence seam and preserve its invocation here.
+        with patch.object(a,'validate_registration') as validate:
+            self.assertEqual(operator.evidence(a.RELEASE),complete)
+            validate.assert_called_once()
+        stale=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(seconds=181)).isoformat()
+        for change in (lambda r:r.update(at=stale),lambda r:r.update(zero_initial_claims=False),
+                       lambda r:r.update(launch={'path':'/fixture/wrong-launch','bytes':1,'sha256':'wrong'})):
+            operator,_,_=self.evidence_fixture(a.RELEASE,ready_change=change)
+            with self.assertRaises(ValueError):operator.evidence(a.RELEASE)
+
     def finite(self):
         jobs=[{'allocation':{'run_id':str(i)},'fixture':i} for i in range(2)]
         config={'model':'fixture'}

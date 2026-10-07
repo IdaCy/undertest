@@ -376,8 +376,6 @@ class ContinuousAdmission:
             require(complete[key] is True, 'prior_custody_not_complete:'+key)
         old, fresh = h.checked(x['precreation_reservation']['evidence']), h.checked(x['fresh_reservation']['evidence'])
         reservation_unchanged(old,fresh)
-        if action==START:
-            for cut in old['host_cuts']:recent(cut['started_at']);recent(cut['finished_at'])
         require([c['host'] for c in fresh['host_cuts']]==p['census_hosts'], 'both_host_census_required')
         scope=h.checked(x['fresh_reservation']['review'])
         require(scope['census_config']==p['census_configs']['before_start' if action==START else 'waiting_release'], 'census_root_scope_changed')
