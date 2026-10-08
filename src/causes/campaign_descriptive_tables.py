@@ -3,7 +3,7 @@
 This module does no file discovery, inference, or output publication. Each call
 returns the five legacy table objects, each keyed by the supplied model name.
 The legacy ``dose_levels`` name denotes categorical conditions compared with
-their supplied natural baseline, not an ordinal dose or trend. Reader end-stage
+their declared control, not an ordinal dose or trend. Reader end-stage
 judgments describe cumulative generated expression, not current belief.
 """
 
@@ -49,7 +49,7 @@ def compose_tables(model, jobs, records, *, rosters, condition_families,
     flags in jobs; results never select or shrink an assigned population.
 
     Each condition_families entry supplies ``tasks`` in matched order, a
-    ``control`` natural-baseline variant ID, and categorical ``levels`` in
+    ``control`` variant ID, and categorical ``levels`` in
     presentation order. variant_bindings[task][level] supplies ``eligible`` and,
     for aliases, ``alias_of``. Only a unique descriptive_first_rep at repetition
     zero supplies a physical condition draw. Aliases are direct and task-local.
