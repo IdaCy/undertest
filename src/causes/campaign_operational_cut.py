@@ -83,6 +83,8 @@ def capture(binding_ref, review_ref):
     campaign = canonical(binding["campaign_root"])
     directory = canonical(binding["output_directory"])
     require(directory.is_relative_to(campaign) and directory != campaign, "cut_output_scope")
+    health_directory = canonical(binding["reader_health_output_directory"])
+    require(health_directory.is_relative_to(campaign), "reader_health_directory_scope")
     not_before = dt.datetime.fromisoformat(binding["not_before"])
     require(not_before.tzinfo is not None and dt.datetime.now(dt.timezone.utc) >= not_before,
             "cut_before_due_time")
@@ -155,7 +157,10 @@ def capture(binding_ref, review_ref):
     health_started = dt.datetime.now(dt.timezone.utc).isoformat()
     health_path = canonical(health_module.health())
     health_ended = dt.datetime.now(dt.timezone.utc).isoformat()
-    require(health_path.parent == directory, "reader_health_output_scope")
+    require(health_path.parent == health_directory, "reader_health_output_scope")
+    health_output_pin = pin(health_path)
+    health_path = Path(save(directory, "READER_HEALTH.retained.json",
+                            read(health_output_pin))["path"])
     health_pin = pin(health_path)
     health = checked(health_pin)
     require(health["journal_prefix"] == pin(directory / "READER_JOURNAL_PREFIX.jsonl"),
@@ -164,7 +169,8 @@ def capture(binding_ref, review_ref):
             "prior_reader_prefix_changed")
     health_cut = save(directory, "READER_CUT.json", {
         "invocation_started_at": health_started, "invocation_completed_at": health_ended,
-        "health_observed_at": health["at"], "health": health_pin, "journal_prefix": health["journal_prefix"],
+        "health_observed_at": health["at"], "health": health_pin, "original_health_output": health_output_pin,
+        "journal_prefix": health["journal_prefix"],
         "unconsumed_torn_tail_bytes": None,
         "tail_limit": "The pinned health helper retains complete lines but does not expose discarded tail length; no second live read."})
     missing = Counter("quote" if str(row.get("reason", "")).startswith("evidence_not_exact_channel_substring:")

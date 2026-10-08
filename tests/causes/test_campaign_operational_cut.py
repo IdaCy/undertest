@@ -53,6 +53,7 @@ def health():
     binding = {
         "schema": "causes.operational_cut_binding.v1", "source": cut.pin(Path(cut.__file__).resolve()),
         "campaign_root": str(tmp_path), "output_directory": str(tmp_path / "cut"),
+        "reader_health_output_directory": str(tmp_path / "cut"),
         "not_before": "2020-01-01T00:00:00+00:00", "phase_inputs": {"phase": phase}, "heartbeat": heartbeat,
         "protocol": protocol, "jobs": {"model": {"source": jobs, "expected_count": 2}},
         "accepted_index": str(index), "registry": registry,
@@ -98,6 +99,29 @@ class OperationalCutTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "multiple_custody_rows_for_original_ID"):
             invoke(tmp_path, binding)
         assert not (tmp_path / "cut/OBSERVATION.json").exists()
+
+    def test_separate_health_output_preserved_with_cut_journal(self):
+        binding = fixture(self.tmp_path)
+        health_directory = self.tmp_path / "reader"
+        health_directory.mkdir()
+        helper = Path(binding["reader_health_source"]["path"])
+        helper.write_text(helper.read_text().replace("output=HERE/'HEALTH.json'",
+                          "output=Path(" + repr(str(health_directory)) + ")/'HEALTH.json'"))
+        binding["reader_health_source"] = cut.pin(helper)
+        binding["reader_health_output_directory"] = str(health_directory)
+        result = cut.checked(invoke(self.tmp_path, binding))
+        reader_cut = cut.checked(result["reader_cut"])
+        assert reader_cut["original_health_output"] == cut.pin(health_directory / "HEALTH.json")
+        assert Path(result["reader_health"]["path"]).parent == self.tmp_path / "cut"
+        assert Path(result["reader_health"]["path"]).read_bytes() == (health_directory / "HEALTH.json").read_bytes()
+        assert cut.checked(result["reader_health"])["journal_prefix"] == result["reader_journal_prefix"]
+
+    def test_unbound_health_output_refused_without_observation(self):
+        binding = fixture(self.tmp_path)
+        binding["reader_health_output_directory"] = str(self.tmp_path / "reader")
+        with self.assertRaisesRegex(ValueError, "reader_health_output_scope"):
+            invoke(self.tmp_path, binding)
+        assert not (self.tmp_path / "cut/OBSERVATION.json").exists()
 
 
     def test_changed_prior_index_refused_without_observation(self):
