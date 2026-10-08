@@ -489,7 +489,8 @@ class GuardJournal:
 
 
 def observe_guard(directory, binding, owner, expected_lock, *,
-                  observe_storage=storage_observation, max_records=10000):
+                  observe_storage=storage_observation, max_records=10000,
+                  reporter_source=None):
     """Fresh local observation; old ready transitions alone never prove health."""
     alarms = {'owner_identity_invalid': False, 'reporting_lock_invalid': False,
               'guard_record_invalid': False, 'guard_not_ready': False,
@@ -516,6 +517,9 @@ def observe_guard(directory, binding, owner, expected_lock, *,
         source = _SOURCE_SHA
         require(hashlib.sha256(Path(__file__).read_bytes()).hexdigest() == source,
                 'loaded_storage_source_changed')
+        if reporter_source is not None:
+            h.checked_bytes(reporter_source)
+            source = reporter_source['sha256']
         for sequence, path in enumerate(paths):
             require(path.name == f'{sequence:08d}.json', 'guard_history_sequence_gap')
             ref = h.pin(path)
@@ -536,6 +540,8 @@ def observe_guard(directory, binding, owner, expected_lock, *,
                     'guard_history_timestamp_invalid')
             previous = ref
         result['latest_transition'] = previous
+        if reporter_source is not None:
+            result['reporter_source'] = reporter_source
         alarms['guard_not_ready'] = record['state'] != 'ready'
         if 'capacity_guard' in binding and record['state'] == 'floor_wait':
             old = record['observation']
