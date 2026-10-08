@@ -66,6 +66,7 @@ from pathlib import Path, PurePosixPath
 import datetime,hashlib,json,os,stat,sys
 request=json.load(sys.stdin)
 base=Path(request['base'])
+accepted=set(request['accepted'])
 rows=[];skipped=[]
 excluded={'upper','work','merged','reflink_workspace','pilot_copy_workspace'}
 def digest(p):
@@ -84,7 +85,7 @@ for root in request['roots']:
  for run in sorted(group.iterdir()):
   if run.is_symlink() or not run.is_dir():continue
   key=str(run.relative_to(base))
-  if key in request['accepted']:continue
+  if key in accepted:continue
   summary=run/'summary.json'
   if not summary.is_file() or summary.is_symlink():continue
   data=json.loads(summary.read_text())
