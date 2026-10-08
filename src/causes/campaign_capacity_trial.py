@@ -156,9 +156,10 @@ def terminal_metadata(directory, episode, terminal):
         closure = value.get('sandbox_closure')
         closure = closure if type(closure) is dict else {}
         errors = closure.get('closure_errors')
+        # Sandbox.close preserves stopped containers; stop/wait/unmount failures have separate closure fields.
         clean_closure = (closure.get('state') == 'closed' and type(errors) is list and not errors
                          and closure.get('overlay_mounted') is False
-                         and closure.get('retained_container') is False)
+                         and type(closure.get('retained_container')) is bool)
         fields = {'end_status': value.get('end_status'),
                   'actor_error_present': bool(value.get('actor_error')),
                   'sandbox_close_error_present': bool(value.get('sandbox_close_error')),
@@ -172,7 +173,6 @@ def terminal_metadata(directory, episode, terminal):
         technical = (fields['actor_error_present'] or fields['sandbox_close_error_present']
                      or fields['closure_state'] == 'closure_requires_review'
                      or fields['closure_errors_present'] is True or fields['overlay_mounted'] is True
-                     or fields['retained_container'] is True
                      or any(fields[key] == 'failed' for key in ('early_workspace_status', 'end_workspace_status'))
                      or fields['end_status'] == 'technical_failure'
                      or str(fields['end_status']).startswith('generation_'))

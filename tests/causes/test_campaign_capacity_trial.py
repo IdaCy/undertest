@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from causes import campaign_capacity_trial as t
 from causes import campaign_handoff as h
 from causes import campaign_storage as storage
+from causes.campaign_sandbox import Sandbox
 from test_campaign_storage import storage_fixture
 
 
@@ -144,7 +145,7 @@ class BoundaryAndSupervisorTests(unittest.TestCase):
     def test_actor_probe_failure_does_not_reclassify_natural(self):
         value = {'run_id': 'run', 'end_status': 'natural_completion',
                  'sandbox_closure': {'state': 'closed', 'closure_errors': [],
-                                     'overlay_mounted': False, 'retained_container': False},
+                                     'overlay_mounted': False, 'retained_container': True},
                  'probes': [{'technical_status': 'failure'}]}
         (self.root / 'actor_summary.json').write_text(json.dumps(value))
         terminal = {'event': 'episode_finished'}
@@ -157,6 +158,49 @@ class BoundaryAndSupervisorTests(unittest.TestCase):
         result = t.terminal_metadata(self.root, {'run_id': 'run'}, terminal)
         self.assertEqual(result['classification'], 'technical')
         self.assertTrue(result['runtime_censored'])
+
+    def test_preserved_stopped_sandbox_can_be_natural_or_censored(self):
+        seed = self.root / 'seed'
+        seed.mkdir()
+        sandbox = Sandbox({'workspace': '/work/repo', 'seed_path': str(seed)},
+                          self.root / 'output', 'run')
+        sandbox.created = sandbox.started = sandbox.mounted = True
+        operations = []
+
+        def execute(argv, timeout=90, tag='operation', **kwargs):
+            operations.append(tag)
+            if tag == 'closure_state':
+                return {'returncode': 0, 'stdout': json.dumps({'Running': True, 'Paused': False})}
+            return {'returncode': 0, 'timeout': False, 'stdout_path': 'retained-command-output'}
+
+        sandbox._execute = execute
+        closure = sandbox.close()
+        self.assertTrue(closure['retained_container'])
+        self.assertEqual(operations[-3:], ['stop', 'wait', 'unmount'])
+        for status, expected in (('natural_completion', 'natural'),
+                                 ('administratively_censored_runtime', 'censored')):
+            value = {'run_id': 'run', 'end_status': status, 'sandbox_closure': closure}
+            (self.root / 'actor_summary.json').write_text(json.dumps(value))
+            result = t.terminal_metadata(self.root, {'run_id': 'run'}, {'event': 'episode_finished'})
+            self.assertEqual(result['classification'], expected)
+            self.assertTrue(result['technical_fields']['explicit_clean_closure'])
+            self.assertTrue(result['technical_fields']['retained_container'])
+
+    def test_preservation_does_not_mask_closure_or_runner_failures(self):
+        clean = {'state': 'closed', 'closure_errors': [],
+                 'overlay_mounted': False, 'retained_container': True}
+        for change in ({'state': 'closure_requires_review'},
+                       {'closure_errors': [{'stage': 'stop', 'returncode': 1}]},
+                       {'overlay_mounted': True}):
+            value = {'run_id': 'run', 'end_status': 'natural_completion',
+                     'sandbox_closure': dict(clean, **change)}
+            (self.root / 'actor_summary.json').write_text(json.dumps(value))
+            result = t.terminal_metadata(self.root, {'run_id': 'run'}, {'event': 'episode_finished'})
+            self.assertEqual(result['classification'], 'technical')
+        value['sandbox_closure'] = clean
+        (self.root / 'actor_summary.json').write_text(json.dumps(value))
+        result = t.terminal_metadata(self.root, {'run_id': 'run'}, {'event': 'unresolved_current_attempt'})
+        self.assertEqual(result['classification'], 'technical')
 
     def test_missing_or_ambiguous_closure_cannot_be_natural_or_censored(self):
         clean = {'state': 'closed', 'closure_errors': [], 'overlay_mounted': False, 'retained_container': False}
