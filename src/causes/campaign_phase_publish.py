@@ -228,6 +228,125 @@ def validate_capacity_return(plan, registration, auth, manifest):
                     and routing['predecessor_routing'] == expected_owner['guard']['binding']
                         ['admission_control']['pause_routing'],
                     'capacity_return_pause_ancestry_changed')
+    if 'mi_succession_ancestry' in old_registration:
+        validate_mi_ancestry(plan, registration, old_pointer, old_registration,
+                             transition.get('ancestry'))
+    return old_pointer, old_registration
+
+
+def validate_mi_ancestry(plan, registration, old_pointer, old_registration, reference):
+    """Append the exact displaced retiree and preserve every earlier ancestry pin."""
+    storage.require(type(reference) is dict, 'natural_mi_succession_ancestry_required')
+    ancestry = h.checked(reference)
+    storage.require(ancestry == {
+        'schema': 'causes.storage_mi_succession_ancestry.v1',
+        'predecessor_pointer': plan['previous']['pin'],
+        'predecessor_registration': old_pointer['registration'],
+        'predecessor_review': old_pointer['independent_review'],
+        'predecessor_adoption': old_pointer['root_adoption'],
+        'retired_owner': old_registration['owners']['old_mi'],
+        'previous': old_registration.get('mi_succession_ancestry')}
+        and registration.get('mi_succession_ancestry') == reference
+        and ancestry['retired_owner']['observation_state'] == 'retired',
+        'natural_mi_succession_ancestry_changed')
+    # The displaced retiree's full journal stays immutable; earlier registrations,
+    # owners and routing proofs remain reachable through the preserved exact pins.
+    retired_prefix = ancestry['retired_owner']['journal_prefix']
+    storage.require(retired_prefix['path'] == str(h.canonical_path(
+                    ancestry['retired_owner']['output_root']) / '.dispatcher/journal.jsonl'),
+                    'natural_mi_succession_ancestry_journal_changed')
+    h.checked_bytes(retired_prefix)
+    if ancestry['previous'] is not None:
+        h.checked_bytes(ancestry['previous'])
+
+
+def validate_natural_mi_succession(plan, registration, auth, manifest):
+    """Remap an actually draining or retired MI owner without discarding its predecessors."""
+    transition = plan['natural_mi_succession']
+    old_auth = h.checked(transition['predecessor_authorization'])
+    old_manifest = identity.validate_authorization_value(old_auth)
+    old_pointer, old_registration = identity.current_registration(old_auth, old_manifest)
+    state = {'texas_running_mi_draining': 'draining',
+             'texas_running_mi_retired': 'retired'}.get(registration['phase'])
+    storage.require(plan['previous'] is not None and state is not None
+                    and old_registration['phase'] == 'successors_running'
+                    and set(old_registration['owners']) == {'old_mi', 'old_texas', 'new_mi', 'new_texas'}
+                    and set(registration['owners']) == {'old_mi', 'old_texas', 'new_texas'},
+                    'natural_mi_succession_phase_scope_changed')
+    expected_manifest = copy.deepcopy(old_manifest)
+    expected_manifest['outputs']['old_mi'] = old_manifest['outputs']['new_mi']
+    expected_manifest['outputs']['new_mi'] = manifest['outputs']['new_mi']
+    storage.require(manifest == expected_manifest
+                    and manifest['outputs']['new_mi'] not in old_manifest['outputs'].values()
+                    and registration['identity_manifest'] == auth['manifest'],
+                    'natural_mi_succession_manifest_scope_changed')
+    validate_mi_ancestry(plan, registration, old_pointer, old_registration,
+                         transition.get('ancestry'))
+    previous_owner = old_registration['owners']['new_mi']
+    storage.require(previous_owner['observation_state'] == 'running'
+                    and plan['pause_routing'] == previous_owner['guard']['binding']
+                        ['admission_control']['pause_routing']
+                    and all(registration['owners'][role] == old_registration['owners'][role]
+                            for role in ('old_texas', 'new_texas')),
+                    'natural_mi_succession_predecessor_or_routing_changed')
+    validate_interim_drain(plan, registration, h.checked(plan['pause_routing']))
+    drain = h.checked(plan['interim_drain']['evidence'])
+    drain_plan, preflight = h.checked(drain['plan']), h.checked(drain['preflight'])
+    storage.require(drain_plan['registration'] == old_pointer['registration']
+                    and drain_plan['current_pointer'] == plan['previous']['pin']
+                    and preflight['plan'] == drain['plan']
+                    and preflight['mi_observation']['process'] == previous_owner['process']
+                    and preflight['mi_observation']['output_root'] == previous_owner['output_root'],
+                    'natural_mi_succession_drain_predecessor_changed')
+    boundary = preflight['journal_boundary']['pin']
+    raw = h.checked_bytes(preflight['journal_copy'])
+    prior = previous_owner['journal_prefix']
+    storage.require(boundary['path'] == prior['path'] == str(h.canonical_path(
+                    previous_owner['output_root']) / '.dispatcher/journal.jsonl')
+                    and type(prior['bytes']) is int and type(boundary['bytes']) is int
+                    and 0 < prior['bytes'] <= boundary['bytes'] == len(raw)
+                    and raw.endswith(b'\n') and raw[:prior['bytes']].endswith(b'\n')
+                    and hashlib.sha256(raw).hexdigest() == boundary['sha256']
+                    and hashlib.sha256(raw[:prior['bytes']]).hexdigest() == prior['sha256'],
+                    'natural_mi_succession_journal_prefix_changed')
+    expected_owner = copy.deepcopy(previous_owner)
+    expected_owner.update(observation_state=state, journal_prefix=boundary)
+    storage.require(('retirement' in transition) == (state == 'retired'),
+                    'natural_mi_succession_retirement_scope_changed')
+    if state == 'retired':
+        pair = transition['retirement']
+        result, review = h.checked(pair['evidence']), h.checked(pair['review'])
+        storage.require(review.get('accepted_mi_retirement_metadata') is True
+                        and review.get('result') == pair['evidence']
+                        and review.get('journal') == result['full_final_journal']
+                        and result['schema'] == 'causes.mi_retirement_metadata_result.v1'
+                        and result['passed'] is True and result['runtime_actions'] is False
+                        and result['process_signals'] is False and result['automatic_retry'] is False
+                        and result['plan']['registration'] == old_pointer['registration']
+                        and result['plan']['registration_review'] == old_pointer['independent_review']
+                        and result['plan']['published_identity'] == plan['previous']['pin']
+                        and result['plan']['begin_drain'] == plan['interim_drain']
+                        and result['owned_marker'] == drain['owned_marker'],
+                        'natural_mi_succession_retirement_not_accepted')
+        final = result['full_final_journal']
+        final_raw = h.checked_bytes(final)
+        storage.require(final['path'] == boundary['path'] and final_raw.endswith(b'\n')
+                        and final_raw[:len(raw)] == raw,
+                        'natural_mi_succession_final_history_changed')
+        expected_owner['journal_prefix'] = final
+        observed = result['observation']
+        storage.require(result['owner'] == expected_owner
+                        and observed['process'] == previous_owner['process']
+                        and observed['output_root'] == previous_owner['output_root']
+                        and observed['metadata_pins']['journal'] == final
+                        and observed['live'] is False and observed['lock_owner'] is None
+                        and type(observed['claims']) is type(observed['active_claims']) is int
+                        and observed['claims'] >= 0 and observed['active_claims'] == 0
+                        and observed['drain_progress']['pause_acknowledged'] is True
+                        and observed['drain_progress']['new_claims_after_pause'] == 0,
+                        'natural_mi_succession_owner_not_retired')
+    storage.require(registration['owners']['old_mi'] == expected_owner,
+                    'natural_mi_succession_owner_mapping_changed')
     return old_pointer, old_registration
 
 
@@ -236,14 +355,19 @@ def publication_controls(plan, registration):
     schema = plan['schema']
     storage.require(schema in ('causes.storage_phase_publication_plan.v1',
                               'causes.storage_phase_publication_plan.v2',
-                              'causes.storage_phase_publication_plan.v3'),
+                              'causes.storage_phase_publication_plan.v3',
+                              'causes.storage_phase_publication_plan.v4'),
                     'phase_publication_plan_schema')
-    interim = schema == 'causes.storage_phase_publication_plan.v2'
+    interim = schema in ('causes.storage_phase_publication_plan.v2',
+                         'causes.storage_phase_publication_plan.v4')
     storage.require(('interim_drain' in plan) == interim,
                     'explicit_interim_publication_scope_required')
     storage.require(('capacity_return' in plan) ==
                     (schema == 'causes.storage_phase_publication_plan.v3'),
                     'explicit_capacity_return_scope_required')
+    storage.require(('natural_mi_succession' in plan) ==
+                    (schema == 'causes.storage_phase_publication_plan.v4'),
+                    'explicit_natural_mi_succession_scope_required')
     routing, marker = h.checked(plan['pause_routing']), h.checked(plan['owned_drain'])
     storage.require(h.stat_identity(marker['pin']['path']) == marker['stat']
                     and h.checked_bytes(marker['pin']) == h.checked_bytes(marker['archived_marker']),
@@ -276,7 +400,8 @@ def publish(plan_reference, review_reference, authority_reference):
     plan, review = h.checked(plan_reference), h.checked(review_reference)
     storage.require(plan['schema'] in ('causes.storage_phase_publication_plan.v1',
                                       'causes.storage_phase_publication_plan.v2',
-                                      'causes.storage_phase_publication_plan.v3')
+                                      'causes.storage_phase_publication_plan.v3',
+                                      'causes.storage_phase_publication_plan.v4')
                     and review.get('accepted_storage_phase_publication_plan') is True
                     and review.get('plan') == plan_reference,
                     'unaccepted_phase_publication_plan')
@@ -307,6 +432,7 @@ def publish(plan_reference, review_reference, authority_reference):
     phase = registration['phase']
     interim = plan['schema'] == 'causes.storage_phase_publication_plan.v2'
     capacity_return = plan['schema'] == 'causes.storage_phase_publication_plan.v3'
+    natural_succession = plan['schema'] == 'causes.storage_phase_publication_plan.v4'
     pointer = h.canonical_path(manifest['pointer'])
     directory = h.canonical_path(plan['receipt_directory'])
     storage.require(directory.is_relative_to(h.canonical_path(manifest['campaign_root']))
@@ -314,13 +440,19 @@ def publish(plan_reference, review_reference, authority_reference):
                     'new_phase_publication_receipt_directory_required')
     previous = plan['previous']
     previous_bytes(pointer, previous)
-    if capacity_return:
+    if natural_succession:
+        validate_natural_mi_succession(plan, registration, auth, manifest)
+    elif capacity_return:
         validate_capacity_return(plan, registration, auth, manifest)
     elif previous is None:
         validate_phase_order(phase, None, interim=interim)
     else:
         old_pointer, old_registration = identity.current_registration(auth, manifest)
         validate_phase_order(phase, old_registration['phase'], interim=interim)
+        if 'mi_succession_ancestry' in old_registration:
+            storage.require(registration.get('mi_succession_ancestry') ==
+                            old_registration['mi_succession_ancestry'],
+                            'phase_publication_mi_ancestry_changed')
         for role, old_owner in old_registration['owners'].items():
             storage.require(role in registration['owners']
                             and registration['owners'][role]['process'] == old_owner['process']
@@ -340,6 +472,8 @@ def publish(plan_reference, review_reference, authority_reference):
         identity.validate_authorization_value(auth)
         if capacity_return:
             validate_capacity_return(plan, registration, auth, manifest)
+        if natural_succession:
+            validate_natural_mi_succession(plan, registration, auth, manifest)
         h.checked_bytes(plan_reference)
         return True
 
