@@ -350,13 +350,158 @@ def validate_natural_mi_succession(plan, registration, auth, manifest):
     return old_pointer, old_registration
 
 
+def validate_post_admission_return(plan, registration, auth, manifest):
+    """Remap a released candidate only after an accepted guard-held retirement."""
+    transition = plan['post_admission_return']
+    old_auth = h.checked(transition['predecessor_authorization'])
+    old_manifest = identity.validate_authorization_value(old_auth)
+    old_pointer, old_registration = identity.current_registration(old_auth, old_manifest)
+    expected_state = {'mi_waiting': 'waiting', 'successors_running': 'running'}.get(
+        old_registration['phase'])
+    storage.require(plan['previous'] is not None and expected_state is not None
+                    and registration['phase'] == 'texas_running_mi_retired'
+                    and set(old_registration['owners']) == {'old_mi', 'old_texas', 'new_mi', 'new_texas'}
+                    and set(registration['owners']) == {'old_mi', 'old_texas', 'new_texas'},
+                    'post_admission_return_phase_scope_changed')
+    expected_manifest = copy.deepcopy(old_manifest)
+    expected_manifest['outputs']['old_mi'] = old_manifest['outputs']['new_mi']
+    expected_manifest['outputs']['new_mi'] = manifest['outputs']['new_mi']
+    storage.require(manifest == expected_manifest
+                    and manifest['outputs']['new_mi'] not in old_manifest['outputs'].values()
+                    and registration['identity_manifest'] == auth['manifest'],
+                    'post_admission_return_manifest_scope_changed')
+    validate_mi_ancestry(plan, registration, old_pointer, old_registration,
+                         transition.get('ancestry'))
+    previous_owner = old_registration['owners']['new_mi']
+    storage.require(previous_owner['observation_state'] == expected_state,
+                    'post_admission_return_predecessor_state_changed')
+    pair = transition['retirement']
+    result, review = h.checked(pair['evidence']), h.checked(pair['review'])
+    storage.require(review.get('accepted_mi_post_admission_hold_retirement') is True
+                    and review.get('result') == pair['evidence']
+                    and review.get('journal') == result['full_final_journal']
+                    and review.get('owned_marker') == result['owned_marker']
+                    and result['schema'] == 'causes.capacity_post_admission_hold_retirement_result.v1'
+                    and result['passed'] is True and result['runtime_actions'] is False
+                    and result['process_signals'] is False and result['automatic_retry'] is False
+                    and result['plan']['registration'] == old_pointer['registration']
+                    and result['plan']['registration_review'] == old_pointer['independent_review']
+                    and result['plan']['published_identity'] == plan['previous']['pin'],
+                    'post_admission_return_retirement_not_accepted')
+    final = result['full_final_journal']
+    raw, prior = h.checked_bytes(final), previous_owner['journal_prefix']
+    storage.require(final['path'] == prior['path'] == str(h.canonical_path(
+                    previous_owner['output_root']) / '.dispatcher/journal.jsonl')
+                    and type(prior['bytes']) is int and 0 < prior['bytes'] <= len(raw)
+                    and raw.endswith(b'\n') and raw[:prior['bytes']].endswith(b'\n')
+                    and hashlib.sha256(raw[:prior['bytes']]).hexdigest() == prior['sha256'],
+                    'post_admission_return_final_history_changed')
+    expected_owner = copy.deepcopy(previous_owner)
+    expected_owner.update(observation_state='retired', journal_prefix=final)
+    storage.require(registration['owners']['old_mi'] == result['owner'] == expected_owner
+                    and all(registration['owners'][role] == old_registration['owners'][role]
+                            for role in ('old_texas', 'new_texas')),
+                    'post_admission_return_owner_mapping_changed')
+    observed = result['observation']
+    events = [json.loads(line) for line in raw.splitlines()]
+    claims, terminals = observation._owner_claims(events, expected_owner['controller_id'])
+    storage.require(type(observed['claims']) is type(observed['active_claims']) is int
+                    and observed['claims'] == len(claims) > 0 and observed['active_claims'] == 0
+                    and set(claims) == terminals
+                    and observed['live'] is False and observed['lock_owner'] is None
+                    and observed['process'] == expected_owner['process']
+                    and observed['output_root'] == expected_owner['output_root']
+                    and observed['metadata_pins']['journal'] == final
+                    and observed['drain_progress']['pause_acknowledged'] is True
+                    and type(observed['drain_progress']['new_claims_after_pause']) is int
+                    and observed['drain_progress']['new_claims_after_pause'] == 0
+                    and result['run_directories_before'] == result['run_directories_after']
+                    and type(result['run_directories_before']) is list
+                    and len(set(result['run_directories_before'])) == len(result['run_directories_before'])
+                    and set(result['run_directories_before']) <= set(claims)
+                    and result['claims_without_run_directory'] ==
+                        sorted(set(claims) - set(result['run_directories_before'])),
+                    'post_admission_return_requires_complete_positive_retirement')
+    guard = h.checked(result['plan']['guard_result'])
+    trial = h.checked(guard['trial_plan'])
+    binding = trial['capacity_guard']
+    owned = result['owned_marker']
+    intent = h.checked(owned['intent'])
+    hold = h.checked(result['hold_payloads']['HOLD_RESULT'])
+    storage.require(guard['passed'] is True and guard['barrier_release'] is False
+                    and guard['candidate'] == trial['owner_process'] == expected_owner['process']
+                    and guard['owned_barrier'] == result['owned_barrier'] == expected_owner['owned_barrier']
+                    and intent['schema'] == 'causes.capacity_guard_hold.v1'
+                    and intent['guard'] == guard['process']
+                    and intent['trial_id'] == binding['trial_id']
+                    and intent['output_root'] == binding['output_root'] == expected_owner['output_root']
+                    and type(intent['reasons']) is list and intent['reasons']
+                    and all(type(reason) is str and reason for reason in intent['reasons'])
+                    and intent['automatic_resume'] is False
+                    and hold['created'] is True and hold['intent'] == owned['intent']
+                    and hold['marker'] == owned['pin'] and hold['stat'] == owned['stat']
+                    and owned['pin']['path'] == binding['pause_file']
+                        == expected_owner['controller_fields']['pause_file']
+                    and h.checked(owned['pin']) == {'intent': owned['intent']}
+                    and h.stat_identity(owned['pin']['path']) == owned['stat'],
+                    'post_admission_return_owned_hold_changed')
+    release = h.checked(result['release_result'])
+    released = h.checked(result['barrier_release'])
+    storage.require(result['release_result'] == result['plan']['release_result']
+                    and release['passed'] is True and release['automatic_retry'] is False
+                    and release['release'] == result['barrier_release']
+                    and released['released_owned_barrier'] == expected_owner['owned_barrier']
+                    and released['barrier_path'] == expected_owner['barrier_path']
+                    and released['no_pause_marker_removed'] is True
+                    and result['barrier_absent'] is True
+                    and not os.path.lexists(expected_owner['barrier_path']),
+                    'post_admission_return_release_changed')
+    presence = result['optional_records_present']
+    storage.require(set(presence) == {'STOPPED', 'FAILED', 'FIRST_ADMISSION', 'WINDOW'}
+                    and all(type(value) is bool for value in presence.values())
+                    and (presence['STOPPED'] or presence['FAILED'])
+                    and set(result['hold_payloads']) == {'HOLD_INTENT', 'HOLD_RESULT', 'PAUSE', 'FINAL_LEASE'}
+                        | {name for name, present in presence.items() if present}
+                    and result['hold_payloads']['HOLD_INTENT'] == owned['intent']
+                    and result['hold_payloads']['PAUSE'] == owned['pin'],
+                    'post_admission_return_terminal_evidence_changed')
+    for reference in result['hold_payloads'].values():
+        h.checked_bytes(reference)
+    lease_ref = result['hold_payloads']['FINAL_LEASE']
+    lease = h.checked(lease_ref)
+    health_lock = h.canonical_path(binding['health_lock_path'])
+    lease_pointer = h.checked(h.pin(binding['lease_path']))
+    storage.require(lease_pointer['record'] == lease_ref
+                    and lease['state'] == 'held' and lease['guard'] == guard['process']
+                    and lease['candidate'] == expected_owner['process']
+                    and lease['plan'] == guard['trial_plan'] and lease['binding'] == binding
+                    and lease['reason'] == intent['reasons']
+                    and result['health_lock_free'] is True
+                    and result['health_lock'] == lease['health_lock'] == h.stat_identity(health_lock)
+                    and h.lock_free(health_lock), 'post_admission_return_guard_lease_changed')
+    guard_state = h.retirement_state(guard['process'])
+    storage.require(guard_state['absent'] or guard_state.get('state') in ('Z', 'X', 'x'),
+                    'post_admission_return_guard_not_retired')
+    routing = h.checked(plan['pause_routing'])
+    retained = storage.retained_owned_pauses(routing)
+    storage.require(owned['pin']['path'] in retained
+                    and routing['predecessor_routing'] == previous_owner['guard']['binding']
+                        ['admission_control']['pause_routing'],
+                    'post_admission_return_pause_ancestry_changed')
+    preserved = h.checked(routing['retained_owned_pauses'][-1]['evidence'])
+    storage.require(preserved['marker'] == owned['pin'] and preserved['stat'] == owned['stat'],
+                    'post_admission_return_retained_marker_changed')
+    return old_pointer, old_registration
+
+
 def publication_controls(plan, registration):
     """Keep live global/Texas controls effective during a reviewed MI drain."""
     schema = plan['schema']
     storage.require(schema in ('causes.storage_phase_publication_plan.v1',
                               'causes.storage_phase_publication_plan.v2',
                               'causes.storage_phase_publication_plan.v3',
-                              'causes.storage_phase_publication_plan.v4'),
+                              'causes.storage_phase_publication_plan.v4',
+                              'causes.storage_phase_publication_plan.v5'),
                     'phase_publication_plan_schema')
     interim = schema in ('causes.storage_phase_publication_plan.v2',
                          'causes.storage_phase_publication_plan.v4')
@@ -368,6 +513,9 @@ def publication_controls(plan, registration):
     storage.require(('natural_mi_succession' in plan) ==
                     (schema == 'causes.storage_phase_publication_plan.v4'),
                     'explicit_natural_mi_succession_scope_required')
+    storage.require(('post_admission_return' in plan) ==
+                    (schema == 'causes.storage_phase_publication_plan.v5'),
+                    'explicit_post_admission_return_scope_required')
     routing, marker = h.checked(plan['pause_routing']), h.checked(plan['owned_drain'])
     storage.require(h.stat_identity(marker['pin']['path']) == marker['stat']
                     and h.checked_bytes(marker['pin']) == h.checked_bytes(marker['archived_marker']),
@@ -401,7 +549,8 @@ def publish(plan_reference, review_reference, authority_reference):
     storage.require(plan['schema'] in ('causes.storage_phase_publication_plan.v1',
                                       'causes.storage_phase_publication_plan.v2',
                                       'causes.storage_phase_publication_plan.v3',
-                                      'causes.storage_phase_publication_plan.v4')
+                                      'causes.storage_phase_publication_plan.v4',
+                                      'causes.storage_phase_publication_plan.v5')
                     and review.get('accepted_storage_phase_publication_plan') is True
                     and review.get('plan') == plan_reference,
                     'unaccepted_phase_publication_plan')
@@ -433,6 +582,7 @@ def publish(plan_reference, review_reference, authority_reference):
     interim = plan['schema'] == 'causes.storage_phase_publication_plan.v2'
     capacity_return = plan['schema'] == 'causes.storage_phase_publication_plan.v3'
     natural_succession = plan['schema'] == 'causes.storage_phase_publication_plan.v4'
+    post_admission_return = plan['schema'] == 'causes.storage_phase_publication_plan.v5'
     pointer = h.canonical_path(manifest['pointer'])
     directory = h.canonical_path(plan['receipt_directory'])
     storage.require(directory.is_relative_to(h.canonical_path(manifest['campaign_root']))
@@ -440,7 +590,9 @@ def publish(plan_reference, review_reference, authority_reference):
                     'new_phase_publication_receipt_directory_required')
     previous = plan['previous']
     previous_bytes(pointer, previous)
-    if natural_succession:
+    if post_admission_return:
+        validate_post_admission_return(plan, registration, auth, manifest)
+    elif natural_succession:
         validate_natural_mi_succession(plan, registration, auth, manifest)
     elif capacity_return:
         validate_capacity_return(plan, registration, auth, manifest)
@@ -474,6 +626,8 @@ def publish(plan_reference, review_reference, authority_reference):
             validate_capacity_return(plan, registration, auth, manifest)
         if natural_succession:
             validate_natural_mi_succession(plan, registration, auth, manifest)
+        if post_admission_return:
+            validate_post_admission_return(plan, registration, auth, manifest)
         h.checked_bytes(plan_reference)
         return True
 
