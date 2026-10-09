@@ -237,8 +237,11 @@ def waiting_identity(policy, process):
     rows = [json.loads(line) for line in raw.splitlines()]
     allowed = {'controller_started','admission_holds_bound','admission_barrier_waiting'}
     require(all(row['event'] in allowed for row in rows), 'waiting_owner_already_issued_or_faulted')
+    pending = (len(h.checked(policy['initial_jobs']))
+               if policy.get('schema') == 'causes.native_corpus_admission_policy.v2' else 0)
     require(sum(row['event']=='controller_started' for row in rows) == 1
-            and any(row['event']=='admission_barrier_waiting' and row['active']==row['pending']==0 for row in rows),
+            and any(row['event']=='admission_barrier_waiting' and row['active']==0
+                    and row['pending']==pending for row in rows),
             'empty_waiting_owner_not_observed')
     require(not list((root/'.dispatcher/blocks').glob('*')), 'waiting_owner_created_block')
     require(not [p for p in root.iterdir() if p.is_dir() and p.name != '.dispatcher'], 'waiting_owner_created_attempt')
@@ -257,6 +260,9 @@ def observe_waiting(policy_reference, launch_reference):
         state=h.retirement_state(previous['process'])
         require((state['absent'] or state.get('state') in ('Z','X','x'))
                 and h.lock_free(Path(previous['output_root'])/'.dispatcher.lock'), 'prior_owner_not_retired')
+        if policy.get('schema') == 'causes.native_corpus_admission_policy.v2' and 'closure' in previous:
+            from causes.campaign_corpus_succession import live_closed_predecessor
+            live_closed_predecessor(previous)
     value=waiting_identity(policy,launch['process'])
     for key in ('queue_identity','admission_control','controller_identity'):require(value[key]==launch[key], 'waiting_receipt_changed')
     return {'at':h.now(),'policy':policy_reference,'launch':launch_reference,'process':launch['process'],
@@ -264,6 +270,9 @@ def observe_waiting(policy_reference, launch_reference):
 
 
 class ContinuousAdmission:
+    start_action = START
+    release_action = RELEASE
+
     def __init__(self, policy, inputs, authority):
         self.policy_ref, self.inputs_ref, self.authority_ref = policy, inputs, authority
         self.policy, self.inputs = h.checked(policy), h.checked(inputs)
@@ -441,15 +450,20 @@ class ContinuousAdmission:
     def authority(self, action):
         def validate(value):
             require(value['policy']==self.policy_ref and value['inputs']==self.inputs_ref
-                    and value['phase_requests_authorized'] is (action==RELEASE), 'authority_scope_changed')
+                    and value['phase_requests_authorized'] is (action==self.release_action), 'authority_scope_changed')
             self.live(action)
             return True
         return h.Authority(self.authority_ref,action,tuple(Path(p) for p in self.policy['pause_paths']),validate)
 
+    def retire_predecessor(self, attempt, authority):
+        p = self.policy
+        old=p['predecessors'][-1];complete=h.checked(self.inputs['prior_custody']['evidence']);previous=h.checked(old['launch'])
+        return h.retire_exact_idle_owner(previous['process'],old['output_root'],complete['roots'][old['output_root']]['journal'],attempt/'retirement',authority)
+
     def start(self, execute=False):
-        p=self.policy;authority=self.authority(START);authority.check()
+        p=self.policy;authority=self.authority(self.start_action);authority.check()
         require(not any(os.path.lexists(p[key]) for key in ('output_root','attempt_root','barrier')), 'start_namespace_exists_no_retry')
-        if not execute:return {'validated':True,'executed':False,'action':START}
+        if not execute:return {'validated':True,'executed':False,'action':self.start_action}
         control=h.canonical_path(p['control_root']);control.mkdir(exist_ok=True);h.sync_directory(control.parent)
         with h.canonical_path(p['handoff_lock']).open('a+b') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);authority.check()
@@ -457,8 +471,7 @@ class ContinuousAdmission:
             attempt=h.new_record_directory(p['attempt_root']);spawn=None
             try:
                 h.save_new(attempt,'ADMISSION.json',{'authority':self.authority_ref,'policy':self.policy_ref,'inputs':self.inputs_ref})
-                old=p['predecessors'][-1];complete=h.checked(self.inputs['prior_custody']['evidence']);previous=h.checked(old['launch'])
-                self.retirement=h.retire_exact_idle_owner(previous['process'],old['output_root'],complete['roots'][old['output_root']]['journal'],attempt/'retirement',authority)
+                self.retirement=self.retire_predecessor(attempt,authority)
                 self.owned_barrier=h.create_owned_barrier(p['barrier'],p['output_root'],p['family'],attempt/'barrier',authority)
                 intent=h.save_new(attempt,'INTENT.json',{'at':h.now(),'authority':self.authority_ref,'policy':self.policy_ref,
                     'inputs':self.inputs_ref,'argv':p['argv'],'output_root':p['output_root'],'retirement':self.retirement,'owned_barrier':self.owned_barrier})
@@ -489,7 +502,7 @@ class ContinuousAdmission:
                 launch={'at':h.now(),'policy':self.policy_ref,'authority':self.authority_ref,'runtime_package':p['runtime_package'],
                     'phase':p['phase'],'runtime_cohort':p['family'],'controller_host':p['controller_host'],'process':process,
                     'process_receipt':h.pin(attempt/'PROCESS.json'),'intent':intent,'output_root':p['output_root'],'pythonpath':p['pythonpath'],
-                    'workers':p['workers'],'max_full':0,'initial_jobs':p['initial_jobs'],'continuation':p['continuation'],
+                    'workers':p['workers'],'max_full':p['max_full'],'initial_jobs':p['initial_jobs'],'continuation':p['continuation'],
                     'source_pins':p['runtime_source_pins'],'input_pins':p['runtime_input_pins'],'owned_barrier':self.owned_barrier,
                     'retirement':self.retirement,'prior_local_owners':[{k:r[k] for k in ('output_root','process','launch')} for r in p['predecessors']],
                     'controller_templates':p['controller_template'],'controller_jobs':p['initial_jobs'],
@@ -504,7 +517,7 @@ class ContinuousAdmission:
                 raise
 
     def release(self, execute=False):
-        p=self.policy;authority=self.authority(RELEASE);authority.check();launch=h.checked(self.inputs['launch'])
+        p=self.policy;authority=self.authority(self.release_action);authority.check();launch=h.checked(self.inputs['launch'])
         require(self.inputs['launch']['path']==str(Path(p['attempt_root'])/'LAUNCH.json') and launch['policy']==self.policy_ref,
                 'release_launch_scope_changed')
         owned=launch['owned_barrier']
@@ -515,11 +528,259 @@ class ContinuousAdmission:
             require(value['output_root']==p['output_root'],'owned_marker_output_changed')
             return True
         h.verify_owned_barrier(owned,p['barrier']);validate_waiting(h.checked(owned))
-        if not execute:return {'validated':True,'executed':False,'action':RELEASE}
+        if not execute:return {'validated':True,'executed':False,'action':self.release_action}
         with h.canonical_path(p['handoff_lock']).open('a+b') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             return h.release_owned_barrier(owned,p['barrier'],Path(p['attempt_root'])/'release',authority,validate_waiting)
 
+
+def native_runtime(allocation, template, common):
+    """Reconstruct one native queue and its exact command, without publishing it."""
+    from causes.campaign_corpus_succession import native_allocation
+    jobs, config, prototypes, allocator = native_allocation(allocation)
+    t = template
+    continuous = allocation['target_mode'] == 'continuous_corpus'
+    extension_key = 'prototypes' if continuous else 'empty_extensions'
+    require(t['jobs'] == allocation['jobs'] and t['config'] == allocation['config']
+            and t[extension_key] == allocation['extensions']
+            and t['runtime_cohort'] == allocation['family']
+            and t['output_root'] == allocation['output_root']
+            and t['proposed_workers'] == allocation['workers'], 'native_template_allocation_changed')
+    bundle = h.checked(t['bundle'])
+    code = {row['name']: row['sha256'] for row in bundle['files']}
+    require(len(code) == len(bundle['files']), 'native_duplicate_source_name')
+    names = ['campaign_runner.py', 'campaign_sandbox.py']
+    if continuous: names += ['corpus_allocation.py', 'corpus_continuation.py']
+    execution = {'dispatcher_sha256': code['campaign_dispatcher.py']}
+    execution.update({name+'_sha256': code[name] for name in names})
+    queue = dict(jobs_sha256=object_sha(jobs), config_sha256=object_sha(config),
+                 prototypes_sha256=object_sha(prototypes), execution_code=execution)
+    continuation = None
+    flags = {'--jobs': t['jobs']['path'], '--config': t['config']['path'],
+             '--output': allocation['output_root'], '--workers': str(allocation['workers']),
+             '--max-full': str(allocation['max_full']), '--extension-prototypes': t[extension_key]['path'],
+             '--pause-file': common['dedicated_pause'], '--global-pause-file': common['global_pause'],
+             '--start-barrier-file': common['barrier'], '--admission-holds': common['holds']['path'],
+             '--admission-holds-sha256': common['holds']['sha256']}
+    if continuous:
+        continuation = {'control': allocation['control'], 'binding': allocator.binding,
+                        'package': common['allocator_package'], 'source_review': common['allocator_review'],
+                        'allocator_sources': {name: code[name] for name in
+                            ('campaign_dispatcher.py', 'corpus_allocation.py', 'corpus_continuation.py')}}
+        queue['corpus_continuation'] = {'control': allocation['control'], 'binding': allocator.binding}
+        flags.update({'--corpus-continuation': allocation['control']['path'],
+                      '--corpus-continuation-sha256': allocation['control']['sha256']})
+    argv = t['argv_template_at_proposed_cap'][2:]
+    actual = dict(zip(argv[4::2], argv[5::2]))
+    require(argv[:4] == [common['python'], '-B', '-m', 'causes.campaign_dispatcher']
+            and len(argv) == 4+2*len(flags) and actual == flags
+            and t['argv_template_at_proposed_cap'][:2] == ['env', 'PYTHONPATH='+common['pythonpath']]
+            and bundle['path'] == common['pythonpath'], 'native_command_scope_changed')
+    controller = {**queue, **execution, 'workers': allocation['workers'], 'max_full': allocation['max_full'],
+                  'pause_file': common['dedicated_pause'], 'global_pause_file': common['global_pause'],
+                  'start_barrier_file': common['barrier'],
+                  'disk_floor_bytes': config.get('dispatcher', {}).get('disk_floor_bytes', 80*1024**3),
+                  'route_failure_threshold': config.get('dispatcher', {}).get('route_failure_threshold', 3),
+                  'route_recovery': 'explicit_qualification_receipt_required'}
+    control = h.checked(allocation['allocation_control'])
+    required_inputs = [t[k] for k in ('jobs', 'config', extension_key, 'bundle')]
+    required_inputs += [common['holds'], common['controller_template'], allocation['allocation_control']]
+    required_inputs += [control[k] for k in ('catalog', 'prototypes', 'original_jobs', 'reservation')]
+    unique = {ref['path']: ref for ref in required_inputs}
+    require(all(unique[ref['path']] == ref for ref in required_inputs), 'native_conflicting_input_pins')
+    return dict(argv=argv, continuation=continuation, expected_queue=queue,
+                expected_controller_fields=controller,
+                runtime_input_pins=sorted(unique.values(), key=lambda ref: ref['path']))
+
+
+def bind_native_policy(template_reference, allocation_reference, controller_template_reference, donor_histories):
+    """Bind a reviewed native allocation; retain the original transfer as history."""
+    template = h.checked(template_reference)
+    from causes.campaign_corpus_succession import TEMPLATE_SCHEMA
+    require(template['schema'] == TEMPLATE_SCHEMA, 'native_policy_template_schema')
+    p = json.loads(h.encoded(template['fixed']))
+    allocation = h.checked(allocation_reference)
+    templates = h.checked(controller_template_reference)['templates']
+    require(len(templates) == 1, 'one_native_template_required')
+    p.update(policy_template=template_reference, allocation=allocation_reference,
+             controller_template=controller_template_reference, normalized_template=templates[0],
+             donor_histories=json.loads(h.encoded(donor_histories)))
+    p.update(native_runtime(allocation, templates[0], p))
+    require(set(p) == set(template['fixed']) | set(template['dynamic_keys']) | {'policy_template'},
+            'native_binding_field_scope_changed')
+    return p
+
+
+class NativeAdmission(ContinuousAdmission):
+    """A new owner after a proven natural closure; never restart its predecessor."""
+    start_action = 'start_native_corpus_owner_behind_barrier'
+    release_action = 'release_native_corpus_owned_barrier'
+
+    def static(self):
+        from causes import campaign_corpus_succession as s
+        p, x = self.policy, self.inputs
+        require(p['schema'] == s.ADMISSION_SCHEMA and p['origin'] == 'native_successor'
+                and x['policy'] == self.policy_ref, 'native_admission_policy_changed')
+        h.checked_bytes(self.policy_ref); h.checked_bytes(self.inputs_ref)
+        template, review = h.checked(p['policy_template']), h.checked(x['source_review'])
+        require(template['schema'] == s.TEMPLATE_SCHEMA
+                and review.get('accepted_native_corpus_admission_source') is True
+                and review.get('accepted_native_corpus_policy_template') is True
+                and review['policy_template'] == p['policy_template']
+                and review['source']['sha256'] == p['source_sha256'], 'native_source_not_accepted')
+        fixed, dynamic = template['fixed'], template['dynamic_keys']
+        require(set(p) == set(fixed) | set(dynamic) | {'policy_template'}
+                and len(set(dynamic)) == len(dynamic) and not set(fixed) & set(dynamic)
+                and all(h.encoded(p[k]) == h.encoded(v) for k, v in fixed.items()), 'native_reviewed_policy_changed')
+        required_modules = {'causes.campaign_admission', 'causes.campaign_corpus_succession',
+                            'causes.campaign_monitor', 'causes.campaign_handoff',
+                            'causes.corpus_allocation', 'causes.corpus_continuation'}
+        require(required_modules <= set(p['operator_module_hashes']), 'native_operator_source_set_incomplete')
+        loaded_sources_match(p['operator_module_hashes'])
+        require(p['source_sha256'] == h.pin(__file__)['sha256'], 'native_admission_source_changed')
+        for ref in p['source_pins'] + p['static_pins'] + p['runtime_source_pins'] + p['runtime_input_pins']:
+            h.checked_bytes(ref)
+        allocation = accepted(x['allocation'], 'accepted_native_corpus_allocation', 'allocation')
+        require(x['allocation']['evidence'] == p['allocation'], 'native_allocation_changed')
+        adoption = h.checked(p['allocation_adoption'])
+        require(adoption.get('root_accepted') is True and adoption['allocation'] == p['allocation']
+                and adoption['allocation_review'] == x['allocation']['review'], 'native_allocation_not_adopted')
+        for key in ('family', 'output_root', 'workers', 'max_full', 'target_mode', 'workload'):
+            require(p[key] == allocation[key], 'native_policy_allocation_changed:' + key)
+        require(p['initial_jobs'] == allocation['jobs'], 'native_initial_jobs_changed')
+        normalized = h.checked(p['controller_template'])['templates']
+        require(normalized == [p['normalized_template']], 'native_normalized_template_changed')
+        reconstructed = native_runtime(allocation, normalized[0], p)
+        require(all(h.encoded(p[k]) == h.encoded(v) for k, v in reconstructed.items()), 'native_runtime_binding_changed')
+        bundle = h.checked(normalized[0]['bundle'])
+        require(p['runtime_source_pins'] == [{k: row[k] for k in ('path', 'bytes', 'sha256')}
+                                            for row in bundle['files']], 'native_runtime_sources_changed')
+        require(h.checked_bytes(p['exec_wrapper']) == Path(h.__file__).read_bytes(), 'native_wrapper_changed')
+        config = h.checked(allocation['config'])
+        require(config['model'] == p['model'] and allocation['config'] == p['resident_config'], 'native_resident_model_changed')
+        base = accepted(x['predecessor_monitor'], 'accepted_native_predecessor_monitor', 'policy')
+        require(x['predecessor_monitor'] == p['predecessor_monitor'], 'native_predecessor_monitor_changed')
+        for key in ('provider', 'model', 'model_key', 'controller_host', 'provider_port', 'max_model_len', 'host_transfer', 'holds'):
+            require(p[key] == base[key], 'native_base_runtime_changed:' + key)
+        require([{k: row[k] for k in ('output_root', 'process')} for row in p['predecessors']]
+                == [{k: row[k] for k in ('output_root', 'process')} for row in base['phases']], 'native_prior_owner_order_changed')
+        require(p['predecessors'] and 'closure' in p['predecessors'][-1], 'native_immediate_closure_required')
+        require(p['family'] not in [phase['runtime_cohort'] for phase in base['phases']]
+                and p['output_root'] not in [phase['output_root'] for phase in base['phases']], 'native_namespace_reused')
+        s.closed_predecessor(p['predecessors'][-1])
+        require(p['resident_config'] == base['phases'][-1]['controller_config'], 'native_resident_config_changed')
+        projected = [{k: row[k] for k in ('host', 'output_root', 'mode', 'recorder_relevant')} for row in p['donor_histories']]
+        require(projected == p['history']['donor_scopes'], 'native_donor_history_binding_changed')
+        for old in p['predecessors']:
+            if 'closure' in old:
+                closed = s.closed_predecessor(old)
+                matches = [row for row in p['donor_histories'] if row['host'] == p['controller_host'] and row['output_root'] == old['output_root']]
+                require(len(matches) == 1 and matches[0]['journal'] == closed['journal'], 'native_closed_journal_binding_changed')
+        local = [row for row in p['history']['donor_scopes'] if row['host'] == p['controller_host']]
+        require([row['output_root'] for row in local] == [row['output_root'] for row in p['predecessors']]
+                and all(row['mode'] == 'sealed' and row['recorder_relevant'] is True for row in local),
+                'native_full_local_history_required')
+        require(p['history']['donor_scopes'][:len(base['history']['donor_scopes'])] == base['history']['donor_scopes'],
+                'native_base_history_changed')
+        jobs, _, prototypes, _ = s.native_allocation(allocation)
+        routes = sorted({'task:'+object_sha([job['spec'].get('task_id'), job['spec'].get('image')])
+                         for job in jobs + prototypes})
+        aliases = sorted({'model:'+object_sha([cfg.get('model'), cfg.get('endpoint')])
+                          for cfg in [h.checked(ref) for ref in p['history']['model_configs']]})
+        require(routes == p['history']['task_routes'] and aliases == p['history']['model_aliases']
+                and set(base['history']['model_aliases']) <= set(aliases), 'native_history_routes_changed')
+        require(p['resource_decision']['disk_floor_bytes'] >= p['expected_controller_fields']['disk_floor_bytes'],
+                'native_resource_floor_weakened')
+        require({p['global_pause'], p['dedicated_pause']} <= set(p['pause_paths'])
+                and p['barrier'] not in p['pause_paths']
+                and not any(old.get('pause_path') in p['pause_paths'] for old in p['predecessors']),
+                'native_new_and_retained_pause_scope_changed')
+        require(p['expected_admission_control'] == {'schema': 'caus.dispatcher_admission_control.v1', 'admission_holds': p['holds']},
+                'native_holds_changed')
+        for key in ('runtime', 'native_host', 'images', 'source_publication', 'capacity_inheritance', 'resource_decision'):
+            require(x[key] == p['static_acceptances'][key], 'native_static_evidence_changed:' + key)
+            rule = p['acceptance_rules'][key]
+            accepted(x[key], rule['flag'], rule['binding_key'])
+        cap = h.checked(x['capacity_inheritance']['review'])
+        require(cap.get('accepted_native_capacity_admission') is True
+                and cap['next_phase'] == p['phase'] and cap['next_worker_cap'] == p['workers']
+                and cap['max_full'] == p['max_full'] and cap['workload'] == p['workload']
+                and cap['resident_config'] == p['resident_config'], 'native_capacity_scope_changed')
+        return config, jobs + prototypes
+
+    def evidence(self, action):
+        p, x = self.policy, self.inputs
+        for key in ('precreation_reservation', 'fresh_reservation', 'foundation'):
+            rule = p['acceptance_rules'][key]
+            accepted(x[key], rule['flag'], rule['binding_key'])
+        allocation = h.checked(p['allocation'])
+        control = h.checked(allocation['allocation_control'])
+        require(control['reservation'] == x['precreation_reservation']['evidence'], 'native_reservation_changed')
+        old, fresh = (h.checked(x[k]['evidence']) for k in ('precreation_reservation', 'fresh_reservation'))
+        reservation_unchanged(old, fresh)
+        require([row['host'] for row in fresh['host_cuts']] == p['census_hosts'], 'native_reservation_hosts_changed')
+        scope = h.checked(x['fresh_reservation']['review'])
+        require(scope['census_config'] == p['census_configs']['before_start' if action == self.start_action else 'waiting_release'],
+                'native_reservation_roots_changed')
+        foundation = h.checked(x['foundation']['evidence']); recent(foundation['at'])
+        for key in ('provider', 'host_transfer', 'legacy_owners'):
+            require(foundation[key] == p[key], 'native_foundation_changed:' + key)
+        require(foundation['predecessors'] == p['predecessors'], 'native_foundation_predecessors_changed')
+        for key in ('legacy_owners_healthy', 'provider_tunnels_healthy', 'original_transfer_present',
+                    'donor_histories_clear', 'native_no_active_owned_work', 'all_predecessors_absent_and_unlocked'):
+            require(foundation[key] is True, 'native_foundation_not_clear:' + key)
+        donor_cuts_clear(p['history'], p['donor_histories'], foundation['donor_cuts'])
+        for ref in foundation['evidence_pins']: h.checked_bytes(ref)
+        if action == self.release_action:
+            ready = accepted(x['startup'], 'accepted_native_startup_consumers', 'readiness'); recent(ready['at'])
+            launch = h.checked(x['launch'])
+            require(ready['policy'] == self.policy_ref and ready['launch'] == x['launch']
+                    and ready['owned_barrier'] == launch['owned_barrier'], 'native_startup_owner_changed')
+            for key in ('zero_initial_claims', 'zero_persisted_blocks', 'legacy_owners_healthy',
+                        'mandatory_companion_valid', 'snapshot_ownership_valid'):
+                require(ready[key] is True, 'native_startup_gate_missing:' + key)
+            require(ready['required_sync_roots'] == p['required_sync_roots'], 'native_startup_root_scope_changed')
+            for ref in ready['evidence_pins']: h.checked_bytes(ref)
+            registration = h.checked(ready['registration']); pointer = h.checked(ready['authorization_pointer'])
+            require(pointer['registration'] == ready['registration']
+                    and registration['controller']['process'] == launch['process']
+                    and registration['controller']['launch_receipt'] == x['launch'], 'native_startup_registration_changed')
+            validate_registration(registration, h.checked(ready['monitor_policy']), reader=h.checked)
+            require(registration['donor_histories'] == p['donor_histories'], 'native_startup_history_changed')
+        return foundation
+
+    def live(self, action):
+        from causes.campaign_corpus_succession import live_closed_predecessor
+        p = self.policy; _, jobs = self.static(); foundation = self.evidence(action)
+        for old in p['predecessors']:
+            require(h.checked(old['launch'])['process'] == old['process'], 'native_prior_launch_changed')
+            if 'closure' in old:
+                live_closed_predecessor(old)
+            else:
+                state = h.retirement_state(old['process'])
+                require((state['absent'] or state.get('state') in ('Z', 'X', 'x'))
+                        and h.lock_free(Path(old['output_root'])/'.dispatcher.lock'), 'native_old_owner_live')
+        provider = p['provider']; h.process_identity(provider['process'])
+        for ref in provider['source_pins'] + [provider['ready_receipt'], provider['serving_plan']]: h.checked_bytes(ref)
+        require((Path('/proc')/str(provider['process']['pid'])/'cgroup').read_text() == provider['process']['cgroup'],
+                'native_provider_cgroup_changed')
+        listener_owned(provider['process']['pid'], p['provider_port'])
+        with urllib.request.urlopen(p['model_list_url'], timeout=4) as response:
+            body = response.read(1024*1024); require(response.status == 200, 'native_provider_HTTP_failure')
+        models = json.loads(body)['data']
+        require(len(models) == 1 and models[0]['id'] == p['model'] and models[0]['max_model_len'] == p['max_model_len'],
+                'native_provider_model_changed')
+        measured = resources(p['base']); resource_check(p['resource_decision'], measured, jobs, p['workers'])
+        return {'at': h.now(), 'resources': measured, 'foundation': self.inputs['foundation']['evidence'],
+                'fresh_reservation': self.inputs['fresh_reservation']['evidence']}
+
+    def retire_predecessor(self, attempt, authority):
+        from causes.campaign_corpus_succession import live_closed_predecessor
+        authority.check()
+        value = live_closed_predecessor(self.policy['predecessors'][-1])
+        return h.save_new(attempt, 'PREDECESSOR_CLOSURE.json',
+                          {'at': h.now(), 'closure': self.policy['predecessors'][-1]['closure'],
+                           'owner_absent': value['owner_absent'], 'no_signal_or_restart': True})
 
 def main():
     parser=argparse.ArgumentParser()
@@ -528,7 +789,9 @@ def main():
         parser.add_argument('--'+name,required=True,help='Exact JSON pin, not an unpinned path')
     parser.add_argument('--execute',action='store_true')
     args=parser.parse_args()
-    operator=ContinuousAdmission(*(json.loads(getattr(args,k)) for k in ('policy','inputs','authority')))
+    refs=[json.loads(getattr(args,k)) for k in ('policy','inputs','authority')]
+    cls=NativeAdmission if h.checked(refs[0]).get('schema')=='causes.native_corpus_admission_policy.v2' else ContinuousAdmission
+    operator=cls(*refs)
     print(json.dumps(getattr(operator,args.action)(execute=args.execute),sort_keys=True))
 
 

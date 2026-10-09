@@ -238,7 +238,7 @@ def remote_validation_budget(policy, side):
 
 
 def validate_policy(policy):
-    require(policy['schema'] == 'causes.campaign_monitor_policy.v1', 'monitor_policy_schema')
+    require(policy['schema'] in ('causes.campaign_monitor_policy.v1', 'causes.campaign_monitor_policy.v2'), 'monitor_policy_schema')
     require(policy['required'] is True, 'mandatory_companion_required')
     for side in ('mi', 'jp'):
         remote_validation_budget(policy, side)
@@ -255,10 +255,17 @@ def validate_policy(policy):
     require([p['output_root'] for p in phases] == [str(base / r) for r in roots], 'phase_root_order_changed')
     require(len({p['phase'] for p in phases}) == len(phases), 'duplicate_phase')
     transferred = policy['host_transfer']['target_output_roots']
-    require(transferred and [p['output_root'] for p in phases if p['mode'] == 'finite'] == transferred,
+    native = policy['schema'] == 'causes.campaign_monitor_policy.v2'
+    base_count = policy['native_successions']['base_phase_count'] if native else len(phases)
+    require(type(base_count) is int and 0 < base_count <= len(phases)
+            and (not native or base_count < len(phases)), 'native_base_phase_count')
+    base_phases = phases[:base_count]
+    require(transferred and [p['output_root'] for p in base_phases if p['mode'] == 'finite'] == transferred,
             'transfer_scope_changed')
-    continuous = [p for p in phases if p['mode'] == 'continuous']
-    require(len(continuous) <= 1 and (not continuous or phases[-1] == continuous[0]), 'continuous_phase_must_be_last')
+    continuous = [p for p in base_phases if p['mode'] == 'continuous']
+    require(len(continuous) <= 1 and (not continuous or base_phases[-1] == continuous[0]), 'continuous_phase_must_be_last')
+    if not native:
+        require('native_successions' not in policy, 'native_lineage_requires_v2')
     for phase in phases:
         require(phase['mode'] in ('finite', 'continuous') and type(phase['workers']) is int and phase['workers'] > 0,
                 'invalid_phase_policy')
@@ -292,6 +299,9 @@ def validate_registration(reg, policy, reader=checked_json):
     require(len(matches) == 1, 'unregistered_phase')
     phase = matches[0]
     index = phases.index(phase)
+    if policy['schema'] == 'causes.campaign_monitor_policy.v2':
+        from causes.campaign_corpus_succession import native_lineage
+        native_lineage(policy, reg, reader)
     controller = reg['controller']
     require(reg['controller_host'] == policy['controller_host']
             and controller['model'] == policy['model_key']
@@ -309,10 +319,17 @@ def validate_registration(reg, policy, reader=checked_json):
     if phase['capacity_required']:
         capacity = reg['capacity_qualification']
         accepted = reader(capacity['independent_review']); reader(capacity['evidence'])
-        require(accepted.get('accepted_JP_local_capacity') is True
+        flag = ('accepted_native_capacity_admission' if policy['schema'] == 'causes.campaign_monitor_policy.v2'
+                else 'accepted_JP_local_capacity')
+        require(accepted.get(flag) is True
                 and accepted.get('evidence') == capacity['evidence']
                 and accepted.get('next_phase') == reg['phase']
                 and accepted.get('next_worker_cap') == controller['workers'], 'capacity_not_accepted')
+        if policy['schema'] == 'causes.campaign_monitor_policy.v2':
+            allocation = reader(policy['native_successions']['links'][-1]['allocation']['evidence'])
+            require(accepted['max_full'] == allocation['max_full']
+                    and accepted['workload'] == allocation['workload']
+                    and accepted['resident_config'] == allocation['config'], 'native_capacity_evidence_changed')
     else:
         require(reg['capacity_qualification'] is None, 'unexpected_capacity_binding')
     transfer = reg['host_transfer']
@@ -401,6 +418,16 @@ def validate_registration(reg, policy, reader=checked_json):
         tasks = sorted({'task:'+digest(encoded([job['spec'].get('task_id'),job['spec'].get('image')]))
                         for job in reader(control['prototypes'])})
         require(aliases == history['model_aliases'] and tasks == history['task_routes'], 'history_route_scope_changed')
+    if policy['schema'] == 'causes.campaign_monitor_policy.v2':
+        history = policy['history']
+        models = [reader(ref) for ref in history['model_configs']]
+        require(models and all(cfg['model'] == policy['model'] for cfg in models), 'native_history_model_changed')
+        aliases = sorted({'model:'+digest(encoded([cfg.get('model'),cfg.get('endpoint')])) for cfg in models})
+        allocation = reader(policy['native_successions']['links'][-1]['allocation']['evidence'])
+        control = reader(allocation['allocation_control'])
+        jobs = reader(reg['controller_jobs']) if phase['mode'] == 'finite' else reader(control['prototypes'])
+        routes = sorted({'task:'+digest(encoded([job['spec'].get('task_id'),job['spec'].get('image')])) for job in jobs})
+        require(aliases == history['model_aliases'] and routes == history['task_routes'], 'native_history_route_scope_changed')
     return phase
 
 
@@ -413,6 +440,13 @@ def validate_authorization(config):
     require(accepted.get('accepted_companion_registration') is True and accepted.get('registration') == auth['registration'],
             'registration_not_independently_accepted')
     require(reg['companion_source_sha256'] == digest(Path(__file__).read_bytes()), 'registered_monitor_source_changed')
+    if policy['schema'] == 'causes.campaign_monitor_policy.v2':
+        from causes import campaign_corpus_succession as succession, corpus_allocation, corpus_continuation
+        modules = {'campaign_corpus_succession': succession, 'corpus_allocation': corpus_allocation, 'corpus_continuation': corpus_continuation}
+        require(set(policy['native_successions']['validator_sources']) == set(modules), 'native_validator_source_set_changed')
+        for name, module in modules.items():
+            require(checked(policy['native_successions']['validator_sources'][name]) == Path(module.__file__).read_bytes(),
+                    'native_lineage_validator_source_changed:' + name)
     validate_registration(reg, policy)
     return reg, {'path':str(config.authorization_path),'bytes':len(raw),'sha256':digest(raw)}, auth
 
@@ -626,12 +660,27 @@ def continuous_progress(identity, continuation, initial_jobs, events, persisted_
     if barrier_present and (claims or blocks or persisted_blocks):
         raise ValueError('waiting_continuation_issued_work')
     return {'waiting_behind_barrier': barrier_present, 'initial_jobs': 0, 'claimed': claims, 'published_blocks': blocks, 'first_block_observed': blocks > 0}
+def native_tail_output():
+    if policy['schema'] != 'causes.campaign_monitor_policy.v2':
+        return False
+    phase = policy['phases'][-1]
+    link = policy['native_successions']['links'][-1]
+    allocation = json.loads(pincheck(link['allocation']['evidence']))
+    return (phase['phase'] == x['phase'] == link['phase']
+            and phase['mode'] == 'finite'
+            and allocation['schema'] == 'causes.native_corpus_allocation.v1'
+            and allocation['origin'] == 'native_successor'
+            and allocation['target_mode'] == 'finite_qualification'
+            and allocation['output_root'] == phase['output_root'] == x['controller']['output_root']
+            and allocation['family'] == phase['runtime_cohort'] == x['runtime_cohort']
+            and allocation['jobs'] == phase['controller_jobs'] == x['controller_jobs']
+            and allocation['config'] == phase['controller_config'] == x['controller_config'])
 if side == 'mi':
     out['reverse_listener_process'] = proc(x['reverse_listener_process'])
     out['reverse_listener'] = listener(x['reverse_listener_process']['pid'], policy['relay_port'])
     tr = x['host_transfer']
     reservation = json.loads(pincheck(tr['mi_reservation']))
-    assert reservation['target_host'] == policy['controller_host'] and reservation['target_output_roots'] == x['host_transfer']['target_output_roots'] and (x['controller']['output_root'] in reservation['target_output_roots'] or any((p['phase'] == x['phase'] and p['mode'] == 'continuous' and (p['output_root'] == x['controller']['output_root']) for p in policy['phases']))) and (reservation['jobs'] == x['host_transfer']['original_phase02_jobs'])
+    assert reservation['target_host'] == policy['controller_host'] and reservation['target_output_roots'] == x['host_transfer']['target_output_roots'] and (x['controller']['output_root'] in reservation['target_output_roots'] or any((p['phase'] == x['phase'] and p['mode'] == 'continuous' and (p['output_root'] == x['controller']['output_root']) for p in policy['phases'])) or native_tail_output()) and (reservation['jobs'] == x['host_transfer']['original_phase02_jobs'])
     assert not os.path.lexists(tr['mi_unused_output_root'])
     out['host_transfer_reservation'] = tr['mi_reservation']
     out['unused_MI_output_absent'] = True
@@ -694,6 +743,16 @@ elif side == 'jp':
         assert state is None or (state[19] == old['process']['process_starttime_ticks'] and state[0] in ['Z', 'X', 'x'])
         with (Path(old['output_root']) / '.dispatcher.lock').open('rb') as f:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if policy['schema'] == 'causes.campaign_monitor_policy.v2':
+        for link in policy['native_successions']['links']:
+            old = link['predecessor']
+            assert not (Path('/proc') / str(old['process']['pid'])).exists(), 'native predecessor not absent'
+            closure = json.loads(pincheck(old['closure']['evidence']))
+            for key in ('journal', 'never_claimed', 'owned_pause', 'pause_ownership'):
+                pincheck(closure[key])
+            marker = Path(closure['owned_pause']['path']); st = marker.stat()
+            saved = closure['owned_pause_stat']
+            assert all(getattr(st, key) == value for key, value in saved.items()), 'native predecessor pause replaced'
     out['prior_local_owners_closed'] = True
     raw = (root / '.dispatcher/journal.jsonl').read_bytes()
     out['journal'] = replay_history(raw)
