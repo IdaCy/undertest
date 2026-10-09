@@ -7,6 +7,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import stat
 import subprocess
 import time
 import urllib.request
@@ -431,6 +432,87 @@ def validate_registration(reg, policy, reader=checked_json):
     return phase
 
 
+def registration_custody_reader(auth, policy_pin, reg):
+    """Resolve only explicitly reviewed immutable registration metadata aliases."""
+    pair = auth['registration_custody']
+    require(type(pair) is dict and set(pair) == {'evidence', 'review'},
+            'registration_custody_pair_required')
+
+    def strict_json(raw):
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                require(key not in result, 'registration_custody_duplicate_json_key')
+                result[key] = value
+            return result
+        def constant(value):
+            raise ValueError('registration_custody_nonfinite_json')
+        return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+
+    def reference(ref):
+        require(type(ref) is dict and set(ref) == {'path', 'bytes', 'sha256'}
+                and type(ref['bytes']) is int and ref['bytes'] >= 0
+                and type(ref['sha256']) is str and len(ref['sha256']) == 64
+                and all(c in '0123456789abcdef' for c in ref['sha256']),
+                'registration_custody_invalid_pin')
+        return canonical_path(ref['path'])
+
+    def stable(ref):
+        path = reference(ref)
+        with path.open('rb') as stream:
+            before = os.fstat(stream.fileno())
+            require(stat.S_ISREG(before.st_mode), 'registration_custody_not_regular')
+            raw = stream.read()
+            after = os.fstat(stream.fileno())
+        current = canonical_path(path).stat()
+        require(stat.S_ISREG(current.st_mode)
+                and all(getattr(before, k) == getattr(after, k) == getattr(current, k)
+                        for k in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+                and len(raw) == ref['bytes'] == before.st_size
+                and digest(raw) == ref['sha256'], 'registration_custody_bytes_changed')
+        return raw
+
+    value, review = strict_json(stable(pair['evidence'])), strict_json(stable(pair['review']))
+    require(value['schema'] == 'causes.native_monitor_registration_custody.v1'
+            and review.get('accepted_native_monitor_registration_custody') is True
+            and review['custody'] == pair['evidence'], 'registration_custody_not_accepted')
+    require(value['policy'] == review['policy'] == policy_pin
+            and value['registration'] == review['registration'] == auth['registration'],
+            'registration_custody_scope_changed')
+    for key in ('registered_companion_module', 'local_companion_module'):
+        require(review[key] == value[key], 'registration_custody_module_binding_changed')
+    require(value['local_companion_module'] == auth['companion_module']
+            and stable(value['local_companion_module']) == Path(__file__).read_bytes(),
+            'registration_custody_local_module_changed')
+    require(digest(stable(value['registered_companion_module'])) == reg['companion_source_sha256'],
+            'registered_monitor_source_changed')
+    require(type(value['provenance']) is list and value['provenance'],
+            'registration_custody_provenance_required')
+    for ref in value['provenance']:
+        stable(ref)
+    rows = value['aliases']
+    require(type(rows) is list and rows, 'registration_custody_aliases_required')
+    aliases = {}
+    for row in rows:
+        require(type(row) is dict and set(row) == {'source', 'local'},
+                'registration_custody_alias_shape')
+        source, local = row['source'], row['local']
+        reference(source); reference(local)
+        require(source['path'] not in aliases and source['path'] != local['path']
+                and all(source[k] == local[k] for k in ('bytes', 'sha256')),
+                'registration_custody_alias_conflict')
+        stable(local)
+        aliases[source['path']] = (copy.deepcopy(source), copy.deepcopy(local))
+
+    def reader(ref):
+        if ref['path'] not in aliases:
+            return checked_json(ref)
+        source, local = aliases[ref['path']]
+        require(ref == source, 'registration_custody_source_pin_changed')
+        return strict_json(stable(local))
+    return reader
+
+
 def validate_authorization(config):
     policy = config.policy
     raw = canonical_path(config.authorization_path).read_bytes(); auth = json.loads(raw)
@@ -439,7 +521,13 @@ def validate_authorization(config):
     reg = checked_json(auth['registration']); accepted = checked_json(auth['independent_review'])
     require(accepted.get('accepted_companion_registration') is True and accepted.get('registration') == auth['registration'],
             'registration_not_independently_accepted')
-    require(reg['companion_source_sha256'] == digest(Path(__file__).read_bytes()), 'registered_monitor_source_changed')
+    reader = None
+    if 'registration_custody' in auth:
+        require(policy['schema'] == 'causes.campaign_monitor_policy.v2',
+                'registration_custody_requires_native_policy')
+        reader = registration_custody_reader(auth, config.policy_pin, reg)
+    else:
+        require(reg['companion_source_sha256'] == digest(Path(__file__).read_bytes()), 'registered_monitor_source_changed')
     if policy['schema'] == 'causes.campaign_monitor_policy.v2':
         from causes import campaign_corpus_succession as succession, corpus_allocation, corpus_continuation
         modules = {'campaign_corpus_succession': succession, 'corpus_allocation': corpus_allocation, 'corpus_continuation': corpus_continuation}
@@ -447,7 +535,10 @@ def validate_authorization(config):
         for name, module in modules.items():
             require(checked(policy['native_successions']['validator_sources'][name]) == Path(module.__file__).read_bytes(),
                     'native_lineage_validator_source_changed:' + name)
-    validate_registration(reg, policy)
+    if reader is None:
+        validate_registration(reg, policy)
+    else:
+        validate_registration(reg, policy, reader)
     return reg, {'path':str(config.authorization_path),'bytes':len(raw),'sha256':digest(raw)}, auth
 
 
