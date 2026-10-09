@@ -207,7 +207,7 @@ def _synchronize_under_lock(config, authorize, authorization):
     request = {'host': config.host, 'base': config.remote_base, 'roots': list(config.roots), 'accepted': accepted, 'limit': config.limit}
     save(attempt / 'AUTHORIZATION.json', authorization)
     save(attempt / 'REQUEST.json', request)
-    ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', config.host, 'python3', '-c', shlex.quote(REMOTE_CODE)]
+    ssh = ['ssh', '-C', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', config.host, 'python3', '-c', shlex.quote(REMOTE_CODE)]
     process = subprocess.run(ssh, input=json.dumps(request), capture_output=True, text=True, timeout=120)
     (attempt / 'remote.stderr').write_text(process.stderr)
     (attempt / 'remote.stdout').write_text(process.stdout)
