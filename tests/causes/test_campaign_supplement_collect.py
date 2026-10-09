@@ -11,7 +11,7 @@ from causes import campaign_supplement as core
 from causes import campaign_supplement_collect as collector
 
 
-class SupplementCollectTests(unittest.TestCase):
+class SupplementCollectFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -136,6 +136,7 @@ class SupplementCollectTests(unittest.TestCase):
         self.assertIs(runner.save, original_save)
         return json.loads(core.pinned(result))
 
+class SupplementCollectTests(SupplementCollectFixture):
     def test_complete_missing_pending_unavailable_and_absent_original_join(self):
         for job, mode in zip(self.ready, ('complete', 'invalid', 'transport_failure')):
             self.final(job, mode)
@@ -261,6 +262,249 @@ class SupplementCollectTests(unittest.TestCase):
         (control / 'journal.jsonl').write_bytes(b''); b['journal_cut'] = core.pin(control / 'journal.jsonl')
         with self.assertRaisesRegex(core.IntegrityError, 'immutable_journal_copy'):
             self.collect(self.save('binding.json', b))
+
+
+class SupplementCarryForwardTests(SupplementCollectFixture):
+    def setUp(self):
+        super().setUp()
+        self.base = self.root
+        self.rows = [self.original(row, both=True) for row in self.roster]
+        for row in self.rows:
+            row['context_sources'] = {stage: {'path': self.context_pin['path'],
+                'bytes_sha256': self.context_pin['sha256'], 'context_sha256': runner.sha(self.context)}
+                for stage in ('early', 'end')}
+
+    def freeze_binding(self, batch, *, pending, unavailable):
+        self.root = self.base / ('inputs' + str(batch))
+        self.root.mkdir()
+        try:
+            return self.binding(pending=pending, unavailable=unavailable)
+        finally:
+            self.root = self.base
+
+    def accepted(self, binding, summary):
+        b = json.loads(core.pinned(binding))
+        directory = Path(summary['measurements']['path']).parent
+        summary_ref = core.pin(directory / 'SUMMARY.json')
+        review = self.save(directory.name + '_review.json', {'accepted_supplement_export': True,
+            'binding': binding, 'summary': summary_ref})
+        retirement = self.save(directory.name + '_retirement.json', {
+            'accepted_supplement_batch_retirement': True, 'prepared_inputs': b['prepared_inputs'],
+            'supplement_root': b['supplement_root'], 'journal_cut': b['journal_cut'],
+            'all_ready_terminal': True, 'journal_sealed': True, 'client_process_absent': True,
+            'executor_lock_acquired_nonblocking': True, 'ambiguous_attempts': 0,
+            'evidence': [b['journal_cut']]})
+        return {'binding': binding, 'summary': summary_ref, 'independent_review': review,
+                'retirement_review': retirement}
+
+    def prior(self, *, finish=True):
+        self.ready = [self.prepare(j) for j in self.obligations[:2]]
+        self.final(self.ready[0])
+        if finish:
+            self.final(self.ready[1], 'transport_failure')
+        ids = [j['measurement_id'] for j in self.obligations]
+        binding = self.freeze_binding(0, pending=ids[2:5], unavailable=ids[5:])
+        self.output = self.base / 'export0'
+        return self.accepted(binding, self.collect(binding))
+
+    def wave(self, prior, batch=1, ready_indices=(2, 3), *, finish=True):
+        previous = json.loads(core.pinned(prior['binding']))
+        previous_rows = [json.loads(line) for line in core.pinned(
+            json.loads(core.pinned(prior['summary']))['measurements']).splitlines()]
+        carried = [r['measurement_id'] for r in previous_rows if r['disposition'] == 'final_verified']
+        self.run_root = self.base / ('attempts' + str(batch)); self.run_root.mkdir()
+        self.output = self.base / ('export' + str(batch)); self.history = []
+        self.ready = [self.prepare(self.obligations[i]) for i in ready_indices]
+        ready_ids = [j['measurement_id'] for j in self.ready]
+        if finish:
+            for job in self.ready:
+                self.final(job)
+        ids = [j['measurement_id'] for j in self.obligations]
+        pending = [mid for mid in ids[:-1] if mid not in carried + ready_ids]
+        ref = self.freeze_binding(batch, pending=pending, unavailable=ids[-1:])
+        b = json.loads(core.pinned(ref)); p = json.loads(core.pinned(b['prepared_inputs']))
+        p['carried_measurement_ids'] = carried
+        b['prepared_inputs'] = self.save('prepared_wave' + str(batch) + '.json', p)
+        b.update(schema='causes.supplement_export_binding.v2', prior_export=prior)
+        for key in ('roster', 'original_obligations', 'config', 'runner_source'):
+            b[key] = previous[key]
+        return self.save('binding_wave' + str(batch) + '.json', b)
+
+    def change_prepared(self, ref, change):
+        b = json.loads(core.pinned(ref)); p = json.loads(core.pinned(b['prepared_inputs']))
+        change(p); b['prepared_inputs'] = self.save('changed_prepared.json', p)
+        return self.save('changed_binding.json', b)
+
+    def test_carries_complete_and_failure_rows_exactly_without_old_capture_reads(self):
+        prior = self.prior(); old = json.loads(core.pinned(prior['summary']))
+        prior_lines = core.pinned(old['measurements']).splitlines()
+        binding = self.wave(prior)
+        real_pinned, real_verify = core.pinned, collector.verify_final
+        seen = []
+        def pin_without_old_capture(ref):
+            self.assertFalse(Path(ref['path']).is_relative_to(self.base / 'attempts'))
+            return real_pinned(ref)
+        def verify(*args, **kwargs):
+            seen.append(args[0]['measurement_id'])
+            return real_verify(*args, **kwargs)
+        with mock.patch.object(core, 'pinned', side_effect=pin_without_old_capture), \
+                mock.patch.object(collector, 'verify_final', side_effect=verify):
+            summary = self.collect(binding)
+        lines = core.pinned(summary['measurements']).splitlines()
+        self.assertEqual(lines[:2], prior_lines[:2])
+        self.assertEqual(lines[-1], prior_lines[-1])
+        self.assertEqual(seen, [j['measurement_id'] for j in self.ready])
+        self.assertEqual(summary['carried_final_count'], 2)
+        self.assertEqual(summary['technical_final_statuses'], {'complete': 3, 'failure': 1})
+        self.assertTrue(summary['all_ready_final'])
+        self.assertFalse(summary['all_obligations_final_or_unavailable'])
+
+    def test_chain_keeps_all_old_rows_and_completeness_without_reparsing(self):
+        prior = self.prior(); first = self.wave(prior)
+        summary1 = self.collect(first); next_prior = self.accepted(first, summary1)
+        first_lines = core.pinned(summary1['measurements']).splitlines()
+        second = self.wave(next_prior, batch=2, ready_indices=(4,))
+        with mock.patch.object(collector, 'verify_final', wraps=collector.verify_final) as verifier:
+            summary2 = self.collect(second)
+        self.assertEqual(verifier.call_count, 1)
+        self.assertEqual(core.pinned(summary2['measurements']).splitlines()[:4], first_lines[:4])
+        self.assertEqual(summary2['carried_final_count'], 4)
+        self.assertTrue(summary2['all_obligations_final_or_unavailable'])
+        provenance = json.loads(core.pinned(summary2['carry_forward']))
+        self.assertEqual(provenance['predecessor_carry_forward'], summary1['carry_forward'])
+        self.assertFalse(provenance['runtime_authorized'])
+
+    def test_predecessor_carry_forward_link_cannot_be_dropped(self):
+        prior = self.prior(); first = self.wave(prior)
+        summary = self.collect(first); next_prior = self.accepted(first, summary)
+        del summary['carry_forward']
+        next_prior['summary'] = self.save('missing_chain_summary.json', summary)
+        review = json.loads(core.pinned(next_prior['independent_review']))
+        review['summary'] = next_prior['summary']
+        next_prior['independent_review'] = self.save('missing_chain_review.json', review)
+        second = self.wave(next_prior, batch=2, ready_indices=(4,))
+        with self.assertRaisesRegex(core.IntegrityError, 'prior_carry_forward_provenance_missing'):
+            self.collect(second)
+        self.assertFalse(self.output.exists())
+
+    def test_missing_or_changed_carried_context_source_refuses(self):
+        prior = self.prior(); binding = self.wave(prior)
+        b = json.loads(core.pinned(binding)); original_rows = copy.deepcopy(self.rows)
+        for mutation in ('missing', 'path', 'bytes_sha256', 'context_sha256'):
+            with self.subTest(mutation=mutation):
+                rows = copy.deepcopy(original_rows)
+                if mutation == 'missing':
+                    del rows[0]['context_sources']['early']
+                else:
+                    rows[0]['context_sources']['early'][mutation] = 'changed'
+                path = self.base / 'changed_rows.jsonl'
+                path.write_bytes(b''.join(core.encoded(r) + b'\n' for r in rows))
+                b['trajectories'] = core.pin(path)
+                with self.assertRaisesRegex(core.IntegrityError, 'context_source_changed'):
+                    self.collect(self.save('changed_context_binding.json', b))
+                self.assertFalse(self.output.exists())
+
+    def test_new_ready_context_must_match_current_original_cut(self):
+        prior = self.prior(); binding = self.wave(prior)
+        b = json.loads(core.pinned(binding)); self.rows[1]['context_sources'].pop('early')
+        path = self.base / 'changed_rows.jsonl'
+        path.write_bytes(b''.join(core.encoded(r) + b'\n' for r in self.rows))
+        b['trajectories'] = core.pin(path)
+        with self.assertRaisesRegex(core.IntegrityError, 'context_source_changed'):
+            self.collect(self.save('changed_context_binding.json', b))
+
+    def test_overlap_duplicate_and_dropped_carried_ids_refuse(self):
+        prior = self.prior(); binding = self.wave(prior)
+        mutations = [lambda p: p['carried_measurement_ids'].append(p['ready_order'][0]),
+                     lambda p: p['carried_measurement_ids'].append(p['carried_measurement_ids'][0]),
+                     lambda p: p['pending_measurement_ids'].append(p['carried_measurement_ids'].pop())]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(core.IntegrityError):
+                self.collect(self.change_prepared(binding, mutation))
+            self.assertFalse(self.output.exists())
+
+    def test_old_unavailable_cannot_be_promoted_or_reclassified(self):
+        prior = self.prior(); binding = self.wave(prior)
+        def change(p):
+            p['pending_measurement_ids'].extend(p['unavailable_measurement_ids'])
+            p['unavailable_measurement_ids'] = []
+        with self.assertRaisesRegex(core.IntegrityError, 'unavailable_cannot_be_promoted'):
+            self.collect(self.change_prepared(binding, change))
+
+    def test_old_unavailable_cannot_become_a_new_ready_job(self):
+        prior = self.prior(); binding = self.wave(prior, ready_indices=(4, 5))
+        binding = self.change_prepared(binding, lambda p: p.update(unavailable_measurement_ids=[]))
+        with self.assertRaisesRegex(core.IntegrityError, 'unavailable_cannot_be_promoted'):
+            self.collect(binding)
+        self.assertFalse(self.output.exists())
+
+    def test_prior_unclaimed_or_unresolved_attempt_cannot_cross_batch_boundary(self):
+        prior = self.prior(finish=False)
+        summary = json.loads(core.pinned(prior['summary']))
+        summary['all_ready_final'] = True  # Even a false summary assertion cannot hide the row.
+        prior['summary'] = self.save('incorrect_summary.json', summary)
+        review = json.loads(core.pinned(prior['independent_review'])); review['summary'] = prior['summary']
+        prior['independent_review'] = self.save('incorrect_review.json', review)
+        binding = self.wave(prior)
+        # Cover the otherwise unclaimed old ID as pending: the predecessor row
+        # is still explicitly rejected, never treated as a newly ready context.
+        with self.assertRaisesRegex(core.IntegrityError, 'prior_outstanding_or_unresolved_attempt'):
+            self.collect(binding)
+        self.assertFalse(self.output.exists())
+
+    def test_prior_claim_without_terminal_refuses_even_if_review_asserts_completion(self):
+        prior = self.prior(finish=False)
+        previous = json.loads(core.pinned(prior['binding']))
+        pending_job = self.ready[1]
+        journal = core.pinned(previous['journal_cut']) + core.encoded({'event': 'claimed',
+            'measurement_id': pending_job['measurement_id'], 'input_sha256': core.digest(pending_job)}) + b'\n'
+        path = self.base / 'claimed_prior_journal.jsonl'; path.write_bytes(journal)
+        previous['journal_cut'] = core.pin(path)
+        prior_binding = self.save('claimed_prior_binding.json', previous)
+        self.output = self.base / 'claimed_export'
+        summary = self.collect(prior_binding)
+        self.assertEqual(summary['dispositions']['attempted_pending_or_unresolved_at_cut'], 1)
+        prior = self.accepted(prior_binding, summary)
+        summary['all_ready_final'] = True
+        prior['summary'] = self.save('incorrect_summary.json', summary)
+        review = json.loads(core.pinned(prior['independent_review'])); review['summary'] = prior['summary']
+        prior['independent_review'] = self.save('incorrect_review.json', review)
+        binding = self.wave(prior)
+        with self.assertRaisesRegex(core.IntegrityError, 'prior_outstanding_or_unresolved_attempt'):
+            self.collect(binding)
+        self.assertFalse(self.output.exists())
+
+    def test_prior_review_retirement_and_original_scope_are_mandatory(self):
+        prior = self.prior(); binding = self.wave(prior); base = json.loads(core.pinned(binding))
+        mutations = ('review', 'drain', 'journal', 'config', 'questions', 'root')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                b = copy.deepcopy(base)
+                if mutation == 'review':
+                    r = json.loads(core.pinned(prior['independent_review'])); r['accepted_supplement_export'] = False
+                    b['prior_export']['independent_review'] = self.save('bad_review.json', r)
+                elif mutation in ('drain', 'journal'):
+                    r = json.loads(core.pinned(prior['retirement_review']))
+                    if mutation == 'drain': r['journal_sealed'] = False
+                    else: r['journal_cut'] = b['journal_cut']
+                    b['prior_export']['retirement_review'] = self.save('bad_retirement.json', r)
+                elif mutation == 'config':
+                    b['config'] = self.save('different_config.json', self.config)
+                elif mutation == 'questions':
+                    b['question_ids'] = list(reversed(b['question_ids'])) + ['another']
+                else:
+                    b['supplement_root'] = json.loads(core.pinned(prior['binding']))['supplement_root']
+                with self.assertRaises(core.IntegrityError):
+                    self.collect(self.save('bad_binding.json', b))
+                self.assertFalse(self.output.exists())
+
+    def test_current_batch_cannot_claim_carried_measurement(self):
+        prior = self.prior(); binding = self.wave(prior)
+        b = json.loads(core.pinned(binding)); mid = self.obligations[0]['measurement_id']
+        raw = core.encoded({'event': 'claimed', 'measurement_id': mid, 'input_sha256': 'old'}) + b'\n'
+        path = self.base / 'illegal_journal.jsonl'; path.write_bytes(raw); b['journal_cut'] = core.pin(path)
+        with self.assertRaisesRegex(core.IntegrityError, 'unready_obligation_attempted'):
+            self.collect(self.save('illegal_binding.json', b))
 
 
 if __name__ == '__main__':
