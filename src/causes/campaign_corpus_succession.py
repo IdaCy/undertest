@@ -258,7 +258,7 @@ class NativeAllocationCache:
         self._references = ()
         self._invalid = False
 
-    def verify(self, value, reader, *, dependency_sink=None):
+    def _verified_result(self, value, reader, *, dependency_sink=None):
         require(not self._invalid, 'native_allocation_cache_invalid')
         encoded = h.encoded(value)
         if self._result is not None:
@@ -274,7 +274,7 @@ class NativeAllocationCache:
             if dependency_sink is not None:
                 for ref in self._references:
                     dependency_sink(copy.deepcopy(ref))
-            return copy.deepcopy(self._result)
+            return self._result, True
 
         require(reader is h.checked, 'native_allocation_cache_reader_changed')
         references = {}
@@ -300,7 +300,42 @@ class NativeAllocationCache:
         if dependency_sink is not None:
             for ref in self._references:
                 dependency_sink(copy.deepcopy(ref))
-        return result
+        return result, False
+
+    def verify(self, value, reader, *, dependency_sink=None):
+        result, cached = self._verified_result(value, reader, dependency_sink=dependency_sink)
+        return copy.deepcopy(result) if cached else result
+
+    def components(self, value, reader, *, dependency_sink=None):
+        """Return independent queue inputs and binding, without allocator state."""
+        result, _ = self._verified_result(value, reader, dependency_sink=dependency_sink)
+        jobs, config, extensions, allocator = result
+        return copy.deepcopy((jobs, config, extensions, allocator.binding))
+
+    def validate(self, value, reader, *, dependency_sink=None):
+        """Recheck the full proof without exposing or copying its result."""
+        self._verified_result(value, reader, dependency_sink=dependency_sink)
+        return True
+
+
+def native_allocation_components(value, reader=h.checked, *, cache=None, dependency_sink=None):
+    """Verify allocation and return queue inputs plus the allocator binding."""
+    if cache is not None:
+        require(isinstance(cache, NativeAllocationCache), 'native_allocation_cache_scope_changed')
+        return cache.components(value, reader, dependency_sink=dependency_sink)
+    require(dependency_sink is None, 'native_allocation_dependency_cache_required')
+    jobs, config, extensions, allocator = native_allocation(value, reader)
+    return jobs, config, extensions, copy.deepcopy(allocator.binding)
+
+
+def validate_native_allocation(value, reader=h.checked, *, cache=None, dependency_sink=None):
+    """Verify allocation without returning its mutable reconstruction."""
+    if cache is not None:
+        require(isinstance(cache, NativeAllocationCache), 'native_allocation_cache_scope_changed')
+        return cache.validate(value, reader, dependency_sink=dependency_sink)
+    require(dependency_sink is None, 'native_allocation_dependency_cache_required')
+    native_allocation(value, reader)
+    return True
 
 
 def native_allocation(value, reader=h.checked, *, cache=None, _control_reader=None, dependency_sink=None):

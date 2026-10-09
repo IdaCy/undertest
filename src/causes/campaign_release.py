@@ -17,7 +17,7 @@ from causes.campaign_admission import (accepted, donor_cuts_clear, native_reserv
                                       native_reservation_foreign_blocks, recent, require,
                                       reservation_unchanged)
 from causes.campaign_monitor import digest, encoded, validate_policy
-from causes.campaign_corpus_succession import closed_predecessor, native_allocation
+from causes.campaign_corpus_succession import closed_predecessor, validate_native_allocation
 from causes.corpus_continuation import control_full_selection
 
 CONTRACT = 'causes.native_release_operator.v1'
@@ -67,7 +67,7 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
                               'allocation', reader)
         if index == len(phases) - 1:
             require(link['allocation']['evidence'] == allocation_ref, 'release_final_allocation_changed')
-            native_allocation(allocation, reader, cache=allocation_cache)
+            validate_native_allocation(allocation, reader, cache=allocation_cache)
         else:
             cache = None
             if lineage_caches is not None:
@@ -75,7 +75,7 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
                 if key not in lineage_caches:
                     lineage_caches[key] = succession.NativeAllocationCache()
                 cache = lineage_caches[key]
-            native_allocation(allocation, reader, cache=cache)
+            validate_native_allocation(allocation, reader, cache=cache)
         adoption = reader(link['root_adoption'])
         require(adoption.get('root_accepted') is True
                 and adoption.get('allocation') == link['allocation']['evidence']
