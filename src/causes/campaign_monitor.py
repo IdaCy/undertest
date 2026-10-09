@@ -358,9 +358,10 @@ def validate_registration(reg, policy, reader=checked_json):
         require(accepted.get('accepted_JP_continuation_source') is True
                 and accepted.get('package') == continuation['package'], 'continuation_source_not_accepted')
         control = reader(continuation['control'])
+        from causes.corpus_continuation import control_full_selection
+        full_selection = control_full_selection(control)
         require(reader(template['jobs']) == [], 'continuous_initial_jobs_not_empty')
-        require(control['schema'] == 'causes.corpus_continuation_control.v1'
-                and control['family'] == reg['runtime_cohort'] and control['model_key'] == policy['model_key']
+        require(control['family'] == reg['runtime_cohort'] and control['model_key'] == policy['model_key']
                 and control['task_host'] == control['provider_host'] == policy['controller_host']
                 and control['config'] == reg['controller_config'] and control['prototypes'] == template['prototypes'],
                 'continuation_control_scope_changed')
@@ -368,6 +369,11 @@ def validate_registration(reg, policy, reader=checked_json):
                   'config':'config_object_sha256','reservation':'reservation_sha256'}
         binding = {k:control[k] for k in ('family','model_key','task_host','provider_host','repetition_start')}
         binding.update(schema='causes.corpus_continuation_binding.v1', model_config_sha256=control['config']['sha256'])
+        if full_selection is not None:
+            require(0 < int(actual[actual.index('--max-full') + 1]) <= controller['workers'],
+                    'full_continuation_requires_positive_full_limit')
+            binding.update(schema='causes.corpus_continuation_binding.v2',
+                           full_selection=full_selection)
         for key, name in fields.items():
             require(control[key] in controller['input_pins'], 'whole_continuation_input_missing')
             binding[name] = digest(encoded(reader(control[key])))

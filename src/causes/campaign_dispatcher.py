@@ -201,6 +201,8 @@ class Dispatcher:
             from causes.corpus_continuation import CorpusContinuation
             control, self.continuation_control = pinned_json(corpus_continuation, corpus_continuation_sha256)
             self.continuation = CorpusContinuation.from_control(control, self.prototypes, self.config)
+            if self.continuation.full_selection is not None and self.max_full == 0:
+                raise ValueError('full_continuation_requires_positive_full_limit')
 
     def make_extension_block(self, index):
         if self.continuation is not None:
