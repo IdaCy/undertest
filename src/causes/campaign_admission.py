@@ -124,7 +124,7 @@ def reservation_unchanged(original, current):
     return True
 
 
-def native_reservation_augmentation(original, current, allocation):
+def native_reservation_augmentation(original, current, allocation, *, allocation_cache=None):
     """Allow only a regenerated native owner's exact initial JOBS addition.
 
     The allocator keeps its precreation reservation. The fresh census reserves
@@ -135,7 +135,7 @@ def native_reservation_augmentation(original, current, allocation):
     control = h.checked(allocation['allocation_control'])
     require(h.encoded(h.checked(control['reservation'])) == h.encoded(original),
             'native_generation_reservation_changed')
-    jobs, _, _, _ = native_allocation(allocation)
+    jobs, _, _, _ = native_allocation(allocation, cache=allocation_cache)
     require(original['schema'] == 'causes.corpus_allocation_reservation.v1', 'reservation_schema_changed')
     old = {}
     for raw in original['allocation_identities']:
@@ -168,7 +168,7 @@ def native_reservation_augmentation(original, current, allocation):
     return reservation_unchanged(expected, current)
 
 
-def native_reservation_foreign_blocks(original, current, allocation, growth, config_reference, *, waiting=False):
+def native_reservation_foreign_blocks(original, current, allocation, growth, config_reference, *, waiting=False, allocation_cache=None):
     """Preserve a generated queue while reviewed foreign roots append full blocks.
 
     The original allocator reservation is never rebased. Pinned census metadata
@@ -180,7 +180,7 @@ def native_reservation_foreign_blocks(original, current, allocation, growth, con
     control = h.checked(allocation['allocation_control'])
     require(h.encoded(h.checked(control['reservation'])) == h.encoded(original),
             'native_generation_reservation_changed')
-    jobs, _, _, _ = native_allocation(allocation)
+    jobs, _, _, _ = native_allocation(allocation, cache=allocation_cache)
     require(set(growth) == {'baseline_census_config', 'foreign_roots'}, 'foreign_growth_scope_changed')
     baseline_config, config = h.checked(growth['baseline_census_config']), h.checked(config_reference)
     require(original['configuration'] == growth['baseline_census_config'] and current['configuration'] == config_reference,
@@ -720,10 +720,10 @@ class ContinuousAdmission:
             return h.release_owned_barrier(owned,p['barrier'],Path(p['attempt_root'])/'release',authority,validate_waiting)
 
 
-def native_runtime(allocation, template, common):
+def native_runtime(allocation, template, common, *, allocation_cache=None):
     """Reconstruct one native queue and its exact command, without publishing it."""
     from causes.campaign_corpus_succession import native_allocation
-    jobs, config, prototypes, allocator = native_allocation(allocation)
+    jobs, config, prototypes, allocator = native_allocation(allocation, cache=allocation_cache)
     t = template
     continuous = allocation['target_mode'] == 'continuous_corpus'
     extension_key = 'prototypes' if continuous else 'empty_extensions'
@@ -802,6 +802,12 @@ class NativeAdmission(ContinuousAdmission):
     start_action = 'start_native_corpus_owner_behind_barrier'
     release_action = 'release_native_corpus_owned_barrier'
 
+    def _allocation_cache(self):
+        from causes.campaign_corpus_succession import NativeAllocationCache
+        if not hasattr(self, '_allocation_validation'):
+            self._allocation_validation = NativeAllocationCache()
+        return self._allocation_validation
+
     def static(self):
         from causes import campaign_corpus_succession as s
         p, x = self.policy, self.inputs
@@ -836,7 +842,8 @@ class NativeAdmission(ContinuousAdmission):
         require(p['initial_jobs'] == allocation['jobs'], 'native_initial_jobs_changed')
         normalized = h.checked(p['controller_template'])['templates']
         require(normalized == [p['normalized_template']], 'native_normalized_template_changed')
-        reconstructed = native_runtime(allocation, normalized[0], p)
+        reconstructed = native_runtime(allocation, normalized[0], p,
+                                       allocation_cache=self._allocation_cache())
         require(all(h.encoded(p[k]) == h.encoded(v) for k, v in reconstructed.items()), 'native_runtime_binding_changed')
         bundle = h.checked(normalized[0]['bundle'])
         require(p['runtime_source_pins'] == [{k: row[k] for k in ('path', 'bytes', 'sha256')}
@@ -868,7 +875,7 @@ class NativeAdmission(ContinuousAdmission):
                 'native_full_local_history_required')
         require(p['history']['donor_scopes'][:len(base['history']['donor_scopes'])] == base['history']['donor_scopes'],
                 'native_base_history_changed')
-        jobs, _, prototypes, _ = s.native_allocation(allocation)
+        jobs, _, prototypes, _ = s.native_allocation(allocation, cache=self._allocation_cache())
         routes = sorted({'task:'+object_sha([job['spec'].get('task_id'), job['spec'].get('image')])
                          for job in jobs + prototypes})
         aliases = sorted({'model:'+object_sha([cfg.get('model'), cfg.get('endpoint')])
@@ -913,10 +920,11 @@ class NativeAdmission(ContinuousAdmission):
                         and proof['capture_pins'] == fresh['capture_pins'], 'foreign_capture_proof_not_accepted')
                 native_reservation_foreign_blocks(old, fresh, allocation, p['reservation_growth'],
                     p['census_configs']['before_start' if action == self.start_action else 'waiting_release'],
-                    waiting=action == self.release_action)
+                    waiting=action == self.release_action, allocation_cache=self._allocation_cache())
             else:
                 require(p['reservation_transition'] == 'exact_own_allocation_v1', 'native_reservation_transition_unknown')
-                native_reservation_augmentation(old, fresh, allocation)
+                native_reservation_augmentation(old, fresh, allocation,
+                                                allocation_cache=self._allocation_cache())
         else:
             reservation_unchanged(old, fresh)
         require([row['host'] for row in fresh['host_cuts']] == p['census_hosts'], 'native_reservation_hosts_changed')

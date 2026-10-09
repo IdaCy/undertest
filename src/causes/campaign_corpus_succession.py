@@ -1,5 +1,6 @@
 """Explicit native corpus lineage; never treat pending work as completed."""
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -244,8 +245,64 @@ def native_lineage(policy, registration, reader=h.checked):
     return links[-1]
 
 
-def native_allocation(value, reader=h.checked):
+class NativeAllocationCache:
+    """Reuse one successful reconstruction, rechecking every input byte.
+
+    Only the canonical file reader is supported. Alias readers retain the
+    uncached interface. A failed recheck permanently invalidates this instance;
+    it never adopts replacement files or a changed allocation.
+    """
+
+    def __init__(self):
+        self._value = self._reader = self._result = None
+        self._references = ()
+        self._invalid = False
+
+    def verify(self, value, reader):
+        require(not self._invalid, 'native_allocation_cache_invalid')
+        encoded = h.encoded(value)
+        if self._result is not None:
+            try:
+                require(reader is h.checked, 'native_allocation_cache_reader_changed')
+                require(encoded == self._value and reader is self._reader,
+                        'native_allocation_cache_scope_changed')
+                for ref in self._references:
+                    h.checked_bytes(ref)
+            except BaseException:
+                self._invalid = True
+                raise
+            return copy.deepcopy(self._result)
+
+        require(reader is h.checked, 'native_allocation_cache_reader_changed')
+        references = {}
+
+        def read(ref):
+            saved = copy.deepcopy(ref)
+            previous = references.setdefault(saved['path'], saved)
+            require(previous == saved, 'native_allocation_cache_conflicting_pin')
+            return reader(saved)
+
+        result = native_allocation(value, read, _control_reader=read)
+        try:
+            snapshot = copy.deepcopy(result)
+            # Catch replacement during reconstruction before publishing a result.
+            require(h.encoded(value) == encoded, 'native_allocation_cache_scope_changed')
+            for ref in references.values():
+                h.checked_bytes(ref)
+        except BaseException:
+            self._invalid = True
+            raise
+        self._value, self._reader = encoded, reader
+        self._references, self._result = tuple(references.values()), snapshot
+        return result
+
+
+def native_allocation(value, reader=h.checked, *, cache=None, _control_reader=None):
     """Verify a finite selected queue or an unmodified continuous allocator."""
+    if cache is not None:
+        require(_control_reader is None and isinstance(cache, NativeAllocationCache),
+                'native_allocation_cache_scope_changed')
+        return cache.verify(value, reader)
     from causes.corpus_continuation import CorpusContinuation
     require(value['schema'] == 'causes.native_corpus_allocation.v1'
             and value['origin'] == 'native_successor'
@@ -255,7 +312,8 @@ def native_allocation(value, reader=h.checked):
             'native_allocation_capacity_changed')
     control = reader(value['allocation_control'])
     prototypes, config = reader(control['prototypes']), reader(control['config'])
-    allocator = CorpusContinuation.from_control(control, prototypes, config)
+    allocator = CorpusContinuation.from_control(control, prototypes, config,
+                                                reader=_control_reader)
     jobs, extensions = reader(value['jobs']), reader(value['extensions'])
     require(control['family'] == value['family'] and control['config'] == value['config']
             and control['model_key'] == value['model_key']
