@@ -50,6 +50,8 @@ def stage(packet, base, protected_paths=(), *, max_files=10000, max_bytes=1024 *
     Existing files must match exactly. A partial write failure leaves evidence
     in place for caller reconciliation; this function never rolls back or retries.
     Protected paths may be verified but are never created or replaced.
+    A file may carry base64 bytes or an exact existing ``source`` pin within
+    ``base``. Source bytes are checked and retained during the same preflight.
     """
     base = canonical(base)
     if not base.is_dir() or type(max_files) is not int or max_files < 1:
@@ -69,8 +71,9 @@ def stage(packet, base, protected_paths=(), *, max_files=10000, max_bytes=1024 *
     total = 0
     for rows, create in ((files, True), (verify, False)):
         for row in rows:
-            keys = {'destination', 'bytes', 'sha256', 'base64'} if create else {'path', 'bytes', 'sha256'}
-            if not isinstance(row, dict) or set(row) != keys:
+            keys = ({'destination', 'bytes', 'sha256', 'base64'},
+                    {'destination', 'bytes', 'sha256', 'source'}) if create else ({'path', 'bytes', 'sha256'},)
+            if not isinstance(row, dict) or set(row) not in keys:
                 raise ValueError('invalid_file_shape')
             path = canonical(row['destination'] if create else row['path'])
             if path == base or not path.is_relative_to(base) or path in seen:
@@ -90,9 +93,20 @@ def stage(packet, base, protected_paths=(), *, max_files=10000, max_bytes=1024 *
             if create:
                 if any(path == p or path.is_relative_to(p) for p in protected):
                     raise ValueError('protected_path_must_be_verify_only')
-                if not isinstance(row['base64'], str) or len(row['base64']) > ((row['bytes'] + 2) // 3) * 4:
-                    raise ValueError('invalid_encoded_size')
-                raw = base64.b64decode(row['base64'], validate=True)
+                if 'source' in row:
+                    source = row['source']
+                    if (not isinstance(source, dict) or set(source) != {'path', 'bytes', 'sha256'}
+                            or type(source['bytes']) is not int or source['bytes'] != row['bytes']
+                            or source['sha256'] != row['sha256']):
+                        raise ValueError('source_pin_mismatch')
+                    source_path = canonical(source['path'])
+                    if source_path == base or not source_path.is_relative_to(base):
+                        raise ValueError('source_outside_base')
+                    raw = _read_exact(source_path, source)
+                else:
+                    if not isinstance(row['base64'], str) or len(row['base64']) > ((row['bytes'] + 2) // 3) * 4:
+                        raise ValueError('invalid_encoded_size')
+                    raw = base64.b64decode(row['base64'], validate=True)
                 if _pin(path, raw) != expected:
                     raise ValueError('packet_pin_changed')
                 if os.path.lexists(path):
