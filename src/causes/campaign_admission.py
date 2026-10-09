@@ -7,6 +7,7 @@ and require reconciliation; there is no recovery or retry entry point.
 """
 
 import argparse
+import copy
 import datetime as dt
 import fcntl
 import hashlib
@@ -103,7 +104,7 @@ def bind_policy(template_reference, control_reference, controller_template_refer
     return p
 
 
-def reservation_unchanged(original, current):
+def _reservation_equal(original, current):
     require(original['schema'] == current['schema'] == 'causes.corpus_allocation_reservation.v1',
             'reservation_schema_changed')
     def rows(value):
@@ -119,8 +120,17 @@ def reservation_unchanged(original, current):
         return result
     require(h.encoded(rows(original)) == h.encoded(rows(current)), 'reservation_changed_requires_new_review')
     require(original['frozen_input_pins'] == current['frozen_input_pins'], 'frozen_census_scope_changed')
+    return True
+
+
+def _reservation_recent(current):
     for cut in current['host_cuts']:
         recent(cut['started_at']); recent(cut['finished_at'])
+
+
+def reservation_unchanged(original, current):
+    _reservation_equal(original, current)
+    _reservation_recent(current)
     return True
 
 
@@ -168,7 +178,95 @@ def native_reservation_augmentation(original, current, allocation, *, allocation
     return reservation_unchanged(expected, current)
 
 
-def native_reservation_foreign_blocks(original, current, allocation, growth, config_reference, *, waiting=False, allocation_cache=None):
+class NativeReservationProofCache:
+    """Reuse one immutable foreign-block proof, never its time validity.
+
+    Every hit checks the full input value and every transitive file's bytes.
+    Only canonical readers are supported. A changed scope or failed dependency
+    recheck permanently invalidates this instance; it never refreshes evidence.
+    The caller must still check independent acceptance and current freshness.
+    """
+
+    def __init__(self):
+        self._scope = self._readers = self._loaded_source = None
+        self._references = ()
+        self._invalid = False
+
+    def verify(self, original, current, allocation, growth, config_reference, *,
+               waiting=False, allocation_cache=None, reader=h.checked, bytes_reader=h.checked_bytes):
+        from causes import campaign_census as census
+        require(not self._invalid, 'native_reservation_cache_invalid')
+        if self._scope is not None:
+            try:
+                scope = object_sha([original, current, allocation, growth, config_reference, waiting])
+                loaded_source = str(h.canonical_path(census.__file__))
+                require(reader is h.checked and bytes_reader is h.checked_bytes
+                        and (reader, bytes_reader) == self._readers, 'native_reservation_cache_reader_changed')
+                require(scope == self._scope and loaded_source == self._loaded_source,
+                        'native_reservation_cache_scope_changed')
+                for ref in self._references:
+                    bytes_reader(ref)
+            except BaseException:
+                self._invalid = True
+                raise
+            return True
+
+        require(reader is h.checked and bytes_reader is h.checked_bytes,
+                'native_reservation_cache_reader_changed')
+        scope = object_sha([original, current, allocation, growth, config_reference, waiting])
+        loaded_source = str(h.canonical_path(census.__file__))
+        references = {}
+
+        def record(ref):
+            saved = copy.deepcopy(ref)
+            require(references.setdefault(saved['path'], saved) == saved,
+                    'native_reservation_cache_conflicting_pin')
+            return saved
+
+        def read(ref):
+            return reader(record(ref))
+
+        def read_bytes(ref):
+            return bytes_reader(record(ref))
+
+        # The nested allocation cache exports its checked transitive references.
+        # A private cache on a direct call keeps that same exact dependency path.
+        from causes.campaign_corpus_succession import NativeAllocationCache
+        allocation_cache = allocation_cache if allocation_cache is not None else NativeAllocationCache()
+        _native_reservation_foreign_blocks_proof(original, current, allocation, growth, config_reference,
+            waiting=waiting, allocation_cache=allocation_cache, reader=read, bytes_reader=read_bytes,
+            dependency_sink=record)
+        try:
+            require(object_sha([original, current, allocation, growth, config_reference, waiting]) == scope
+                    and str(h.canonical_path(census.__file__)) == loaded_source,
+                    'native_reservation_cache_scope_changed')
+            for ref in references.values():
+                bytes_reader(ref)
+        except BaseException:
+            self._invalid = True
+            raise
+        self._scope, self._readers, self._loaded_source = scope, (reader, bytes_reader), loaded_source
+        self._references = tuple(references.values())
+        return True
+
+
+def native_reservation_foreign_blocks(original, current, allocation, growth, config_reference, *,
+                                      waiting=False, allocation_cache=None, proof_cache=None):
+    """Validate the immutable relation and check dated host cuts on every call."""
+    if proof_cache is None:
+        _native_reservation_foreign_blocks_proof(original, current, allocation, growth, config_reference,
+                                                waiting=waiting, allocation_cache=allocation_cache)
+    else:
+        require(isinstance(proof_cache, NativeReservationProofCache), 'native_reservation_cache_scope_changed')
+        proof_cache.verify(original, current, allocation, growth, config_reference,
+                           waiting=waiting, allocation_cache=allocation_cache)
+    _reservation_recent(current)
+    return True
+
+
+def _native_reservation_foreign_blocks_proof(original, current, allocation, growth, config_reference, *,
+                                             waiting=False, allocation_cache=None, reader=h.checked,
+                                             bytes_reader=h.checked_bytes, dependency_sink=None):
     """Preserve a generated queue while reviewed foreign roots append full blocks.
 
     The original allocator reservation is never rebased. Pinned census metadata
@@ -177,17 +275,19 @@ def native_reservation_foreign_blocks(original, current, allocation, growth, con
     """
     from causes import campaign_census as census
     from causes.campaign_corpus_succession import native_allocation
-    control = h.checked(allocation['allocation_control'])
-    require(h.encoded(h.checked(control['reservation'])) == h.encoded(original),
+    control = reader(allocation['allocation_control'])
+    require(h.encoded(reader(control['reservation'])) == h.encoded(original),
             'native_generation_reservation_changed')
-    jobs, _, _, _ = native_allocation(allocation, cache=allocation_cache)
+    jobs, _, _, _ = native_allocation(allocation, cache=allocation_cache, dependency_sink=dependency_sink)
     require(set(growth) == {'baseline_census_config', 'foreign_roots'}, 'foreign_growth_scope_changed')
-    baseline_config, config = h.checked(growth['baseline_census_config']), h.checked(config_reference)
+    baseline_config, config = reader(growth['baseline_census_config']), reader(config_reference)
     require(original['configuration'] == growth['baseline_census_config'] and current['configuration'] == config_reference,
             'foreign_reservation_configuration_changed')
+    loaded_census = h.pin(census.__file__)
+    bytes_reader(loaded_census)
     for value in (original, current):
-        source = value['composition_source']; h.checked_bytes(source)
-        require(all(source[key] == h.pin(census.__file__)[key] for key in ('bytes', 'sha256')),
+        source = value['composition_source']; bytes_reader(source)
+        require(all(source[key] == loaded_census[key] for key in ('bytes', 'sha256')),
                 'foreign_census_source_changed')
     hosts = [row['host'] for row in baseline_config['hosts']]
     require(hosts and len(set(hosts)) == len(hosts), 'native_reservation_hosts_changed')
@@ -219,12 +319,12 @@ def native_reservation_foreign_blocks(original, current, allocation, growth, con
 
     def capture_projection(value, configuration):
         require(len(value['capture_pins']) == len(configuration['hosts']), 'foreign_capture_inventory_changed')
-        require(h.checked(value['capture_map']) == {host['host']: ref for host, ref in
+        require(reader(value['capture_map']) == {host['host']: ref for host, ref in
                 zip(configuration['hosts'], value['capture_pins'])}, 'foreign_capture_map_changed')
         captures = {}; blocks = {}
         for host, reference in zip(configuration['hosts'], value['capture_pins']):
             require(0 < reference['bytes'] <= configuration['max_capture_bytes'], 'foreign_capture_bound')
-            captured = census.strict_json(h.checked_bytes(reference))
+            captured = census.strict_json(bytes_reader(reference))
             require(captured['host'] == host['host'] and host['host'] not in captures, 'foreign_capture_host_changed')
             require(captured['configuration'] == value['configuration']
                     and captured['composition_source'] == captured['collector_source']
@@ -307,7 +407,7 @@ def native_reservation_foreign_blocks(original, current, allocation, growth, con
                 'allocation_seeds': seeds(rows.values()), 'frozen_input_pins': [*original['frozen_input_pins'], allocation['jobs']]}
     require(h.encoded(expected['allocation_seeds']) == h.encoded(current['allocation_seeds']),
             'reservation_seed_union_changed')
-    return reservation_unchanged(expected, current)
+    return _reservation_equal(expected, current)
 
 
 def donor_cuts_clear(history_policy, baseline, current):
@@ -808,6 +908,13 @@ class NativeAdmission(ContinuousAdmission):
             self._allocation_validation = NativeAllocationCache()
         return self._allocation_validation
 
+    def _reservation_cache(self, action):
+        if not hasattr(self, '_reservation_validation'):
+            self._reservation_validation = {}
+        if action not in self._reservation_validation:
+            self._reservation_validation[action] = NativeReservationProofCache()
+        return self._reservation_validation[action]
+
     def static(self):
         from causes import campaign_corpus_succession as s
         p, x = self.policy, self.inputs
@@ -903,13 +1010,16 @@ class NativeAdmission(ContinuousAdmission):
 
     def evidence(self, action):
         p, x = self.policy, self.inputs
+        values = {}
         for key in ('precreation_reservation', 'fresh_reservation', 'foundation'):
             rule = p['acceptance_rules'][key]
-            accepted(x[key], rule['flag'], rule['binding_key'])
+            values[key] = accepted(x[key], rule['flag'], rule['binding_key'])
         allocation = h.checked(p['allocation'])
         control = h.checked(allocation['allocation_control'])
         require(control['reservation'] == x['precreation_reservation']['evidence'], 'native_reservation_changed')
-        old, fresh = (h.checked(x[k]['evidence']) for k in ('precreation_reservation', 'fresh_reservation'))
+        for key in ('precreation_reservation', 'fresh_reservation'):
+            h.checked_bytes(x[key]['evidence'])
+        old, fresh = (values[k] for k in ('precreation_reservation', 'fresh_reservation'))
         if 'reservation_transition' in p:
             if p['reservation_transition'] == 'exact_own_and_foreign_blocks_v1':
                 proof = h.checked(x['fresh_reservation']['review'])
@@ -920,7 +1030,8 @@ class NativeAdmission(ContinuousAdmission):
                         and proof['capture_pins'] == fresh['capture_pins'], 'foreign_capture_proof_not_accepted')
                 native_reservation_foreign_blocks(old, fresh, allocation, p['reservation_growth'],
                     p['census_configs']['before_start' if action == self.start_action else 'waiting_release'],
-                    waiting=action == self.release_action, allocation_cache=self._allocation_cache())
+                    waiting=action == self.release_action, allocation_cache=self._allocation_cache(),
+                    proof_cache=self._reservation_cache(action))
             else:
                 require(p['reservation_transition'] == 'exact_own_allocation_v1', 'native_reservation_transition_unknown')
                 native_reservation_augmentation(old, fresh, allocation,
@@ -931,7 +1042,8 @@ class NativeAdmission(ContinuousAdmission):
         scope = h.checked(x['fresh_reservation']['review'])
         require(scope['census_config'] == p['census_configs']['before_start' if action == self.start_action else 'waiting_release'],
                 'native_reservation_roots_changed')
-        foundation = h.checked(x['foundation']['evidence']); recent(foundation['at'])
+        h.checked_bytes(x['foundation']['evidence'])
+        foundation = values['foundation']; recent(foundation['at'])
         for key in ('provider', 'host_transfer', 'legacy_owners'):
             require(foundation[key] == p[key], 'native_foundation_changed:' + key)
         require(foundation['predecessors'] == p['predecessors'], 'native_foundation_predecessors_changed')

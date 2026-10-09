@@ -258,7 +258,7 @@ class NativeAllocationCache:
         self._references = ()
         self._invalid = False
 
-    def verify(self, value, reader):
+    def verify(self, value, reader, *, dependency_sink=None):
         require(not self._invalid, 'native_allocation_cache_invalid')
         encoded = h.encoded(value)
         if self._result is not None:
@@ -271,6 +271,9 @@ class NativeAllocationCache:
             except BaseException:
                 self._invalid = True
                 raise
+            if dependency_sink is not None:
+                for ref in self._references:
+                    dependency_sink(copy.deepcopy(ref))
             return copy.deepcopy(self._result)
 
         require(reader is h.checked, 'native_allocation_cache_reader_changed')
@@ -294,15 +297,19 @@ class NativeAllocationCache:
             raise
         self._value, self._reader = encoded, reader
         self._references, self._result = tuple(references.values()), snapshot
+        if dependency_sink is not None:
+            for ref in self._references:
+                dependency_sink(copy.deepcopy(ref))
         return result
 
 
-def native_allocation(value, reader=h.checked, *, cache=None, _control_reader=None):
+def native_allocation(value, reader=h.checked, *, cache=None, _control_reader=None, dependency_sink=None):
     """Verify a finite selected queue or an unmodified continuous allocator."""
     if cache is not None:
         require(_control_reader is None and isinstance(cache, NativeAllocationCache),
                 'native_allocation_cache_scope_changed')
-        return cache.verify(value, reader)
+        return cache.verify(value, reader, dependency_sink=dependency_sink)
+    require(dependency_sink is None, 'native_allocation_dependency_cache_required')
     from causes.corpus_continuation import CorpusContinuation
     require(value['schema'] == 'causes.native_corpus_allocation.v1'
             and value['origin'] == 'native_successor'
