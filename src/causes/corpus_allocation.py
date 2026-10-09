@@ -7,6 +7,7 @@ import re
 FAMILY = 'corpus_bank83_v1'
 MODELS = ('mi27', 'tex9')
 SEED_KEYS = ('seed', 'block_seed', 'task_seed', 'model_seed')
+SEED_MODULUS = 2**31 - 1
 
 
 def digest(value):
@@ -37,7 +38,7 @@ def chosen_alias(cell):
     return matches[0]
 
 
-def ordered_cells(cells, model, block=0):
+def ordered_cells(cells, model, block=0, *, family=FAMILY):
     if model not in MODELS or type(block) is not int or block < 0:
         raise ValueError('invalid_order_domain')
     grouped = collections.defaultdict(list)
@@ -48,41 +49,48 @@ def ordered_cells(cells, model, block=0):
     if len({key(cell) for cell in cells}) != len(cells):
         raise ValueError('duplicate_order_cell')
     for task, rows in grouped.items():
-        rows.sort(key=lambda cell: (digest([FAMILY, 'within_task', block, model, task, cell['stimulus_sha256']]), cell['stimulus_sha256']))
+        rows.sort(key=lambda cell: (digest([family, 'within_task', block, model, task, cell['stimulus_sha256']]), cell['stimulus_sha256']))
     result = []
     for cycle in range(max((len(rows) for rows in grouped.values()), default=0)):
         tasks = sorted((task for task, rows in grouped.items() if cycle < len(rows)),
-                       key=lambda task: (digest([FAMILY, 'task_cycle', block, model, cycle, task]), task))
+                       key=lambda task: (digest([family, 'task_cycle', block, model, cycle, task]), task))
         result.extend({'cell': grouped[task][cycle], 'cycle': cycle, 'task_position_in_cycle': index}
                       for index, task in enumerate(tasks))
     return result
 
 
-def run_id(cell, model, block=0):
+def run_id(cell, model, block=0, *, family=FAMILY):
     alias = chosen_alias(cell)
     task = re.sub('[^A-Za-z0-9_.-]', '_', cell['task_id'])[:48]
-    suffix = digest([FAMILY, 'episode_identity', block, model, *key(cell)])[:20]
-    value = f'{FAMILY}_b{block:08d}_{model}_{task}_{alias["variant_id"]}_{suffix}'
+    suffix = digest([family, 'episode_identity', block, model, *key(cell)])[:20]
+    value = f'{family}_b{block:08d}_{model}_{task}_{alias["variant_id"]}_{suffix}'
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,179}', value):
         raise ValueError('invalid_run_id')
     return value
 
 
 class SeedLedger:
-    def __init__(self, prior):
+    def __init__(self, prior, *, family=FAMILY):
         self.used = set(prior)
         self.records = {}
+        self.family = family
+        self.allocated_count = sum(0 < value < SEED_MODULUS for value in self.used)
 
     def fresh(self, *parts):
-        identity = json.dumps([FAMILY, *parts], sort_keys=True, ensure_ascii=False)
+        identity = json.dumps([self.family, *parts], sort_keys=True, ensure_ascii=False)
         if identity in self.records:
             return self.records[identity]['seed']
+        if self.allocated_count >= SEED_MODULUS - 1:
+            raise ValueError('allocation_seed_domain_exhausted')
         counter = 0
-        while True:
-            value = int(digest([FAMILY, *parts, counter])[:16], 16) % (2**31 - 1)
+        while counter < SEED_MODULUS:
+            value = int(digest([self.family, *parts, counter])[:16], 16) % SEED_MODULUS
             if value and value not in self.used:
                 break
             counter += 1
+        else:
+            raise ValueError('allocation_seed_search_exhausted')
         self.used.add(value)
+        self.allocated_count += 1
         self.records[identity] = {'seed': value, 'collision_counter': counter}
         return value
