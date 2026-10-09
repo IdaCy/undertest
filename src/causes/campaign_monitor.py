@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
+import time
 import urllib.request
 
 
@@ -93,9 +94,154 @@ def continuous_progress(identity, continuation, initial_jobs, events, persisted_
             'published_blocks':blocks,'first_block_observed':blocks > 0}
 
 
+STORAGE_PHASE_ROLES = {
+    'texas_waiting': {'old_mi': 'draining', 'old_texas': 'retired', 'new_texas': 'waiting'},
+    'texas_running_mi_draining': {'old_mi': 'draining', 'old_texas': 'retired', 'new_texas': 'running'},
+    'texas_waiting_mi_retired': {'old_mi': 'retired', 'old_texas': 'retired', 'new_texas': 'waiting'},
+    'texas_running_mi_retired': {'old_mi': 'retired', 'old_texas': 'retired', 'new_texas': 'running'},
+    'mi_waiting': {'old_mi': 'retired', 'old_texas': 'retired', 'new_texas': 'running', 'new_mi': 'waiting'},
+    'successors_running': {'old_mi': 'retired', 'old_texas': 'retired', 'new_texas': 'running', 'new_mi': 'running'},
+}
+
+
+def legacy_roles(policy):
+    legacy = policy['legacy']
+    transition = legacy.get('storage_transition')
+    if transition is None:
+        require(len(legacy['owners']) == 2 and len({r['model'] for r in legacy['owners']}) == 2,
+                'exact_two_legacy_owners_required')
+        return None
+    require(transition['schema'] == 'causes.storage_legacy_monitor_policy.v1', 'storage_monitor_policy_schema')
+    roles = STORAGE_PHASE_ROLES.get(transition['phase'])
+    require(roles is not None and set(transition['role_models']) == set(roles),
+            'exact_storage_monitor_roles_required')
+    models = transition['role_models']
+    require(all(type(value) is str and value for value in models.values())
+            and models['old_mi'] != models['old_texas']
+            and models['new_texas'] == models['old_texas']
+            and ('new_mi' not in models or models['new_mi'] == models['old_mi']),
+            'storage_monitor_role_models_changed')
+    expected_models = sorted(models[role] for role, state in roles.items() if state != 'retired')
+    require([row['model'] for row in legacy['owners']] == expected_models
+            and len({row['pid'] for row in legacy['owners']}) == len(expected_models),
+            'storage_monitor_live_owner_set_changed')
+    require(legacy['identity_receipt'] == transition['registration'], 'storage_monitor_receipt_changed')
+    return roles
+
+
+def validate_storage_legacy(identity, policy, at):
+    roles = legacy_roles(policy)
+    transition = policy['legacy']['storage_transition']
+    registration = checked_json(transition['registration'])
+    accepted = checked_json(transition['independent_review'])
+    adoption = checked_json(transition['adoption'])
+    require(accepted.get('accepted_storage_phase_registration') is True
+            and accepted.get('registration') == transition['registration'], 'storage_phase_not_reviewed')
+    require(adoption.get('root_accepted') is True
+            and adoption.get('registration') == transition['registration']
+            and adoption.get('independent_review') == transition['independent_review']
+            and adoption.get('manifest') == registration['identity_manifest'], 'storage_phase_not_adopted')
+    require(registration['schema'] == 'causes.storage_controller_phase.v1'
+            and registration['phase'] == transition['phase']
+            and set(registration['owners']) == set(roles), 'storage_phase_registration_changed')
+    overlay = identity['overlay']
+    require(overlay['phase'] == transition['phase']
+            and overlay['manifest_sha256'] == registration['identity_manifest']['sha256'],
+            'storage_identity_phase_changed')
+    observations = overlay['succession_observations']
+    require(type(observations) is list and len(observations) == 1, 'one_fresh_storage_observation_required')
+    observed = observations[0]
+    require(observed['schema'] == 'causes.storage_phase_observation.v1'
+            and observed['source_sha256'] == transition['observer_source']['sha256']
+            and digest(checked(transition['observer_source'])) == observed['source_sha256'],
+            'storage_observation_source_changed')
+    started = dt.datetime.fromisoformat(observed['observed_from'])
+    finished = dt.datetime.fromisoformat(observed['observed_until'])
+    require(started.tzinfo is not None and finished.tzinfo is not None
+            and 0 <= (finished - started).total_seconds() <= 180
+            and 0 <= (at - finished).total_seconds() <= policy['max_observation_age_seconds'],
+            'stale_storage_phase_observation')
+    require(observed['decision'] == {'phase': transition['phase'], 'roles': roles,
+                                    'processes_restarted': False, 'runtime_actions': False}
+            and observed['runtime_actions'] is False
+            and set(observed['observations']) == set(observed['final_ownership']) == set(roles),
+            'storage_phase_observation_scope_changed')
+    expected_live = []
+    outputs, processes = set(), set()
+    for role, state in roles.items():
+        owner = registration['owners'][role]
+        row = observed['observations'][role]
+        process = owner['process']
+        require(type(process['pid']) is int and process['pid'] > 0
+                and str(process['process_starttime_ticks']).isdigit()
+                and int(process['process_starttime_ticks']) > 0
+                and type(process['argv']) is list and process['argv']
+                and all(type(value) is str for value in process['argv']), 'invalid_storage_monitor_process')
+        require(process['pid'] not in processes and owner['output_root'] not in outputs,
+                'duplicate_storage_monitor_owner')
+        processes.add(process['pid']); outputs.add(owner['output_root'])
+        require(owner['observation_state'] == state and row['process'] == process
+                and row['output_root'] == owner['output_root'], 'storage_observed_owner_changed')
+        require(type(row['active_claims']) is int and row['active_claims'] >= 0,
+                'invalid_storage_monitor_claims')
+        owner_from = dt.datetime.fromisoformat(row['observed_from'])
+        owner_until = dt.datetime.fromisoformat(row['observed_until'])
+        require(started <= owner_from <= owner_until <= finished, 'storage_owner_observation_interval_changed')
+        require(row['metadata_pins']['queue_identity_pin'] == owner['queue_identity_pin']
+                and row['metadata_pins']['controller_identity_pin'] == owner['controller_identity_pin']
+                and row['metadata_pins']['journal']['path'] == owner['journal_prefix']['path'],
+                'storage_owner_metadata_binding_changed')
+        evidence = [row['process_before'], row['process_after'], observed['final_ownership'][role]]
+        if state == 'retired':
+            require(row['live'] is False and row['lock_owner'] is None and row['active_claims'] == 0,
+                    'storage_previous_owner_still_active')
+            for value in evidence:
+                require(value['pid'] == process['pid'] and
+                        (value['absent'] is True or (value['absent'] is False
+                         and value.get('state') in ('Z', 'X', 'x')
+                         and value.get('start_ticks') == str(process['process_starttime_ticks']))),
+                        'storage_retirement_identity_changed')
+        else:
+            expected = {**process, 'process_starttime_ticks': str(process['process_starttime_ticks'])}
+            require(all(value == expected for value in evidence)
+                    and row['live'] is True and row['lock_owner'] == process['pid']
+                    and row['queue_identity'] == owner['queue_identity'], 'storage_live_identity_changed')
+            expected_live.append({'pid': process['pid'], 'model': transition['role_models'][role]})
+            if role.startswith('new_'):
+                require(row['barrier_present'] is (state == 'waiting')
+                        and row['guard']['healthy'] is True
+                        and set(row['guard']['alarms']) == {'owner_identity_invalid', 'reporting_lock_invalid',
+                            'guard_record_invalid', 'guard_not_ready', 'storage_binding_invalid', 'volume_below_floor'}
+                        and all(value is False for value in row['guard']['alarms'].values()),
+                        'storage_successor_guard_or_barrier_invalid')
+                guard_at = dt.datetime.fromisoformat(row['guard']['at'])
+                require(owner_from <= guard_at <= owner_until, 'storage_guard_observation_stale')
+                if state == 'waiting':
+                    require(type(row['claims']) is type(row['persisted_blocks']) is int
+                            and row['claims'] == row['active_claims'] == row['persisted_blocks'] == 0,
+                            'waiting_storage_successor_issued_work')
+    require(sorted(expected_live, key=lambda row: row['model']) == policy['legacy']['owners'],
+            'storage_registered_live_projection_changed')
+
+
+def remote_validation_budget(policy, side):
+    require(side in ('mi', 'jp'), 'invalid_monitor_side')
+    budgets = policy.get('remote_validation_budgets', {})
+    require(isinstance(budgets, dict) and set(budgets) <= {'mi', 'jp'}, 'invalid_remote_validation_budgets')
+    require(all(type(value) is int and 28 <= value <= 60 for value in budgets.values()),
+            'invalid_remote_validation_seconds')
+    if side not in budgets:
+        return None
+    seconds = budgets[side]
+    return {'remote_seconds':seconds, 'kill_grace_seconds':5, 'ssh_seconds':seconds + 5 + 8}
+
+
+
 def validate_policy(policy):
     require(policy['schema'] == 'causes.campaign_monitor_policy.v1', 'monitor_policy_schema')
     require(policy['required'] is True, 'mandatory_companion_required')
+    for side in ('mi', 'jp'):
+        remote_validation_budget(policy, side)
     base = PurePosixPath(policy['remote_base'])
     require(base.is_absolute() and str(base) == policy['remote_base'] and '..' not in base.parts, 'invalid_remote_base')
     for key in ('controller_host', 'transfer_host'):
@@ -116,8 +262,7 @@ def validate_policy(policy):
     for phase in phases:
         require(phase['mode'] in ('finite', 'continuous') and type(phase['workers']) is int and phase['workers'] > 0,
                 'invalid_phase_policy')
-    require(len(policy['legacy']['owners']) == 2 and len({r['model'] for r in policy['legacy']['owners']}) == 2,
-            'exact_two_legacy_owners_required')
+    legacy_roles(policy)
     require(type(policy['max_observation_age_seconds']) is int and policy['max_observation_age_seconds'] > 0,
             'invalid_observation_age')
     require(len(policy['tunnels']) == 2, 'exact_two_tunnels_required')
@@ -275,7 +420,10 @@ def validate_legacy(status, policy, at=None):
             and identity['overlay']['authorized'] is True and identity['overlay']['valid'] is True, 'legacy_identity_invalid')
     require(identity['overlay']['receipt'] == policy['legacy']['identity_receipt'], 'legacy_identity_receipt_changed')
     actual = identity['controllers']
-    require(len(actual) == 2 and [{k:r[k] for k in ('pid','model')} for r in actual] == policy['legacy']['owners'], 'legacy_owner_set_changed')
+    roles = legacy_roles(policy)
+    require([{k:r[k] for k in ('pid','model')} for r in actual] == policy['legacy']['owners'], 'legacy_owner_set_changed')
+    if roles is not None:
+        validate_storage_legacy(identity, policy, at)
     require(all(r['live'] is True and r['argv_matches'] is True and r['starttime_matches'] is True for r in actual), 'legacy_owner_not_live')
     require(identity['files'] and all(r['matches'] is True and r['expected_sha256'] == r['actual_sha256'] for r in identity['files']), 'legacy_source_changed')
     require([{k:r[k] for k in ('path','expected_sha256')} for r in identity['files']] == policy['legacy']['files'], 'legacy_source_inventory_changed')
@@ -315,14 +463,24 @@ def models(port, policy):
 
 
 def remote(side, registration, policy):
+    budget = remote_validation_budget(policy, side)
     host = policy['transfer_host'] if side == 'mi' else policy['controller_host']
     raw = encoded({'side':side,'registration':registration,'policy':policy})
-    result = subprocess.run(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=8',host,'python3','-c',shlex.quote(REMOTE)],
-                            input=raw,capture_output=True,timeout=28)
+    command = ['ssh','-o','BatchMode=yes','-o','ConnectTimeout=8',host]
+    if budget is not None:
+        command += ['timeout','--signal=TERM','--kill-after=5s',str(budget['remote_seconds'])+'s']
+    command += ['python3','-c',shlex.quote(REMOTE)]
+    started = time.monotonic()
+    result = subprocess.run(command, input=raw, capture_output=True,
+                            timeout=28 if budget is None else budget['ssh_seconds'])
+    elapsed = time.monotonic() - started
     require(result.returncode == 0, 'remote_monitor_failed:' + host)
     observation = json.loads(result.stdout); require(observation['valid'] is True, 'invalid_remote_observation')
-    return {'host':host,'source_sha256':digest(REMOTE.encode()),'request_bytes':len(raw),'request_sha256':digest(raw),
+    report = {'host':host,'source_sha256':digest(REMOTE.encode()),'request_bytes':len(raw),'request_sha256':digest(raw),
             'returncode':result.returncode,'stdout_sha256':digest(result.stdout),'stderr_sha256':digest(result.stderr),'observation':observation}
+    if budget is not None:
+        report.update(execution_budget=budget, elapsed_seconds=elapsed)
+    return report
 
 
 def observe(config, legacy_observer):
