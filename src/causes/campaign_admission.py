@@ -124,6 +124,50 @@ def reservation_unchanged(original, current):
     return True
 
 
+def native_reservation_augmentation(original, current, allocation):
+    """Allow only a regenerated native owner's exact initial JOBS addition.
+
+    The allocator keeps its precreation reservation. The fresh census reserves
+    the entire selected queue, including unclaimed jobs, or the explicit empty
+    JOBS file for a continuous owner. This does not accept foreign growth.
+    """
+    from causes.campaign_corpus_succession import native_allocation
+    control = h.checked(allocation['allocation_control'])
+    require(h.encoded(h.checked(control['reservation'])) == h.encoded(original),
+            'native_generation_reservation_changed')
+    jobs, _, _, _ = native_allocation(allocation)
+    require(original['schema'] == 'causes.corpus_allocation_reservation.v1', 'reservation_schema_changed')
+    old = {}
+    for raw in original['allocation_identities']:
+        row = identity(raw)
+        require(row['run_id'] not in old, 'duplicate_reservation_identity')
+        old[row['run_id']] = row
+    require(sorted(old) == original['run_ids'], 'reservation_ID_union_changed')
+    seed_keys = ('seed', 'block_seed', 'task_seed', 'model_seed')
+    seeds = lambda rows: sorted({row[key] for row in rows for key in seed_keys
+                                 if type(row[key]) is int and row[key] > 0})
+    require(h.encoded(seeds(old.values())) == h.encoded(original['allocation_seeds']),
+            'reservation_seed_union_changed')
+    own = [identity(job['allocation']) for job in jobs]
+    own_ids = [row['run_id'] for row in own]
+    require(len(set(own_ids)) == len(own_ids) and not set(own_ids) & set(old)
+            and not set(seeds(own)) & set(original['allocation_seeds']), 'native_own_allocation_collision')
+    require(all(ref['path'] != allocation['jobs']['path'] for ref in original['frozen_input_pins']),
+            'native_initial_jobs_already_reserved')
+    hosts = [cut['host'] for cut in original['host_cuts']]
+    require(hosts and len(set(hosts)) == len(hosts)
+            and hosts == [cut['host'] for cut in current['host_cuts']], 'native_reservation_hosts_changed')
+    require(h.encoded(original['persisted_full_blocks']) == h.encoded(current['persisted_full_blocks']),
+            'native_reservation_blocks_changed')
+    rows = [*old.values(), *own]
+    expected = {**original, 'allocation_identities': rows,
+                'run_ids': sorted([*old, *own_ids]), 'allocation_seeds': seeds(rows),
+                'frozen_input_pins': [*original['frozen_input_pins'], allocation['jobs']]}
+    require(h.encoded(expected['allocation_seeds']) == h.encoded(current['allocation_seeds']),
+            'reservation_seed_union_changed')
+    return reservation_unchanged(expected, current)
+
+
 def donor_cuts_clear(history_policy, baseline, current):
     keys=('host','output_root','mode','recorder_relevant')
     require([{k:r[k] for k in keys} for r in baseline]==history_policy['donor_scopes']
@@ -717,7 +761,11 @@ class NativeAdmission(ContinuousAdmission):
         control = h.checked(allocation['allocation_control'])
         require(control['reservation'] == x['precreation_reservation']['evidence'], 'native_reservation_changed')
         old, fresh = (h.checked(x[k]['evidence']) for k in ('precreation_reservation', 'fresh_reservation'))
-        reservation_unchanged(old, fresh)
+        if 'reservation_transition' in p:
+            require(p['reservation_transition'] == 'exact_own_allocation_v1', 'native_reservation_transition_unknown')
+            native_reservation_augmentation(old, fresh, allocation)
+        else:
+            reservation_unchanged(old, fresh)
         require([row['host'] for row in fresh['host_cuts']] == p['census_hosts'], 'native_reservation_hosts_changed')
         scope = h.checked(x['fresh_reservation']['review'])
         require(scope['census_config'] == p['census_configs']['before_start' if action == self.start_action else 'waiting_release'],
