@@ -73,6 +73,15 @@ def shared_histories(scopes, current, replay):
         after_state = {k: after[k] for k in HISTORY_FIELDS}
         require(core.encoded(before_state) == core.encoded(scope['accepted_state']),
                 'accepted_donor_baseline_changed')
+        progression = scope.get('history_progression')
+        if 'history_progression' in scope:
+            require(progression == 'append_only_lifetime_v1' and scope['mode'] == 'live_prefix',
+                    'unsupported_donor_history_progression')
+            old_lifetime, new_lifetime = (state['lifetime_route_failures'] for state in (before_state, after_state))
+            require(type(old_lifetime) is int and type(new_lifetime) is int
+                    and 0 <= old_lifetime <= new_lifetime, 'invalid_donor_lifetime_progression')
+            before_state = {k: v for k, v in before_state.items() if k != 'lifetime_route_failures'}
+            after_state = {k: v for k, v in after_state.items() if k != 'lifetime_route_failures'}
         if core.encoded(before_state) != core.encoded(after_state):
             raise core.AdmissionHold('shared_route_history_changed')
         aliases = scope['model_aliases']
@@ -112,6 +121,68 @@ def qualify_observation(value, policy, replay, *, initial=False, at=None):
     inherited = shared_histories(policy['donors'], value['donors'], replay)
     require(inherited == policy['initial_failures'], 'inherited_failure_baseline_changed')
     return value
+
+
+def validate_launcher_succession(policy, expected_identity, control):
+    """Check one reviewed migration while the caller holds the executor lock.
+
+    The original IDENTITY remains immutable. The returned receipt may only be
+    created exclusively or compared exactly; it is not a general source override.
+    Later journal suffixes remain subject to the unchanged core reconciliation.
+    """
+    control = core.canonical(control)
+    review_ref = policy['launcher_succession']
+    review = json.loads(core.pinned(review_ref))
+    require(review.get('accepted_supplement_launcher_succession') is True,
+            'accepted_launcher_succession_required')
+    require(review['output_root'] == policy['output_root'] == str(control.parent)
+            and control.name == '.control', 'launcher_succession_output_changed')
+    for key in ('prepared', 'core', 'runner'):
+        require(core.encoded(review[key]) == core.encoded(expected_identity[key]),
+                'launcher_succession_binding_changed:' + key)
+        core.pinned(review[key])
+    require(review['new_launcher'] == expected_identity['launcher'] == policy['launcher_source']
+            and review['old_launcher'] != review['new_launcher'], 'launcher_succession_sources_changed')
+    core.pinned(review['old_launcher']); core.pinned(review['new_launcher'])
+    predecessor = review['predecessor_identity']
+    require(predecessor['path'] == str(control / 'IDENTITY.json'), 'launcher_succession_identity_path_changed')
+    actual_identity = json.loads(core.pinned(predecessor))
+    prior_identity = dict(expected_identity, launcher=review['old_launcher'])
+    require(core.encoded(actual_identity) == core.encoded(prior_identity), 'launcher_succession_identity_changed')
+    retired = json.loads(core.pinned(review['retirement_review']))
+    require(retired.get('accepted_supplement_launcher_retirement') is True,
+            'accepted_launcher_retirement_required')
+    for key in ('predecessor_identity', 'prepared', 'output_root'):
+        require(core.encoded(retired[key]) == core.encoded(review[key]),
+                'launcher_retirement_binding_changed:' + key)
+    require(retired['journal_cut'] == review['journal_baseline'], 'launcher_retirement_journal_changed')
+    require(all(retired.get(k) is True for k in ('all_claimed_terminal', 'client_process_absent',
+                                               'executor_lock_acquired_nonblocking'))
+            and type(retired.get('ambiguous_attempts')) is int and retired['ambiguous_attempts'] == 0,
+            'launcher_predecessor_not_retired')
+    require(isinstance(retired.get('evidence'), list) and retired['evidence'], 'launcher_retirement_evidence_required')
+    proof = [review_ref, *[review[k] for k in
+             ('predecessor_identity', 'old_launcher', 'new_launcher', 'prepared', 'core', 'runner',
+              'retirement_review', 'journal_baseline')], *retired['evidence']]
+    require(all(reference in policy['required_pins'] for reference in proof),
+            'launcher_succession_proof_not_pinned')
+    for reference in retired['evidence']:
+        core.pinned(reference)
+    baseline = review['journal_baseline']
+    require(not core.canonical(baseline['path']).is_relative_to(control.parent),
+            'external_launcher_journal_baseline_required')
+    raw = core.pinned(baseline)
+    require(raw and raw.endswith(b'\n')
+            and core.canonical(control / 'journal.jsonl').read_bytes().startswith(raw),
+            'launcher_retirement_journal_prefix_changed')
+    receipt = {'schema': 'causes.supplement_launcher_succession.v1',
+               'succession_review': review_ref, **{k: review[k] for k in
+               ('predecessor_identity', 'old_launcher', 'new_launcher', 'prepared', 'core', 'runner',
+                'output_root', 'retirement_review', 'journal_baseline')}}
+    path = control / 'LAUNCHER_SUCCESSION.json'
+    if path.exists():
+        require(core.encoded(core.load(path)) == core.encoded(receipt), 'launcher_succession_already_bound_differently')
+    return receipt
 
 
 def launch(policy_reference, adoption_reference, *, runner, observation, replay, source_check):
@@ -204,7 +275,13 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
                     'core': prepared['public_source'], 'runner': prepared['frozen_runner'],
                     'launcher': policy['launcher_source']}
         identity_path = control / 'IDENTITY.json'
-        if identity_path.exists():
+        if 'launcher_succession' in policy:
+            require(identity_path.exists(), 'launcher_succession_predecessor_required')
+            succession = validate_launcher_succession(policy, identity, control)
+            succession_path = control / 'LAUNCHER_SUCCESSION.json'
+            if not succession_path.exists():
+                core.save(succession_path, succession)
+        elif identity_path.exists():
             require(core.encoded(core.load(identity_path)) == core.encoded(identity), 'output_identity_changed')
         else:
             require(not list(control.glob('invocation_*')) and not (control / 'journal.jsonl').exists()
