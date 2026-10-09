@@ -83,9 +83,9 @@ for root in request['roots']:
  if not group.is_dir():
   skipped.append({'root':root,'reason':'root_not_present'});continue
  for run in sorted(group.iterdir()):
-  if run.is_symlink() or not run.is_dir():continue
   key=str(run.relative_to(base))
   if key in accepted:continue
+  if run.is_symlink() or not run.is_dir():continue
   summary=run/'summary.json'
   if not summary.is_file() or summary.is_symlink():continue
   data=json.loads(summary.read_text())

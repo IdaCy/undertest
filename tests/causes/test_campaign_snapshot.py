@@ -1,6 +1,8 @@
 import copy
+from contextlib import redirect_stdout
 from dataclasses import replace
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
@@ -65,6 +67,78 @@ class SnapshotTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(self.remote / relative, target)
         return subprocess.CompletedProcess(command, 0)
+
+    def local_manifest(self, accepted=(), limit=128):
+        request = dict(host=self.config.host, base=self.config.remote_base,
+                       roots=list(self.roots), accepted=list(accepted), limit=limit)
+        output = io.StringIO()
+        with patch('sys.stdin', io.StringIO(json.dumps(request))), redirect_stdout(output):
+            exec(compile(REMOTE_CODE, '<snapshot manifest>', 'exec'), {})
+        return json.loads(output.getvalue())
+
+    def test_accepted_entries_are_not_probed_even_if_metadata_would_fail(self):
+        directory = self.add_run('accepted_directory')
+        regular = directory.parent / 'accepted_file'
+        regular.write_text('not a run')
+        link = directory.parent / 'accepted_link'
+        link.symlink_to(directory, target_is_directory=True)
+        dangling = directory.parent / 'accepted_dangling'
+        dangling.symlink_to(directory.parent / 'missing')
+        accepted = {directory, regular, link, dangling}
+        self.add_run('new_run')
+        original_link, original_dir = Path.is_symlink, Path.is_dir
+        calls = []
+        def check(method):
+            def checked(path):
+                if path in accepted:
+                    calls.append((method.__name__, str(path)))
+                    raise OSError('accepted metadata must not be accessed')
+                return method(path)
+            return checked
+        with patch.object(Path, 'is_symlink', check(original_link)), \
+             patch.object(Path, 'is_dir', check(original_dir)):
+            result = self.local_manifest(str(path.relative_to(self.remote)) for path in accepted)
+        self.assertEqual(calls, [])
+        self.assertEqual([row['run'] for row in result['runs']], [self.roots[-1] + '/new_run'])
+        self.assertEqual(result['skipped'], [
+            {'root': root, 'reason': 'root_not_present'} for root in self.roots[:-1]])
+
+    def test_manifest_keeps_root_and_lexical_order_cap_and_unsafe_entry_checks(self):
+        root = self.roots[0]
+        self.add_run('z_last', root=root)
+        first = self.add_run('b_first', root=root)
+        self.add_run('a_active', root=root, closed=False)
+        accepted = self.add_run('00_accepted', root=root)
+        (first.parent / '01_file').write_text('not a run')
+        (first.parent / '02_link').symlink_to(first, target_is_directory=True)
+        (first.parent / '03_dangling').symlink_to(first.parent / 'missing')
+        unsafe_summary = first.parent / '04_summary_link'
+        unsafe_summary.mkdir()
+        (unsafe_summary / 'summary.json').symlink_to(first / 'summary.json')
+        self.add_run('a_next_root', root=self.roots[1])
+        full = self.local_manifest([str(accepted.relative_to(self.remote))])
+        expected = [root + '/b_first', root + '/z_last', self.roots[1] + '/a_next_root']
+        self.assertEqual([row['run'] for row in full['runs']], expected)
+        self.assertEqual(full['skipped'], [
+            {'run': root + '/a_active', 'reason': 'sandbox_not_confirmed_closed'},
+            *({'root': value, 'reason': 'root_not_present'} for value in self.roots[2:]),
+        ])
+        capped = self.local_manifest([str(accepted.relative_to(self.remote))], limit=2)
+        self.assertEqual([row['run'] for row in capped['runs']], expected[:2])
+        self.assertEqual(capped['skipped'], full['skipped'][:1])
+
+    def test_unaccepted_entry_metadata_errors_still_refuse(self):
+        run = self.add_run()
+        for method_name in ('is_symlink', 'is_dir'):
+            original = getattr(Path, method_name)
+            def checked(path):
+                if path == run:
+                    raise PermissionError('unaccepted metadata unavailable')
+                return original(path)
+            with self.subTest(method=method_name), \
+                 patch.object(Path, method_name, checked), \
+                 self.assertRaisesRegex(PermissionError, 'unaccepted metadata unavailable'):
+                self.local_manifest()
 
     def test_remote_manifest_requires_closure_and_preserves_evidence_without_workspace_trees(self):
         run = self.add_run()
