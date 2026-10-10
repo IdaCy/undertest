@@ -114,6 +114,59 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(core.pinned(self.config_ref), before)
         self.assertFalse((self.output/'model_a/run2').exists())
 
+    def test_selected_local_floor_requires_matching_adoption_before_observation(self):
+        p, _, adoption = self.policy()
+        p['local_free_space_floor_bytes'] = 64 * 1024**3
+        ref = self.save('lower_floor.policy.json', p)
+        adopted = {**core.load(adoption['path']), 'policy': ref}
+        observation = mock.Mock(side_effect=AssertionError('must not observe'))
+        for index, value in enumerate((None, True, float(64 * 1024**3), 0, 63 * 1024**3)):
+            changed = dict(adopted)
+            if value is not None:
+                changed['local_free_space_floor_bytes'] = value
+            adopted_ref = self.save('wrong_floor' + str(index) + '.json', changed)
+            with self.subTest(value=value), self.assertRaises(core.IntegrityError):
+                launch.launch(ref, adopted_ref, runner=runner, observation=observation,
+                              replay=self.replay, source_check=lambda: None)
+        observation.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_selected_local_floor_reaches_both_admission_checks_and_records_intent(self):
+        p, _, adoption = self.policy()
+        p['local_free_space_floor_bytes'] = 64 * 1024**3
+        ref = self.save('lower_floor.policy.json', p)
+        adopted = {**core.load(adoption['path']), 'policy': ref, 'local_free_space_floor_bytes': 64 * 1024**3}
+        adopted_ref = self.save('lower_floor.adoption.json', adopted)
+
+        def observation():
+            value = self.observation(p)
+            value['resources']['local_free_bytes'] = 70 * 1024**3
+            return value
+
+        with mock.patch.object(core.shutil, 'disk_usage', return_value=types.SimpleNamespace(free=70 * 1024**3)), \
+             mock.patch.object(runner, 'exchange', side_effect=self.exchange) as exchange:
+            result = launch.launch(ref, adopted_ref, runner=runner, observation=observation,
+                                   replay=self.replay, source_check=lambda: None)
+        self.assertEqual(result['completed_ids'], p['pilot_measurement_ids'])
+        self.assertEqual(exchange.call_count, 2)
+        self.assertEqual(result['local_free_space_floor_bytes'], 64 * 1024**3)
+        intent = core.load(next((self.output / '.control').glob('invocation_*/INTENT.json')))
+        self.assertEqual(intent['local_free_space_floor_bytes'], 64 * 1024**3)
+
+    def test_local_floor_does_not_lower_remote_storage_requirements(self):
+        p, _, _ = self.policy()
+        p['local_free_space_floor_bytes'] = 64 * 1024**3
+        good = self.observation(p)
+        good['resources']['local_free_bytes'] = 64 * 1024**3
+        self.assertEqual(launch.qualify_observation(good, p, self.replay), good)
+        for key, floor in [('remote_root_free_bytes', 20 * 1024**3),
+                           ('remote_scratch_free_bytes', 80 * 1024**3),
+                           ('local_free_bytes', 64 * 1024**3)]:
+            changed = copy.deepcopy(good)
+            changed['resources'][key] = floor - 1
+            with self.subTest(key=key), self.assertRaisesRegex(core.AdmissionHold, key):
+                launch.qualify_observation(changed, p, self.replay)
+
     def test_transport_rejects_other_setting_or_original_numeric_identity_change(self):
         job = self.job('run0'); transport = launch.transport_config(self.config, 'http://localhost:49181')
         transport['probe_max_tokens'] = 8191

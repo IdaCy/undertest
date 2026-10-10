@@ -286,6 +286,76 @@ class StorageObservationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'exact_storage_phase_owners'):
             observe_phase(registration)
 
+    def reporter_receipt(self):
+        self.running()
+        source_path = self.base / 'retained_storage.py'
+        source_path.write_text('# retained reporter source fixture\n')
+        source = h.pin(source_path)
+        guard = self.expected['guard']
+        guard['reporter_source'] = source
+        receipt = {'process': self.expected['process'],
+                   'controller_id': self.expected['controller_id'],
+                   'binding': {'output': str(self.root), 'storage_binding': guard['binding'],
+                               'storage_source_sha256': source['sha256']},
+                   'guard_directory': guard['directory'],
+                   'guard_reporting_lock': guard['reporting_lock']}
+        self.expected['launch_owner_receipt'] = h.save_new(self.base, 'OWNER.json', receipt)
+        return receipt, source
+
+    def test_reporter_source_requires_exact_launch_attestation(self):
+        receipt, source = self.reporter_receipt()
+        with patch('causes.campaign_storage_observation.observe_guard',
+                   return_value={'healthy': True}) as guard:
+            value = observe_owner(self.expected)
+            self.assertEqual(guard.call_args.kwargs, {'reporter_source': source})
+            self.assertEqual(value['metadata_pins']['guard_reporter_source'], source)
+            self.assertEqual(value['metadata_pins']['launch_owner_receipt'],
+                             self.expected['launch_owner_receipt'])
+        absent = copy.deepcopy(self.expected)
+        absent.pop('launch_owner_receipt')
+        with self.assertRaisesRegex(ValueError, 'reporter_receipt_required'):
+            observe_owner(absent)
+        absent = copy.deepcopy(self.expected)
+        absent['guard']['reporter_source'] = None
+        with self.assertRaisesRegex(ValueError, 'reporter_receipt_required'):
+            observe_owner(absent)
+
+    def test_reporter_attestation_rejects_other_owner_and_guard_bindings(self):
+        receipt, source = self.reporter_receipt()
+        changes = [('pid', lambda r: r['process'].update(pid=1)),
+                   ('start', lambda r: r['process'].update(process_starttime_ticks='wrong')),
+                   ('argv', lambda r: r['process'].update(argv=['other'])),
+                   ('controller', lambda r: r.update(controller_id='other')),
+                   ('output', lambda r: r['binding'].update(output='/other')),
+                   ('binding', lambda r: r['binding']['storage_binding'].update(extra=True)),
+                   ('source', lambda r: r['binding'].update(storage_source_sha256='wrong')),
+                   ('directory', lambda r: r.update(guard_directory='/other')),
+                   ('lock', lambda r: r.update(guard_reporting_lock={'wrong': True}))]
+        for name, change in changes:
+            with self.subTest(field=name):
+                wrong = copy.deepcopy(receipt)
+                change(wrong)
+                expected = copy.deepcopy(self.expected)
+                expected['launch_owner_receipt'] = h.save_new(self.base, name + '.json', wrong)
+                with self.assertRaisesRegex(ValueError, 'reporter_receipt_changed'):
+                    observe_owner(expected)
+
+    def test_reporter_source_and_receipt_tampering_refuse_before_or_after_sample(self):
+        receipt, source = self.reporter_receipt()
+        source_path = Path(source['path'])
+        original = source_path.read_bytes()
+        source_path.write_bytes(original + b'# tampered\n')
+        with self.assertRaisesRegex(ValueError, 'input_pin_changed'):
+            observe_owner(self.expected)
+        source_path.write_bytes(original)
+        receipt_path = Path(self.expected['launch_owner_receipt']['path'])
+        def mutate_receipt(*args, **kwargs):
+            receipt_path.write_text('{}')
+            return {'healthy': True}
+        with patch('causes.campaign_storage_observation.observe_guard', side_effect=mutate_receipt):
+            with self.assertRaisesRegex(ValueError, 'input_pin_changed'):
+                observe_owner(self.expected)
+
 
 if __name__ == '__main__':
     unittest.main()
