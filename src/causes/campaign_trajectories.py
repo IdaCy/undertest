@@ -58,6 +58,68 @@ def _relative_root(value):
     return value
 
 
+def select_reader_bound_receipts(
+        actor_receipts: Sequence[dict], reader_receipts: Mapping[str, dict | None], *,
+        bound_receipts: Mapping[str, dict | None]) -> dict:
+    """Select a receipt cut without replacing the snapshots used by readers.
+
+    Both mappings must explicitly name the same selected physical runs (receipt
+    ``run`` values). Reader receipts come from the designated reader feed; bound
+    receipts are the complete ``snapshot_receipt`` objects in retained bindings.
+    None declares an absent feed receipt or binding in the supplied cut.
+
+    A selected run with no reader receipt is reported missing even if an actor
+    receipt exists. A retained binding requires an identical reader receipt.
+    When both feeds contain a run, their summary hashes must agree and the
+    reader receipt wins. Duplicate actor rows are refused as ambiguous input.
+
+    Returned receipts are sorted by physical run, copied, and ready for
+    assemble_trajectories. This pure selection step does not verify files,
+    assignment membership, reader artifacts, or missingness dispositions.
+    """
+    _require(isinstance(actor_receipts, Sequence) and not isinstance(actor_receipts, (str, bytes)),
+             'actor_receipt_sequence_required')
+    _require(isinstance(reader_receipts, Mapping) and isinstance(bound_receipts, Mapping),
+             'reader_receipt_mapping_required')
+    _require(set(reader_receipts) == set(bound_receipts), 'reader_receipt_scope_mismatch')
+
+    def checked_receipt(row, expected_run=None):
+        _require(type(row) is dict and type(row.get('run')) is str
+                 and type(row.get('summary_sha256')) is str and row['summary_sha256'],
+                 'snapshot_receipt_identity_required')
+        run = _relative_root(row['run'])
+        _require(expected_run is None or run == expected_run, 'reader_receipt_run_mismatch')
+        return run
+
+    actors = {}
+    for row in actor_receipts:
+        run = checked_receipt(row)
+        _require(run not in actors, 'duplicate_actor_receipt')
+        actors[run] = row
+    chosen = {run: row for run, row in actors.items() if run not in reader_receipts}
+    missing, preferred = [], []
+    for run in reader_receipts:
+        _require(type(run) is str, 'reader_receipt_run_required')
+        _relative_root(run)
+        row, bound = reader_receipts[run], bound_receipts[run]
+        if row is not None:
+            checked_receipt(row, run)
+        if bound is not None:
+            checked_receipt(bound, run)
+            _require(row is not None and reader.encoded(row) == reader.encoded(bound),
+                     'reader_bound_receipt_mismatch')
+        if row is None:
+            missing.append(run)
+            continue
+        if run in actors:
+            _require(actors[run]['summary_sha256'] == row['summary_sha256'],
+                     'conflicting_snapshot_identity')
+            preferred.append(run)
+        chosen[run] = row
+    return {'receipts': [copy.deepcopy(chosen[run]) for run in sorted(chosen)],
+            'missing_reader_runs': sorted(missing), 'reader_preferred_runs': sorted(preferred)}
+
+
 def _reader_json(reference, inputs):
     path = watch.confined(reference['path'], inputs.output_base)
     _require(type(reference['bytes']) is int and path.stat().st_size == reference['bytes'],

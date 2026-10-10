@@ -3,11 +3,98 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import unittest
 from unittest.mock import patch
 
 from causes import campaign_trajectories as assembly
 from tests.causes import test_campaign_reader_watch as fixture_module
+
+
+class ReaderReceiptSelectionTests(unittest.TestCase):
+    def receipt(self, run, location='actor'):
+        return {'run': run, 'path': f'/snapshots/{location}/{run}',
+                'manifest': f'/snapshots/{location}/MANIFEST.json',
+                'manifest_sha256': 'a' * 64, 'summary_sha256': 'b' * 64}
+
+    def test_reader_precedence_keeps_actor_only_runs_and_does_not_mutate_inputs(self):
+        actor = self.receipt('runs/model/selected')
+        reader = self.receipt(actor['run'], 'reader')
+        other = self.receipt('runs/model/other')
+        inputs = ([actor, other], {reader['run']: reader}, {reader['run']: copy.deepcopy(reader)})
+        before = copy.deepcopy(inputs)
+        result = assembly.select_reader_bound_receipts(inputs[0], inputs[1], bound_receipts=inputs[2])
+        self.assertEqual(result, {'receipts': [other, reader], 'missing_reader_runs': [],
+                                  'reader_preferred_runs': [reader['run']]})
+        self.assertEqual(inputs, before)
+        result['receipts'][1]['summary_sha256'] = 'changed output'
+        self.assertEqual(inputs, before)
+
+    def test_absent_selected_receipt_never_falls_back_to_actor_feed(self):
+        actor = self.receipt('runs/model/selected')
+        result = assembly.select_reader_bound_receipts([actor], {actor['run']: None},
+                                                       bound_receipts={actor['run']: None})
+        self.assertEqual(result, {'receipts': [], 'missing_reader_runs': [actor['run']],
+                                  'reader_preferred_runs': []})
+        with self.assertRaisesRegex(ValueError, 'reader_bound_receipt_mismatch'):
+            assembly.select_reader_bound_receipts([actor], {actor['run']: None},
+                                                  bound_receipts={actor['run']: actor})
+
+    def test_whole_bound_receipt_must_match_even_with_identical_summary(self):
+        row = self.receipt('runs/model/selected', 'reader')
+        changes = [dict(row, path='/another/copy'), dict(row, manifest='/another/MANIFEST.json'),
+                   dict(row, manifest_sha256='c' * 64), dict(row, retained=True)]
+        for bound in changes:
+            with self.subTest(bound=bound), self.assertRaisesRegex(ValueError, 'reader_bound_receipt_mismatch'):
+                assembly.select_reader_bound_receipts([], {row['run']: row}, bound_receipts={row['run']: bound})
+        # JSON type changes must not pass Python's True == 1 equality.
+        with self.assertRaisesRegex(ValueError, 'reader_bound_receipt_mismatch'):
+            assembly.select_reader_bound_receipts([], {row['run']: dict(row, version=1)},
+                                                  bound_receipts={row['run']: dict(row, version=True)})
+
+    def test_conflicting_summary_is_not_hidden_by_reader_precedence(self):
+        actor = self.receipt('runs/model/selected')
+        row = dict(self.receipt(actor['run'], 'reader'), summary_sha256='c' * 64)
+        with self.assertRaisesRegex(ValueError, 'conflicting_snapshot_identity'):
+            assembly.select_reader_bound_receipts([actor], {row['run']: row},
+                                                  bound_receipts={row['run']: row})
+
+    def test_duplicate_actor_rows_are_ambiguous_even_if_identical(self):
+        actor = self.receipt('runs/model/selected')
+        for duplicate in (copy.deepcopy(actor), dict(actor, summary_sha256='c' * 64)):
+            with self.subTest(duplicate=duplicate), self.assertRaisesRegex(ValueError, 'duplicate_actor_receipt'):
+                assembly.select_reader_bound_receipts([actor, duplicate], {}, bound_receipts={})
+
+    def test_explicit_reader_scope_and_physical_run_identity_are_required(self):
+        row = self.receipt('runs/model/selected')
+        for bound in ({}, {'runs/model/other': row}):
+            with self.subTest(bound=bound), self.assertRaisesRegex(ValueError, 'reader_receipt_scope_mismatch'):
+                assembly.select_reader_bound_receipts([], {row['run']: row}, bound_receipts=bound)
+        for feed, bound in ((row, None), (None, row)):
+            with self.subTest(feed=feed), self.assertRaisesRegex(ValueError, 'reader_receipt_run_mismatch'):
+                assembly.select_reader_bound_receipts([], {'runs/model/other': feed},
+                                                      bound_receipts={'runs/model/other': bound})
+
+    def test_unbound_reader_receipts_are_retained_and_results_have_stable_order(self):
+        a, b, c = [self.receipt(f'runs/model/{name}', 'reader') for name in ('a', 'b', 'c')]
+        first = assembly.select_reader_bound_receipts([c], {b['run']: b, a['run']: a},
+                                                      bound_receipts={a['run']: None, b['run']: None})
+        second = assembly.select_reader_bound_receipts([c], {a['run']: a, b['run']: b},
+                                                       bound_receipts={b['run']: None, a['run']: None})
+        self.assertEqual(first, second)
+        self.assertEqual(first['receipts'], [a, b, c])
+        self.assertEqual(first['missing_reader_runs'], [])
+
+    def test_malformed_or_noncanonical_receipts_refuse(self):
+        row = self.receipt('runs/model/selected')
+        for bad in (None, {}, dict(row, summary_sha256=None), dict(row, run='/absolute/run'),
+                    dict(row, run='runs/../other'), dict(row, run='runs//other')):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                assembly.select_reader_bound_receipts([bad], {}, bound_receipts={})
+        with self.assertRaisesRegex(ValueError, 'reader_receipt_mapping_required'):
+            assembly.select_reader_bound_receipts([], [], bound_receipts={})
+        with self.assertRaisesRegex(ValueError, 'actor_receipt_sequence_required'):
+            assembly.select_reader_bound_receipts('not a receipt cut', {}, bound_receipts={})
 
 
 class TrajectoryAssemblyTests(unittest.TestCase):
@@ -110,6 +197,34 @@ class TrajectoryAssemblyTests(unittest.TestCase):
         self.artifacts[('mi27', 'fixture', 'end')] = assembly.ReaderArtifacts(result_pin, None, changed)
         with self.assertRaisesRegex(ValueError, 'endpoint_reader_binding_mismatch'):
             self.assemble(endpoint_transitions=mapping)
+
+    def test_receipt_selection_preserves_endpoint_reader_binding_across_duplicate_copies(self):
+        _, mapping = self.endpoint_fixture(); f = self.fixture
+        binding, _ = assembly.watch.bind_snapshot(f.receipt, f.frozen, f.snapshots, self.inputs.binding_pins)
+        binding_pin = self.save(f.output / 'mi27/fixture/BINDING.json', binding)
+        missing_pin = self.save(f.output / 'mi27/fixture/early/TECHNICAL_MISSING.json',
+            {'run_id': 'fixture', 'stage': 'early', 'status': 'technical_missing', 'admissible_labels': None,
+             'replayed': False, 'binding_sha256': assembly.reader.digest(binding)})
+        self.artifacts[('mi27', 'fixture', 'early')] = assembly.ReaderArtifacts(None, missing_pin, binding_pin)
+        duplicate_root = f.snapshots / 'later_copy/data/runs/mi27/fixture'
+        shutil.copytree(f.root, duplicate_root)
+        manifest = self.save(f.snapshots / 'later_copy/MANIFEST.json', json.loads(f.manifest.read_bytes()))
+        duplicate = dict(f.receipt, path=str(duplicate_root), manifest=manifest['path'],
+                         manifest_sha256=manifest['sha256'])
+        # Both payloads verify, but the later actor receipt cannot substitute for
+        # the exact receipt in the reader's retained endpoint binding.
+        with self.assertRaisesRegex(ValueError, 'endpoint_reader_binding_mismatch'):
+            self.assemble(receipts=[f.receipt, duplicate], endpoint_transitions=mapping)
+        selected = assembly.select_reader_bound_receipts([duplicate], {f.receipt['run']: f.receipt},
+            bound_receipts={f.receipt['run']: binding['snapshot_receipt']})
+        actual = self.assemble(receipts=selected['receipts'], endpoint_transitions=mapping)
+        self.assertEqual(actual, self.assemble(endpoint_transitions=mapping))
+        self.assertEqual(actual['records']['mi27']['fixture']['reader_dispositions']['early'],
+                         'final_reader_technical_missing')
+        absent = assembly.select_reader_bound_receipts([duplicate], {f.receipt['run']: None},
+                                                      bound_receipts={f.receipt['run']: None})
+        self.assertEqual(self.assemble(receipts=absent['receipts'], endpoint_transitions=mapping)['coverage']['mi27'],
+                         {'unobserved': ['fixture'], 'quality_unavailable': []})
 
     def test_snapshot_conflicts_and_physical_root_alias_duplicate_refuse(self):
         other = dict(self.fixture.receipt, summary_sha256='0' * 64)
