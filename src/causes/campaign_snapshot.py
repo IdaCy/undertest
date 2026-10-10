@@ -13,6 +13,12 @@ import subprocess
 import uuid
 
 
+READER_INPUT_FILES = ('allocation.json', 'spec.json', 'variant.json', 'model.json',
+                      'summary.json', 'initial_context.json', 'early_context.json', 'end_context.json')
+READER_INPUT_FILE_LIMIT = 64 * 1024**2
+READER_INPUT_PASS_LIMIT = 256 * 1024**2
+
+
 class SnapshotSpaceHold(RuntimeError):
     """A retained manifest could not fit above the configured local reserve."""
 
@@ -34,6 +40,11 @@ class SnapshotConfig:
     limit: int = 128
     # Keep roots broad enough for shared history while limiting new copies.
     selected_runs: tuple[str, ...] | None = None
+    reader_inputs_only: bool = False
+
+    @property
+    def index_name(self):
+        return 'reader_inputs.accepted.jsonl' if self.reader_inputs_only else 'accepted.jsonl'
 
     def validate(self):
         if not isinstance(self.host, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.host) is None:
@@ -55,6 +66,8 @@ class SnapshotConfig:
                 raise ValueError('duplicate_selected_snapshot_run')
         if type(self.limit) is not int or self.limit <= 0 or type(self.free_space_floor_bytes) is not int or self.free_space_floor_bytes < 0:
             raise ValueError('invalid_snapshot_resource_limit')
+        if type(self.reader_inputs_only) is not bool or (self.reader_inputs_only and self.selected_runs is None):
+            raise ValueError('reader_inputs_require_exact_run_selection')
         canonical_path(self.destination)
 
 
@@ -80,6 +93,8 @@ def checked_authorization(config, authorize):
         raise ValueError('snapshot_authorization_scope_mismatch')
     if config.selected_runs is not None and value.get('selected_runs') != list(config.selected_runs):
         raise ValueError('snapshot_authorization_selection_mismatch')
+    if config.reader_inputs_only and value.get('custody_kind') != 'actor_reader_inputs':
+        raise ValueError('reader_input_authorization_required')
     # The caller validates its registration policy and returns immutable evidence.
     return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
 
@@ -91,6 +106,9 @@ request=json.load(sys.stdin)
 base=Path(request['base'])
 accepted=set(request['accepted'])
 selected=set(request['selected_runs']) if request.get('selected_runs') is not None else None
+reader_inputs=request.get('reader_inputs_only',False)
+reader_names=('allocation.json','spec.json','variant.json','model.json','summary.json','initial_context.json','early_context.json','end_context.json')
+if reader_inputs and selected is None:raise ValueError('reader input selection required')
 rows=[];skipped=[]
 excluded={'upper','work','merged','reflink_workspace','pilot_copy_workspace'}
 def digest(p):
@@ -113,13 +131,17 @@ for root in request['roots']:
   if run.is_symlink() or not run.is_dir():continue
   summary=run/'summary.json'
   if not summary.is_file() or summary.is_symlink():continue
+  if reader_inputs and summary.stat().st_size>64*1024**2:raise ValueError('reader input file limit')
   data=json.loads(summary.read_text())
   closure=data.get('sandbox_closure',{})
   if closure.get('state')!='closed' or closure.get('overlay_mounted') is not False:
    skipped.append({'run':key,'reason':'sandbox_not_confirmed_closed'});continue
   initial_summary_sha=digest(summary)
   files=[];omitted=[]
-  for directory,dirs,names in os.walk(run,followlinks=False):
+  if reader_inputs:
+   entries=[(run,[],reader_names)]
+  else:entries=os.walk(run,followlinks=False)
+  for directory,dirs,names in entries:
    folder=Path(directory)
    kept=[]
    for name in dirs:
@@ -130,7 +152,15 @@ for root in request['roots']:
     else:kept.append(name)
    dirs[:]=kept
    for name in names:
-    p=folder/name;r=str(p.relative_to(run));before=p.lstat()
+    p=folder/name;r=str(p.relative_to(run))
+    if reader_inputs and not os.path.lexists(p):
+     if name in reader_names[:5]:raise ValueError('required reader identity file absent: '+name)
+     omitted.append({'path':r,'reason':'named_reader_input_absent'});continue
+    before=p.lstat()
+    if reader_inputs and (not stat.S_ISREG(before.st_mode) or before.st_size>64*1024**2):
+     raise ValueError('reader input must be bounded regular file: '+name)
+    if reader_inputs and sum(row['bytes'] for row in rows)+sum(row['bytes'] for row in files)+before.st_size>256*1024**2:
+     raise ValueError('reader input pass limit')
     if not stat.S_ISREG(before.st_mode):
      omitted.append({'path':r,'reason':'not_regular_file'});continue
     value=digest(p);after=p.lstat()
@@ -139,9 +169,10 @@ for root in request['roots']:
     files.append({'path':r,'bytes':before.st_size,'sha256':value,'mtime_ns':before.st_mtime_ns,'mode':stat.S_IMODE(before.st_mode)})
   if digest(summary)!=initial_summary_sha:raise RuntimeError('completed summary changed')
   rows.append({'run':key,'summary_sha256':initial_summary_sha,'files':files,'omitted':omitted,'bytes':sum(x['bytes'] for x in files),'finished_at':data.get('finished_at')})
+  if reader_inputs and sum(row['bytes'] for row in rows)>256*1024**2:raise ValueError('reader input pass limit')
   if len(rows)>=request['limit']:break
  if len(rows)>=request['limit']:break
-print(json.dumps({'schema':'caus.completed_snapshot_manifest.v1','at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'host':request['host'],'base':str(base),'runs':rows,'skipped':skipped}))
+print(json.dumps({'schema':'caus.reader_input_manifest.v1' if reader_inputs else 'caus.completed_snapshot_manifest.v1','at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'host':request['host'],'base':str(base),'runs':rows,'skipped':skipped}))
 '''
 
 def digest(path):
@@ -184,7 +215,8 @@ def fsync_directory(path):
 
 
 def validate_manifest(manifest, config, accepted):
-    if manifest.get('schema') != 'caus.completed_snapshot_manifest.v1' or manifest.get('host') != config.host or manifest.get('base') != config.remote_base:
+    schema = 'caus.reader_input_manifest.v1' if config.reader_inputs_only else 'caus.completed_snapshot_manifest.v1'
+    if manifest.get('schema') != schema or manifest.get('host') != config.host or manifest.get('base') != config.remote_base:
         raise ValueError('remote_manifest_scope_mismatch')
     rows = manifest['runs']
     if not isinstance(rows, list) or len(rows) > config.limit:
@@ -205,6 +237,16 @@ def validate_manifest(manifest, config, accepted):
             files[item['path']] = item
         if 'summary.json' not in files or files['summary.json']['sha256'] != row['summary_sha256'] or type(row['bytes']) is not int or row['bytes'] != sum(item['bytes'] for item in files.values()):
             raise ValueError('manifest_summary_or_size_mismatch')
+        if config.reader_inputs_only:
+            omitted = row.get('omitted', [])
+            missing = set(READER_INPUT_FILES) - set(files)
+            if (not set(READER_INPUT_FILES[:5]) <= files.keys() or not files.keys() <= set(READER_INPUT_FILES)
+                    or any(item['bytes'] > READER_INPUT_FILE_LIMIT for item in files.values())
+                    or omitted != [{'path': name, 'reason': 'named_reader_input_absent'}
+                                   for name in READER_INPUT_FILES if name in missing]):
+                raise ValueError('reader_input_manifest_scope_mismatch')
+    if config.reader_inputs_only and sum(row['bytes'] for row in rows) > READER_INPUT_PASS_LIMIT:
+        raise ValueError('reader_input_manifest_pass_limit')
 
 
 def synchronize_completed(config: SnapshotConfig, authorize: Callable):
@@ -219,7 +261,7 @@ def synchronize_completed(config: SnapshotConfig, authorize: Callable):
 
 def _synchronize_under_lock(config, authorize, authorization):
     destination = Path(config.destination)
-    index = canonical_path(destination / 'accepted.jsonl')
+    index = canonical_path(destination / config.index_name)
     accepted = []
     if index.exists():
         raw_index = index.read_bytes()
@@ -228,12 +270,14 @@ def _synchronize_under_lock(config, authorize, authorization):
         accepted = [json.loads(line)['run'] for line in raw_index.splitlines() if line]
     if len(set(accepted)) != len(accepted) or any(str(relative_path(run).parent) not in config.roots for run in accepted):
         raise ValueError('invalid_or_repeated_accepted_run')
-    attempts = canonical_path(destination / 'attempts')
+    attempts = canonical_path(destination / ('reader_input_attempts' if config.reader_inputs_only else 'attempts'))
     attempt = attempts / (datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid.uuid4().hex[:8])
     attempt.mkdir(parents=True, exist_ok=False)
     request = {'host': config.host, 'base': config.remote_base, 'roots': list(config.roots), 'accepted': accepted, 'limit': config.limit}
     if config.selected_runs is not None:
         request['selected_runs'] = list(config.selected_runs)
+    if config.reader_inputs_only:
+        request['reader_inputs_only'] = True
     save(attempt / 'AUTHORIZATION.json', authorization)
     save(attempt / 'REQUEST.json', request)
     ssh = ['ssh', '-C', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', config.host, 'python3', '-c', shlex.quote(REMOTE_CODE)]
@@ -273,8 +317,13 @@ def _synchronize_under_lock(config, authorize, authorization):
             if path.is_symlink() or not path.is_file() or path.stat().st_size != item['bytes'] or digest(path) != item['sha256']:
                 raise RuntimeError('snapshot verification failed: ' + str(path))
         receipt = {'run': row['run'], 'path': str(data / row['run']), 'manifest': str(attempt / 'MANIFEST.json'), 'manifest_sha256': digest(attempt / 'MANIFEST.json'), 'files': len(row['files']), 'bytes': row['bytes'], 'summary_sha256': row['summary_sha256'], 'verified_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        if config.reader_inputs_only:
+            receipt.update(schema='caus.reader_input_receipt.v1', custody_kind='actor_reader_inputs')
         receipts.append(receipt)
-    save(attempt / 'VERIFIED.json', {'schema': 'caus.completed_snapshot_verified.v1', 'runs': receipts, 'scope': 'regular evidence files; workspace trees excluded; checkpoint TARs retained as opaque bytes', 'local_mode_derivation': 'owner read/write access added for snapshot inspection; original file mode recorded in manifest; opaque TAR member modes unchanged'})
+    verified_schema = 'caus.reader_input_verified.v1' if config.reader_inputs_only else 'caus.completed_snapshot_verified.v1'
+    scope = ('eight named actor-reader JSON inputs only; explicit absent contexts; no complete trajectory or checkpoint custody'
+             if config.reader_inputs_only else 'regular evidence files; workspace trees excluded; checkpoint TARs retained as opaque bytes')
+    save(attempt / 'VERIFIED.json', {'schema': verified_schema, 'runs': receipts, 'scope': scope, 'local_mode_derivation': 'owner read/write access added for snapshot inspection; original file mode recorded in manifest; opaque TAR member modes unchanged'})
     durable_tree(attempt)
     for directory in (attempt.parent, destination, destination.parent):
         fsync_directory(directory)

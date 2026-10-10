@@ -26,7 +26,7 @@ def _index(config, previous):
     destination = snapshot.canonical_path(config.destination)
     with snapshot.canonical_path(destination / 'sync.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        path = snapshot.canonical_path(destination / 'accepted.jsonl')
+        path = snapshot.canonical_path(destination / config.index_name)
         raw = path.read_bytes() if path.exists() else b''
     if not raw.startswith(previous) or (raw and not raw.endswith(b'\n')):
         raise ValueError('snapshot_watch_index_prefix_changed_or_torn')

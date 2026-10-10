@@ -12,6 +12,7 @@ import uuid
 
 from causes import campaign_endpoint_transition as endpoint_transition
 from causes import campaign_reader as reader
+from causes import campaign_snapshot as snapshot
 
 WATCH_SOURCE_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
@@ -171,6 +172,24 @@ def bind_snapshot(receipt, frozen, snapshots_root, reader_pins):
     files = {row['path']: row for row in manifest_run['files']}
     if len(files) != len(manifest_run['files']):
         raise ValueError('duplicate_manifest_file')
+    if (manifest.get('schema') == 'caus.reader_input_manifest.v1'
+            or receipt.get('custody_kind') == 'actor_reader_inputs'
+            or receipt.get('schema') == 'caus.reader_input_receipt.v1'):
+        missing = set(snapshot.READER_INPUT_FILES) - files.keys()
+        if (manifest.get('schema') != 'caus.reader_input_manifest.v1'
+                or receipt.get('schema') != 'caus.reader_input_receipt.v1'
+                or receipt.get('custody_kind') != 'actor_reader_inputs'
+                or not set(snapshot.READER_INPUT_FILES[:5]) <= files.keys()
+                or not files.keys() <= set(snapshot.READER_INPUT_FILES)
+                or any(type(row['bytes']) is not int or not 0 <= row['bytes'] <= snapshot.READER_INPUT_FILE_LIMIT
+                       for row in files.values())
+                or manifest_run.get('omitted') != [{'path': name, 'reason': 'named_reader_input_absent'}
+                    for name in snapshot.READER_INPUT_FILES if name in missing]
+                or type(receipt.get('files')) is not int or receipt['files'] != len(files)
+                or type(receipt.get('bytes')) is not int or type(manifest_run.get('bytes')) is not int
+                or receipt.get('bytes') != manifest_run.get('bytes')
+                or receipt.get('bytes') != sum(row['bytes'] for row in files.values())):
+            raise ValueError('reader_input_receipt_manifest_mismatch')
     job, config = frozen['job'], frozen['config']
     actual_config, provenance = config, None
     root_name = str(Path(receipt['run']).parent)
@@ -239,9 +258,120 @@ def stage_context(stage, loaded):
     return messages, initial, prefix, phase
 
 
+def checked_pin(reference):
+    path = snapshot.canonical_path(reference['path'])
+    raw = path.read_bytes()
+    if (type(reference['bytes']) is not int or len(raw) != reference['bytes']
+            or hashlib.sha256(raw).hexdigest() != reference['sha256']):
+        raise ValueError('reader_succession_pin_changed')
+    return raw
+
+
+def validate_input_succession(reference, expected_identity, output):
+    """Validate one reviewed input-feed transition under the reader lock.
+
+    The original identity and completed dispositions remain immutable. Further
+    transitions require a separate contract, rather than silently forming a chain.
+    """
+    output = snapshot.canonical_path(output)
+    meta = output / '.watch'
+    review = json.loads(checked_pin(reference))
+    if (review.get('accepted_reader_input_succession') is not True
+            or review.get('output') != str(output)
+            or reader.encoded(review.get('new_identity')) != reader.encoded(expected_identity)
+            or review['predecessor_identity']['path'] != str(meta / 'IDENTITY.json')):
+        raise ValueError('reader_input_succession_not_accepted')
+    old = json.loads(checked_pin(review['predecessor_identity']))
+    if (set(old) != set(expected_identity) or old['selected_sha256'] != expected_identity['selected_sha256']
+            or type(old['workers']) is not int or type(expected_identity['workers']) is not int
+            or old['workers'] != expected_identity['workers']):
+        raise ValueError('reader_succession_selection_changed')
+    for key in ('old_watcher', 'new_watcher'):
+        checked_pin(review[key])
+    if review['new_watcher']['sha256'] != WATCH_SOURCE_SHA:
+        raise ValueError('reader_succession_source_changed')
+    # Only operational source/plan pins may differ. Reader configuration,
+    # prompts, protocols, frozen allocations and native reader pins stay exact.
+    projected = json.loads(json.dumps(old['pins']))
+    changed = set()
+    for row in review['pin_replacements']:
+        path = row['path']
+        source_alias = len(path) == 2 and path[0] == 'sources' and path[1] in ('reader', 'handoff', 'selection_helper')
+        allowed = (path in (['plan'], ['sources', 'caller'], ['sources', 'watcher'], ['watcher_source_sha256'])
+                   or len(path) == 3 and path[0] == 'per_arm' and path[2] == 'watcher_source_sha256'
+                   or source_alias)
+        if not allowed or tuple(path) in changed:
+            raise ValueError('reader_succession_nonoperational_pin_change')
+        changed.add(tuple(path))
+        parent = projected
+        for part in path[:-1]:
+            parent = parent[part]
+        if reader.encoded(parent[path[-1]]) != reader.encoded(row['old']):
+            raise ValueError('reader_succession_pin_inverse_changed')
+        if path[-1] == 'watcher_source_sha256':
+            if row['old'] != review['old_watcher']['sha256'] or row['new'] != WATCH_SOURCE_SHA:
+                raise ValueError('reader_succession_watcher_digest_changed')
+        else:
+            checked_pin(row['old']); checked_pin(row['new'])
+            if source_alias and any(row['old'][key] != row['new'][key] for key in ('bytes', 'sha256')):
+                raise ValueError('reader_succession_native_source_changed')
+            if path == ['sources', 'watcher'] and (row['old'] != review['old_watcher']
+                                                  or row['new'] != review['new_watcher']):
+                raise ValueError('reader_succession_watcher_pin_changed')
+        parent[path[-1]] = row['new']
+    if reader.encoded(projected) != reader.encoded(expected_identity['pins']):
+        raise ValueError('reader_succession_scientific_pins_changed')
+    old_index = snapshot.canonical_path(old['accepted_index'])
+    new_index = snapshot.canonical_path(expected_identity['accepted_index'])
+    if (old_index.name != 'accepted.jsonl' or new_index != old_index.with_name('reader_inputs.accepted.jsonl')
+            or review['accepted_baseline']['path'] != str(old_index)):
+        raise ValueError('reader_succession_index_scope_changed')
+    baseline = checked_pin(review['accepted_baseline'])
+    if baseline and not baseline.endswith(b'\n'):
+        raise ValueError('reader_succession_torn_index')
+    with new_index.open('rb') as stream:
+        if stream.read(len(baseline)) != baseline:
+            raise ValueError('reader_succession_index_prefix_changed')
+    retired = json.loads(checked_pin(review['retirement_review']))
+    if (retired.get('accepted_reader_retirement') is not True
+            or any(retired.get(key) is not True for key in
+                   ('process_absent', 'watch_lock_acquired_nonblocking', 'all_claimed_terminal'))
+            or type(retired.get('ambiguous_attempts')) is not int or retired['ambiguous_attempts'] != 0
+            or retired['predecessor_identity'] != review['predecessor_identity']
+            or retired['old_watcher'] != review['old_watcher'] or retired['output'] != str(output)
+            or retired['journal_baseline'] != review['journal_baseline']):
+        raise ValueError('reader_succession_predecessor_not_retired')
+    if not retired.get('evidence'):
+        raise ValueError('reader_succession_retirement_evidence_required')
+    for proof in retired['evidence']:
+        checked_pin(proof)
+    journal_path = snapshot.canonical_path(review['journal_baseline']['path'])
+    journal = checked_pin(review['journal_baseline'])
+    if journal_path.is_relative_to(output) or not journal or not journal.endswith(b'\n'):
+        raise ValueError('reader_succession_external_journal_required')
+    rows = [json.loads(line) for line in journal.splitlines()]
+    claimed = {row['key'] for row in rows if row['event'] == 'claimed'}
+    finished = {row['key'] for row in rows if row['event'] in
+                ('finished', 'unresolved_prior_reader_attempt', 'existing_reader_output_not_replayed')}
+    if claimed - finished:
+        raise ValueError('reader_succession_unfinished_claims')
+    with (meta / 'journal.jsonl').open('rb') as stream:
+        if stream.read(len(journal)) != journal:
+            raise ValueError('reader_succession_journal_prefix_changed')
+    receipt = {'schema': 'causes.reader_input_succession.v1', 'review': reference,
+               'predecessor_identity': review['predecessor_identity'], 'new_identity': expected_identity,
+               'accepted_baseline': review['accepted_baseline'], 'journal_baseline': review['journal_baseline']}
+    path = meta / ('INPUT_SUCCESSION.' + reference['sha256'] + '.json')
+    if set(meta.glob('INPUT_SUCCESSION.*.json')) - {path}:
+        raise ValueError('reader_succession_unbound_branch')
+    if path.exists() and json.loads(path.read_bytes()) != receipt:
+        raise ValueError('reader_succession_receipt_changed')
+    return path, receipt
+
+
 class Watcher:
     def __init__(self, selected, checker_config, prompts, pins, accepted, output, pause_file,
-                 client=None, context_runner=None, workers=4, poll_seconds=15):
+                 client=None, context_runner=None, workers=4, poll_seconds=15, input_succession=None):
         if not 1 <= workers <= 4:
             raise ValueError('reader_context_worker_limit')
         self.selected, self.config, self.prompts, self.pins = selected, checker_config, prompts, pins
@@ -250,6 +380,7 @@ class Watcher:
         self.pause_file = Path(pause_file)
         self.client, self.context_runner = client, context_runner or reader.run_context
         self.workers, self.poll = workers, min(30, max(0.005, poll_seconds))
+        self.input_succession = input_succession
         self.output.mkdir(parents=True, exist_ok=True)
         self.meta = self.output / '.watch'
         self.meta.mkdir(exist_ok=True)
@@ -337,9 +468,15 @@ class Watcher:
                         'accepted_index': str(self.accepted), 'workers': self.workers}
             identity_path = self.meta / 'IDENTITY.json'
             if identity_path.exists():
-                if json.loads(identity_path.read_bytes()) != identity:
+                if self.input_succession is not None:
+                    path, receipt = validate_input_succession(self.input_succession, identity, self.output)
+                    if not path.exists():
+                        save(path, receipt)
+                elif json.loads(identity_path.read_bytes()) != identity or list(self.meta.glob('INPUT_SUCCESSION.*.json')):
                     raise ValueError('reader_queue_identity_changed')
             else:
+                if self.input_succession is not None:
+                    raise ValueError('reader_succession_original_identity_required')
                 save(identity_path, identity)
             for row in jsonlines(self.journal, strict=True):
                 if row['event'] == 'claimed':
@@ -444,7 +581,7 @@ def main():
     with OpenAI(api_key=key, base_url='https://api.openai.com/v1', max_retries=0,
                 timeout=config.get('timeout_seconds', 180)) as client:
         Watcher(selected, config, prompts, pins, options['accepted'], options['output'], options['pause_file'],
-                client=client, workers=options['workers']).run()
+                client=client, workers=options['workers'], input_succession=options.get('input_succession')).run()
 
 
 if __name__ == '__main__':
