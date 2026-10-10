@@ -171,7 +171,7 @@ def _journal_prefixes(samples, start, end, owner):
     return result, claims, terminals
 
 
-def _identity_issues(samples, declaration):
+def _identity_issues(samples, declaration, allowed_wait_samples=()):
     issues = []
     expected = {r['role']: r for r in declaration['processes']}
     for i, sample in enumerate(samples):
@@ -191,8 +191,8 @@ def _identity_issues(samples, declaration):
                     or row.get('workers') != declaration['owner']['workers']
                     or row.get('max_full') != declaration['owner']['max_full']):
                 issues.append('capacity_changed:' + str(i))
-        if (not sample.get('storage_guard', {}).get('healthy')
-                or any(sample.get('storage_guard', {}).get('alarms', {}).values())
+        if ((sample['index'] not in allowed_wait_samples and (not sample.get('storage_guard', {}).get('healthy')
+                or any(sample.get('storage_guard', {}).get('alarms', {}).values())))
                 or set(sample.get('controls_present', {})) != set(declaration['controls_absent'])
                 or any(sample.get('controls_present', {}).values())):
             issues.append('storage_or_control_refusal:' + str(i))
@@ -225,14 +225,22 @@ def population(rows, seconds):
             'fully_contained_returned_tokens': sum(r['receipt']['usage']['completion_tokens'] for r in valid if r['fully_contained'])}
 
 
-def summarize_window(samples, start_boundary, end_boundary, window, declaration, *, preceding_sample=None):
+def summarize_window(samples, start_boundary, end_boundary, window, declaration, *, preceding_sample=None, capacity_wait_evidence=None):
     """Project already collected technical metadata; this function has no I/O or controls."""
     lo, hi = epoch(window['start_wall']), epoch(window['end_wall'])
     seconds = window['scheduled_duration_seconds']
     issues = timing_support(samples, [start_boundary, end_boundary], window, declaration, preceding_sample)
     occupancy_samples = ([preceding_sample] if preceding_sample is not None else []) + samples
-    issues += _identity_issues(occupancy_samples, declaration)
     owner = declaration['owner']
+    control_events = [e for log in end_boundary['journals'] if log['group'] == owner['group']
+                      for e in log['events'] if e.get('controller_id') == owner['controller_id']
+                      and lo <= epoch(e['at']) < hi
+                      and e['event'] in {'pause_seen','controller_paused','controller_started','disk_floor_wait','route_quarantined'}]
+    wait_support = {'sample_indices': [], 'event_sha256': []}
+    if capacity_wait_evidence is not None:
+        from causes.campaign_capacity_wait import qualify_capacity_waits
+        wait_support = qualify_capacity_waits(occupancy_samples, control_events, declaration, capacity_wait_evidence)
+    issues += _identity_issues(occupancy_samples, declaration, wait_support['sample_indices'])
     prefixes, claims, terminals = _journal_prefixes(occupancy_samples, start_boundary['journals'], end_boundary['journals'], owner)
     requests, episodes = {}, {}
     for boundary in [start_boundary, end_boundary]:
@@ -295,11 +303,9 @@ def summarize_window(samples, start_boundary, end_boundary, window, declaration,
                        'terminal': terminal, 'terminal_in_window': end is not None and lo <= end < hi,
                        'classification': classification, 'terminal_metadata': metadata,
                        'occupied_seconds': max(0, min(end if end is not None else hi, hi) - max(start, lo))})
-    for log in end_boundary['journals']:
-        if log['group'] == owner['group'] and any(
-                e.get('controller_id') == owner['controller_id'] and lo <= epoch(e['at']) < hi
-                and e['event'] in {'pause_seen','controller_paused','controller_started','disk_floor_wait','route_quarantined'}
-                for e in log['events']):
+    for event in control_events:
+        event_digest = hashlib.sha256(json.dumps(event, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+        if event['event'] != 'disk_floor_wait' or event_digest not in wait_support['event_sha256']:
             issues.append('current_owner_pause_restart_floor_or_quarantine')
     request_rows = []
     for row in requests.values():
@@ -370,7 +376,7 @@ def summarize_window(samples, start_boundary, end_boundary, window, declaration,
     for full, phase, band in sorted({(r['full'], r['phase'], token_band(r)) for r in request_rows if r['completed_in_window']}):
         rows = [r for r in request_rows if (r['full'],r['phase'],token_band(r)) == (full,phase,band)]
         prompt_bands.append({'full': full, 'phase': phase, 'prompt_band': band, **population(rows, seconds)})
-    return {'schema': 'causes.capacity_window_summary.v1', 'window': window,
+    return {'schema': 'causes.capacity_window_summary.v1', 'capacity_wait_support': wait_support, 'window': window,
             'support': {'supported': not issues, 'issues': sorted(set(issues))},
             'requests': request_rows, 'actors': actors, 'metrics': result_metrics,
             'descriptive': {'counter_intervals': counter_info, 'owner_projection': owner,
@@ -441,6 +447,20 @@ def actor_terminal_guard(actors, criteria, lo, hi, *, cohort_start):
             'technical': failed, 'unknown': len(unknown), 'selected_run_ids': [r['run_id'] for r in selected]}
 
 
+def request_failure_guard(measurements, reference_measurements):
+    """The adopted dense/sparse full and overall predicates, shared by endpoints."""
+    m, b, reasons = measurements, reference_measurements, []
+    for name, key, add, floor, minimum, failures, sparse_actors in [
+            ('full','full_timeout_and_technical_failure',.04,.08,20,3,2),
+            ('overall','overall_timeout_and_technical_failure',.03,.05,30,4,3)]:
+        n, f = m[name]['completed'], m[name]['failed']
+        threshold = max(floor, b[name]['failure_fraction'] + add)
+        if ((n >= minimum and f >= failures and m[name]['failure_fraction'] > threshold)
+                or (n < minimum and f >= failures and m[name]['failed_actors'] >= sparse_actors)):
+            reasons.append(name + '_request_failure_guard')
+    return reasons
+
+
 def evaluate_candidate(summary, reference, criteria, *, prior_blocks=(), cohort_start=None,
                        cumulative_actors=None, confirmation=False):
     """Evaluate fixed endpoints only; callers separately apply reviewed control actions."""
@@ -455,14 +475,8 @@ def evaluate_candidate(summary, reference, criteria, *, prior_blocks=(), cohort_
     require(summary['window']['scheduled_duration_seconds'] == expected_seconds, 'candidate_window_duration')
     if m['mean_active_full'] < 3.5:
         reasons.append('candidate_full_exposure');hold = True
-    for name, key, add, floor, minimum, failures, sparse_actors in [
-            ('full','full_timeout_and_technical_failure',.04,.08,20,3,2),
-            ('overall','overall_timeout_and_technical_failure',.03,.05,30,4,3)]:
-        n, f = m[name]['completed'], m[name]['failed']
-        threshold = max(floor, b[name]['failure_fraction'] + add)
-        if ((n >= minimum and f >= failures and m[name]['failure_fraction'] > threshold)
-                or (n < minimum and f >= failures and m[name]['failed_actors'] >= sparse_actors)):
-            reasons.append(name + '_request_failure_guard');hold = True
+    failure_reasons = request_failure_guard(m, b)
+    reasons += failure_reasons; hold = hold or bool(failure_reasons)
     lo, hi = epoch(summary['window']['start_wall']), epoch(summary['window']['end_wall'])
     require(cohort_start is not None and cumulative_actors is not None, 'candidate_actor_cohort_required')
     actor_checks = [actor_terminal_guard(summary['actors'],criteria,lo,hi,cohort_start=cohort_start),
@@ -499,6 +513,96 @@ def evaluate_candidate(summary, reference, criteria, *, prior_blocks=(), cohort_
     return {'supported': summary['support']['supported'] and not any('support' in r for r in reasons),
             'decision':'hold' if hold else 'inconclusive' if reasons else 'eligible_candidate' if confirmation else 'continue_confirmation',
             'reasons':sorted(set(reasons)),'measurements':m,'ratios':ratios,'actor_guards':actor_checks,
+            'runtime_actions':False,'capacity_change_authorized':False}
+
+
+def evaluate_prelude(boundary, declaration, reference, criteria, *, cohort_start, end_wall):
+    """Check [first candidate claim,t0) technical health without a progress gate.
+
+    Malformed metadata raises and must hold the caller. Empty exposure is allowed;
+    this is a health check, never fixed-window performance qualification.
+    """
+    require(reference['decision'] == 'eligible_reference' and reference['supported'], 'unqualified_reference')
+    require(finite(cohort_start), 'prelude_cohort_start_required')
+    lo, hi = cohort_start, epoch(end_wall)
+    require(hi >= lo, 'prelude_end_precedes_cohort')
+    owner = declaration['owner']; logs = boundary['journals']
+    require(owner['workers'] == 8 and owner['max_full'] == 4, 'candidate_prelude_capacity_required')
+    require({row['group'] for row in logs} == set(declaration['groups']), 'prelude_journal_group_set')
+    _, claims, terminals = _journal_prefixes([], logs, logs, owner)
+    require(claims and min(epoch(row['at']) for row in claims.values()) == lo, 'prelude_first_claim_changed')
+    projection = boundary['requests']
+    require(not projection['metadata_errors'], 'prelude_request_projection_errors')
+    episodes, seen, actors, issues = {}, set(), [], []
+    for row in projection['episodes']:
+        key = row['group'], row['run_id']
+        require(key not in seen, 'prelude_duplicate_episode'); seen.add(key)
+        if row['group'] != owner['group'] or row['claim'].get('controller_id') != owner['controller_id']:
+            continue
+        require(claims.get(row['run_id']) == row['claim'], 'prelude_claim_mismatch')
+        require(bool(row['full']) == bool(row['claim']['full']), 'prelude_episode_full_mismatch')
+        terminal = terminals.get(row['run_id'])
+        if terminal:
+            require(epoch(terminal['at']) >= epoch(row['claim']['at']), 'prelude_terminal_precedes_claim')
+        if row['final']:
+            require(terminal is not None and row['final']['controller_id'] == owner['controller_id']
+                    and epoch(terminal['at']) <= epoch(row['final']['at']), 'prelude_terminal_mismatch')
+        metadata = row.get('terminal_metadata')
+        classification = metadata.get('classification') if metadata else 'unprojected'
+        require(classification in {'natural','censored','technical','unknown','unprojected'}, 'prelude_terminal_class_invalid')
+        if row['full'] and terminal and lo <= epoch(terminal['at']) < hi and classification in ('unknown','unprojected'):
+            issues.append('prelude_terminal_metadata_unsupported:' + row['run_id'])
+        episodes[key] = dict(row, final=terminal)
+        actors.append({'run_id':row['run_id'],'full':bool(row['full']),'claim':row['claim'],
+                       'terminal':terminal,'classification':classification,'terminal_metadata':metadata})
+    require(set(claims) <= {run for _,run in episodes}, 'prelude_current_episode_missing')
+    seen, requests = set(), []
+    for row in projection['requests']:
+        key = row['group'], row['run_id'], row['relative_request_directory']
+        require(key not in seen, 'prelude_duplicate_request'); seen.add(key)
+        episode = episodes.get((row['group'],row['run_id']))
+        if episode is None:
+            require(row['group'] != owner['group'], 'prelude_request_episode_missing')
+            continue
+        require(bool(row['full']) == bool(episode['full']), 'prelude_request_full_mismatch')
+        start = epoch(row['attempt']['started_at']); receipt = row['receipt']
+        finish = epoch(receipt['finished_at']) if receipt else None
+        require(start >= epoch(episode['claim']['at']), 'prelude_request_precedes_claim')
+        require(finish is None or finish >= start, 'prelude_receipt_precedes_attempt')
+        if receipt is None:
+            require(row['receipt_pin'] is None, 'prelude_receipt_pin_without_receipt')
+        if start < hi and receipt is None and episode['final'] is not None and epoch(episode['final']['at']) < hi:
+            issues.append('prelude_terminal_request_missing_receipt:' + row['run_id'])
+        if finish is not None and lo <= finish < hi:
+            requests.append(row)
+    measurements = {}
+    for name, rows in [('overall',requests),('full',[r for r in requests if r['full']])]:
+        success = [r for r in rows if r['receipt'].get('status') == 'complete']
+        failure = [r for r in rows if r['receipt'].get('status') != 'complete']
+        metadata_ok = all(type((r['receipt'].get('usage') or {}).get('completion_tokens')) is int
+                          and r['receipt']['usage']['completion_tokens'] >= 0
+                          and finite(r['receipt'].get('elapsed_seconds')) and r['receipt']['elapsed_seconds'] > 0
+                          for r in success)
+        if not metadata_ok: issues.append('prelude_' + name + '_request_metadata_integrity')
+        measurements[name] = {'completed':len(rows),'successful':len(success),'failed':len(failure),
+            'successful_actors':len({r['run_id'] for r in success}),
+            'failed_actors':len({r['run_id'] for r in failure}),
+            'failure_fraction':len(failure)/len(rows) if rows else None,
+            'request_metadata_supported':metadata_ok}
+    for log in logs:
+        if log['group'] == owner['group'] and any(e.get('controller_id') == owner['controller_id']
+                and lo <= epoch(e['at']) < hi and e['event'] in
+                {'pause_seen','controller_paused','controller_started','disk_floor_wait','route_quarantined'}
+                for e in log['events']):
+            issues.append('prelude_owner_pause_restart_floor_or_quarantine')
+    reasons = issues + request_failure_guard(measurements, reference['measurements'])
+    actor = actor_terminal_guard(actors,criteria,lo,hi,cohort_start=lo)
+    if actor['hold']: reasons.append('full_actor_terminal_guard')
+    return {'schema':'causes.capacity_prelude_evaluation.v1','supported':not issues and actor['supported'],
+            'decision':'hold' if reasons else 'continue_confirmation','reasons':sorted(set(reasons)),
+            'interval':{'first_claim_epoch':lo,'end_wall':end_wall,'half_open':True},
+            'measurements':measurements,'actor_guard':actor,
+            'progress_duration_and_occupancy_qualification_performed':False,
             'runtime_actions':False,'capacity_change_authorized':False}
 
 
