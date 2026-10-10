@@ -109,7 +109,8 @@ def qualify_observation(value, policy, replay, *, initial=False, at=None):
     require(set(value['controls']) == set(policy['remote_pause_paths'])
             and all(state is False for state in value['controls'].values()), 'remote_pause_present_or_unknown')
     resources = value['resources']
-    for key, minimum in (('local_free_bytes', 80 * 1024**3),
+    local_floor = core.local_space_floor(policy.get('local_free_space_floor_bytes', core.DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES))
+    for key, minimum in (('local_free_bytes', local_floor),
                          ('remote_root_free_bytes', 20 * 1024**3),
                          ('remote_scratch_free_bytes', 80 * 1024**3)):
         if type(resources[key]) is not int or resources[key] < minimum:
@@ -235,6 +236,9 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
     require(adoption['phase'] == policy['phase'] and type(adoption['max_clients']) is int
             and adoption['max_clients'] == policy['max_clients'],
             'adoption_scope_changed')
+    local_floor = core.local_space_floor(policy.get('local_free_space_floor_bytes', core.DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES))
+    adopted_floor = core.local_space_floor(adoption.get('local_free_space_floor_bytes', core.DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES))
+    require(adopted_floor == local_floor, 'adoption_storage_floor_changed')
     require(type(policy['initial_failures']) is int and 0 <= policy['initial_failures'] < 3,
             'qualified_failure_baseline_required')
     recent(adoption['at'], 180)
@@ -332,13 +336,15 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
         core.save(invocation / 'INTENT.json', {'at': core.now(), 'policy': policy_reference,
                    'adoption': adoption_reference, 'phase': policy['phase'], 'pid': os.getpid(),
                    'max_clients': policy['max_clients'],
+                   'local_free_space_floor_bytes': local_floor,
                    'measurement_ids': [j['measurement_id'] for j in jobs], 'initial': initial,
                    'original_endpoint': original['endpoint'], 'transport_endpoint': transport['endpoint']})
         try:
             result = core.run_queue(output, jobs,
                 lambda job, destination: core.probe_measurement(job, destination, request_check, transport, runner),
                 admit, request_check, policy['local_pause_paths'], family=family, model=model,
-                initial_failures=policy['initial_failures'], phase=policy['phase'], max_clients=policy['max_clients'])
+                initial_failures=policy['initial_failures'], phase=policy['phase'], max_clients=policy['max_clients'],
+                local_free_space_floor_bytes=local_floor)
             core.save(invocation / 'RESULT.json', result)
             return result
         except BaseException as error:
