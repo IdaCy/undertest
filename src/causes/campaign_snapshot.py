@@ -13,6 +13,17 @@ import subprocess
 import uuid
 
 
+class SnapshotSpaceHold(RuntimeError):
+    """A retained manifest could not fit above the configured local reserve."""
+
+    def __init__(self, attempt, required_bytes, available_bytes, floor_bytes):
+        super().__init__('configured snapshot free-space floor would be crossed')
+        self.attempt = Path(attempt)
+        self.required_bytes = required_bytes
+        self.available_bytes = available_bytes
+        self.floor_bytes = floor_bytes
+
+
 @dataclass(frozen=True)
 class SnapshotConfig:
     host: str
@@ -235,8 +246,9 @@ def _synchronize_under_lock(config, authorize, authorization):
     save(attempt / 'MANIFEST.json', manifest)
     validate_manifest(manifest, config, set(accepted))
     required = sum(row['bytes'] for row in manifest['runs'])
-    if shutil.disk_usage(destination).free < required + config.free_space_floor_bytes:
-        raise RuntimeError('configured snapshot free-space floor would be crossed')
+    available = shutil.disk_usage(destination).free
+    if available < required + config.free_space_floor_bytes:
+        raise SnapshotSpaceHold(attempt, required, available, config.free_space_floor_bytes)
     paths = []
     for row in manifest['runs']:
         for item in row['files']:
