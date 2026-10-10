@@ -176,6 +176,48 @@ class ReaderWatcherTests(unittest.TestCase):
         rows = watch.jsonlines(self.output / '.watch/journal.jsonl', strict=True)
         self.assertTrue(any(row['event'] == 'existing_reader_output_not_replayed' for row in rows))
 
+    def test_run_subset_preserves_jobs_and_skips_other_accepted_runs(self):
+        ignored = copy.deepcopy(self.frozen)
+        ignored['job']['allocation']['run_id'] = 'ignored'
+        selected = {'fixture': self.frozen, 'ignored': ignored}
+        original = watch.reader.encoded(selected)
+        self.assertIs(watch.select_runs(selected), selected)
+        subset = watch.select_runs(selected, ['fixture'])
+        self.assertIs(subset['fixture'], self.frozen)
+        excluded_receipt = dict(self.receipt, run='runs/mi27/ignored')
+        self.accepted.write_text(json.dumps(excluded_receipt) + '\n' + json.dumps(self.receipt) + '\n')
+        calls = []
+        def runner(client, config, prompts, messages, boundary, destination, **kwargs):
+            calls.append(destination.name)
+            if len(calls) == 2:
+                self.pause.touch()
+            destination.mkdir(parents=True)
+            result = {'instruments': {'presence': {'status': 'validated'}}}
+            watch.save(destination / 'RESULT.json', result)
+            return result
+        watcher = watch.Watcher(subset, {}, Path('.'), {'pin': 'qualified'}, self.accepted,
+                                self.output, self.pause, context_runner=runner, workers=1, poll_seconds=0.005)
+        self.run_watcher(watcher)
+        self.assertEqual(calls, ['early', 'end'])
+        self.assertFalse((self.output / 'mi27/ignored').exists())
+        self.assertEqual(watch.reader.encoded(selected), original)
+        self.assertEqual(watch.jsonlines(watcher.journal, strict=True)[0]['selected_stages'], 2)
+        self.run_watcher(watch.Watcher(subset, {}, Path('.'), {'pin': 'qualified'}, self.accepted,
+                         self.output, self.pause, context_runner=lambda *a, **k: self.fail('replayed'), workers=1))
+        with self.assertRaisesRegex(ValueError, 'reader_queue_identity_changed'):
+            watch.Watcher(selected, {}, Path('.'), {'pin': 'qualified'}, self.accepted, self.output,
+                          self.pause, context_runner=lambda *a, **k: self.fail('changed identity called reader'),
+                          workers=1).run()
+
+    def test_run_subset_rejects_unknown_duplicate_and_invalid_ids(self):
+        selected = {'fixture': self.frozen}
+        for ids in ([], 'fixture', ['fixture', 'fixture'], [''], ['.'], ['..'], ['../fixture'],
+                    [None], [True], [{}]):
+            with self.subTest(run_ids=ids), self.assertRaisesRegex(ValueError, 'explicit_distinct_run_ids_required'):
+                watch.select_runs(selected, ids)
+        with self.assertRaisesRegex(ValueError, 'unknown_reader_run_id'):
+            watch.select_runs(selected, ['fixture', 'missing'])
+
     def test_missing_stage_is_explicit_technical_missing_without_api(self):
         binding, loaded = watch.bind_snapshot(self.receipt, self.frozen, self.snapshots, {})
         del loaded['end_context.json']
@@ -245,6 +287,12 @@ class ReaderWatcherTests(unittest.TestCase):
         self.assertEqual(config, {'timeout_seconds': 180})
         self.assertEqual(prompts, kwargs['prompts_path'])
         self.assertEqual(pins['prompts']['presence'], watch.file_sha(prompts / 'presence.txt'))
+        subset, _, _, _ = watch.load_frozen(protocol, milestone, **{**kwargs, 'models': ['first', 'second']},
+                                            run_ids=['second'])
+        self.assertEqual(list(subset), ['second'])
+        self.assertEqual(subset['second'], selected['second'])
+        with self.assertRaisesRegex(ValueError, 'unknown_reader_run_id'):
+            watch.load_frozen(protocol, milestone, **kwargs, run_ids=['first'])
         other = self.base / 'same_bytes_unqualified.json'
         other.write_bytes(kwargs['checker_config_path'].read_bytes())
         with self.assertRaisesRegex(ValueError, 'configured_reader_input_not_qualified'):
@@ -266,6 +314,9 @@ class ReaderWatcherTests(unittest.TestCase):
         self.assertEqual(watch.load_configuration(path)['models'], ('first', 'second'))
         for changed, reason in [({'models': ['first', 'first']}, 'explicit_distinct_model_roster'),
                                 ({'models': ['../outside']}, 'explicit_distinct_model_roster'),
+                                ({'run_ids': None}, 'explicit_distinct_run_ids_required'),
+                                ({'run_ids': []}, 'explicit_distinct_run_ids_required'),
+                                ({'run_ids': ['first', 'first']}, 'explicit_distinct_run_ids_required'),
                                 ({'accepted': 'relative/index'}, 'explicit_absolute_configuration_path'),
                                 ({'workers': 5}, 'reader_context_worker_limit')]:
             path.write_text(json.dumps({**config, **changed}))

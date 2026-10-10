@@ -221,8 +221,29 @@ def observe_owner(expected, *, max_journal_bytes=256 * 1024**2):
         require(state != 'waiting' or not blocks, 'waiting_storage_owner_created_block')
         guard = expected['guard']
         require(guard['binding']['output'] == str(root), 'storage_guard_owner_output_changed')
+        guard_options = {}
+        if 'reporter_source' in guard:
+            source = guard['reporter_source']
+            require(type(source) is dict and type(expected.get('launch_owner_receipt')) is dict,
+                    'storage_guard_reporter_receipt_required')
+            receipt_ref = expected['launch_owner_receipt']
+            receipt = h.checked(receipt_ref)
+            require(receipt['process'] == process
+                    and receipt['controller_id'] == expected['controller_id']
+                    and receipt['binding']['output'] == str(root)
+                    and receipt['binding']['storage_binding'] == guard['binding']
+                    and receipt['guard_directory'] == guard['directory']
+                    and receipt['guard_reporting_lock'] == guard['reporting_lock']
+                    and receipt['binding']['storage_source_sha256'] == source['sha256'],
+                    'storage_guard_reporter_receipt_changed')
+            h.checked_bytes(source)
+            references['guard_reporter_source'] = source
+            references['launch_owner_receipt'] = receipt_ref
+            result['metadata_pins'].update(guard_reporter_source=source,
+                                           launch_owner_receipt=receipt_ref)
+            guard_options['reporter_source'] = source
         result['guard'] = observe_guard(guard['directory'], guard['binding'], process,
-                                        guard['reporting_lock'])
+                                        guard['reporting_lock'], **guard_options)
         require(result['guard']['healthy'], 'storage_guard_observation_unhealthy')
     result['process_after'] = _ownership(expected)
     for reference in references.values():
