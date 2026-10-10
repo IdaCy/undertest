@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from causes.campaign_prompt_partition import partition_prompt_queue
+from causes.campaign_prompt_partition import partition_prompt_queue, partition_unclaimed_prompt_queue
 
 
 def fixture():
@@ -122,6 +122,57 @@ class PartitionTests(unittest.TestCase):
             self.call(jobs, systems, hosts)
         with self.assertRaises(ValueError):
             self.call([], {}, {})
+
+
+class UnclaimedPartitionTests(unittest.TestCase):
+    def call(self, jobs, systems, hosts, claimed):
+        return partition_unclaimed_prompt_queue(jobs, systems, hosts, claimed,
+                                               previous_host='h1', expected_arm_ids=('a', 'b'))
+
+    def test_partial_and_completed_pairs_preserve_disjoint_remaining_cover(self):
+        jobs, systems, hosts = fixture()
+        before = copy.deepcopy((jobs, systems, hosts))
+        claimed = ['p3_b', 'p1_a', 'p3_a']
+        result = self.call(jobs, systems, hosts, claimed)
+        self.assertEqual([job['allocation']['run_id'] for job in result['h1']['jobs']], ['p1_b'])
+        self.assertEqual(result['h1']['pair_ids'], ['p1'])
+        self.assertEqual([job['allocation']['run_id'] for job in result['h2']['jobs']], ['p2_b', 'p2_a'])
+        self.assertEqual(result['h2']['pair_ids'], ['p2'])
+        remaining = {job['allocation']['run_id']: job for shard in result.values() for job in shard['jobs']}
+        self.assertFalse(set(remaining) & set(claimed))
+        self.assertEqual(set(remaining) | set(claimed), set(systems))
+        self.assertEqual(remaining, {job['allocation']['run_id']: job for job in jobs
+                                     if job['allocation']['run_id'] not in claimed})
+        self.assertEqual({rid: text for shard in result.values() for rid, text in shard['system_prompts'].items()},
+                         {rid: text for rid, text in systems.items() if rid not in claimed})
+        result['h1']['jobs'][0]['spec']['task_id'] = 'changed'
+        self.assertEqual((jobs, systems, hosts), before)
+
+    def test_started_pair_cannot_move_even_if_every_arm_already_claimed(self):
+        for claimed in (['p1_a'], ['p1_a', 'p1_b']):
+            jobs, systems, hosts = fixture()
+            hosts['p1'] = 'h2'
+            with self.subTest(claimed=claimed), self.assertRaisesRegex(ValueError, 'started_pair_host_changed'):
+                self.call(jobs, systems, hosts, claimed)
+
+    def test_no_claims_matches_original_and_all_claimed_produces_empty_shard(self):
+        jobs, systems, hosts = fixture()
+        self.assertEqual(self.call(jobs, systems, hosts, []),
+                         partition_prompt_queue(jobs, systems, hosts, expected_arm_ids=('a', 'b')))
+        hosts = {pair: 'h1' for pair in hosts}
+        self.assertEqual(self.call(jobs, systems, hosts, list(systems)),
+                         {'h1': {'jobs': [], 'system_prompts': {}, 'pair_ids': []}})
+
+    def test_unknown_duplicate_and_malformed_claims_rejected(self):
+        for claimed in (['unknown'], ['p1_a', 'p1_a'], [''], [None], [[]], 'p1_a', {'p1_a'}):
+            with self.subTest(claimed=claimed), self.assertRaises(ValueError):
+                self.call(*fixture(), claimed)
+
+    def test_original_pair_integrity_is_checked_before_claim_filtering(self):
+        jobs, systems, hosts = fixture()
+        jobs[1]['allocation']['seed'] = 8
+        with self.assertRaisesRegex(ValueError, 'paired_job_mismatch'):
+            self.call(jobs, systems, hosts, ['p1_a', 'p1_b'])
 
 
 if __name__ == '__main__':
