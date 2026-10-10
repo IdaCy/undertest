@@ -422,6 +422,100 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(len([row for row in events if row['event'] == 'unresolved_completed_evidence']), 1)
         self.assertFalse(any(row['event'] == 'claimed' for row in events))
 
+    def test_interleaved_prefix_extensions_share_capacity_and_preserve_prompts(self):
+        jobs = [job('full_a', True), job('full_b', True), job('fixed_prefix')]
+        frozen_jobs = copy.deepcopy(jobs)
+        prompts = {row['allocation']['run_id']: 'fixed ' + row['allocation']['run_id'] for row in jobs}
+        scope = {'namespace': 'extra_prefix', 'system_prompt': 'Explicit baseline prompt'}
+        frozen_scope = copy.deepcopy(scope)
+        prototype = job('prototype')
+        extra_started, full_b_started = threading.Event(), threading.Event()
+        mutex = threading.Lock()
+        seen, active, maximum = {}, [0, 0], [0, 0]
+
+        def runner(spec, variant, config, allocation, output):
+            run_id = allocation['run_id']
+            with mutex:
+                active[0] += 1
+                active[1] += int(allocation['continue_to_end'])
+                maximum[:] = [max(a, b) for a, b in zip(maximum, active)]
+                seen[run_id] = (copy.deepcopy(allocation), copy.deepcopy(config))
+            if run_id == 'full_a':
+                self.assertTrue(extra_started.wait(2), 'free prefix slot stayed idle behind a full backlog')
+            elif run_id == 'full_b':
+                full_b_started.set()
+            elif allocation['stage'] == 'corpus_extension':
+                extra_started.set()
+                self.assertTrue(full_b_started.wait(2), 'extension displaced the waiting fixed full job')
+                self.pause.touch()
+            result = finish(spec, variant, config, allocation, output)
+            with mutex:
+                active[0] -= 1
+                active[1] -= int(allocation['continue_to_end'])
+            return result
+
+        dispatcher = self.dispatcher(jobs, runner, workers=2, max_full=1,
+                                    extension_prototypes=[prototype], system_prompts_by_run_id=prompts,
+                                    prefix_extension=scope)
+        scope['system_prompt'] = 'caller mutation'
+        self.run_bounded(dispatcher)
+        self.assertEqual(maximum, [2, 1])
+        self.assertEqual(len(seen), 4)
+        self.assertEqual(jobs, frozen_jobs)
+        for row in jobs:
+            run_id = row['allocation']['run_id']
+            self.assertEqual(seen[run_id], (row['allocation'], {**self.config, 'system': prompts[run_id]}))
+        extra = next((allocation, config) for rid, (allocation, config) in seen.items() if rid not in prompts)
+        self.assertTrue(extra[0]['run_id'].startswith('extra_prefix_b00000000_'))
+        self.assertEqual(extra[0]['extension_namespace'], 'extra_prefix')
+        self.assertIs(extra[0]['continue_to_end'], False)
+        self.assertIs(extra[0]['fixed_study_inference'], False)
+        self.assertEqual(extra[1], {**self.config, 'system': frozen_scope['system_prompt']})
+        identity = json.loads((self.output / '.dispatcher/queue_identity.json').read_text())
+        self.assertEqual(identity['prefix_extension_sha256'], sha(frozen_scope))
+        self.run_bounded(self.dispatcher(jobs, lambda *args: self.fail('completed work replayed'),
+                                        workers=2, max_full=1, extension_prototypes=[prototype],
+                                        system_prompts_by_run_id=prompts, prefix_extension=frozen_scope))
+        self.assertEqual(len([row for row in self.events() if row['event'] == 'claimed']), 4)
+        with self.assertRaisesRegex(RuntimeError, 'queue_identity_changed'):
+            self.run_bounded(self.dispatcher(jobs, lambda *args: self.fail('changed baseline admitted'),
+                                            extension_prototypes=[prototype], system_prompts_by_run_id=prompts,
+                                            prefix_extension=scope))
+
+    def test_prefix_extension_requires_explicit_disjoint_prefix_scope(self):
+        scope = {'namespace': 'extra', 'system_prompt': 'baseline'}
+        common = {'extension_prototypes': [job('prototype')],
+                  'system_prompts_by_run_id': {'fixed': 'arm'}, 'prefix_extension': scope}
+        invalid = [
+            {'prefix_extension': {'namespace': '../escape', 'system_prompt': 'baseline'}},
+            {'prefix_extension': {'namespace': 'extra', 'system_prompt': None}},
+            {'prefix_extension': {**scope, 'unexpected': True}},
+            {'extension_prototypes': []},
+            {'extension_prototypes': [job('full_prototype', True)]},
+            {'system_prompts_by_run_id': None},
+        ]
+        intervention = job('arm_prototype')
+        intervention['allocation']['system_prompt_intervention'] = {'arm': 'fixed'}
+        invalid.append({'extension_prototypes': [intervention]})
+        for change in invalid:
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'invalid_prefix_extension_scope'):
+                self.dispatcher([job('fixed')], lambda *args: None, **(common | change))
+        with self.assertRaisesRegex(ValueError, 'invalid_prefix_extension_scope'):
+            self.dispatcher([job('extra_b_fixed')], lambda *args: None,
+                            **(common | {'system_prompts_by_run_id': {'extra_b_fixed': 'arm'}}))
+
+    def test_prefix_extension_namespace_separates_ids_and_seed_streams(self):
+        prototypes = [job('prototype')]
+        prototypes[0]['allocation']['pair_id'] = 'original_pair'
+        original = copy.deepcopy(prototypes)
+        first = extension_block(prototypes, self.config, 0, namespace='first')
+        second = extension_block(prototypes, self.config, 0, namespace='second')
+        self.assertEqual(first, extension_block(prototypes, self.config, 0, namespace='first'))
+        self.assertNotEqual(first['jobs'][0]['allocation']['run_id'], second['jobs'][0]['allocation']['run_id'])
+        self.assertNotEqual(first['jobs'][0]['allocation']['seed'], second['jobs'][0]['allocation']['seed'])
+        self.assertNotEqual(first['jobs'][0]['allocation']['pair_id'], second['jobs'][0]['allocation']['pair_id'])
+        self.assertEqual(prototypes, original)
+
     def test_system_prompt_cli_verifies_mapping_file_before_dispatch(self):
         import hashlib
         from unittest.mock import patch
@@ -442,6 +536,33 @@ class DispatcherTests(unittest.TestCase):
             campaign_dispatcher.main()
             self.assertEqual(constructor.call_args.kwargs['system_prompts_by_run_id'], inputs['prompts'])
             paths['prompts'].write_text(json.dumps({'a': 'changed'}))
+            constructor.reset_mock()
+            with self.assertRaises(ValueError):
+                campaign_dispatcher.main()
+            constructor.assert_not_called()
+
+    def test_prefix_extension_cli_verifies_its_separate_policy(self):
+        import hashlib
+        from unittest.mock import patch
+        from causes import campaign_dispatcher
+
+        values = {'jobs': [job('fixed')], 'config': self.config, 'prototypes': [job('proto')],
+                  'prompts': {'fixed': 'arm'},
+                  'prefix': {'namespace': 'extra', 'system_prompt': 'baseline'}}
+        paths = {name: Path(self.temporary.name) / (name + '.json') for name in values}
+        for name, value in values.items():
+            paths[name].write_text(json.dumps(value))
+        digest = lambda name: hashlib.sha256(paths[name].read_bytes()).hexdigest()
+        args = ['dispatcher', '--jobs', str(paths['jobs']), '--config', str(paths['config']),
+                '--output', str(self.output), '--extension-prototypes', str(paths['prototypes']),
+                '--pause-file', str(self.pause), '--system-prompts', str(paths['prompts']),
+                '--system-prompts-sha256', digest('prompts'), '--prefix-extension', str(paths['prefix']),
+                '--prefix-extension-sha256', digest('prefix')]
+        with patch('sys.argv', args), patch.object(campaign_dispatcher, 'Dispatcher') as constructor, patch('builtins.print'):
+            constructor.return_value.run.return_value = {}
+            campaign_dispatcher.main()
+            self.assertEqual(constructor.call_args.kwargs['prefix_extension'], values['prefix'])
+            paths['prefix'].write_text(json.dumps({**values['prefix'], 'system_prompt': 'changed'}))
             constructor.reset_mock()
             with self.assertRaises(ValueError):
                 campaign_dispatcher.main()
