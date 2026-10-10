@@ -4,7 +4,7 @@ The caller owns authorization, an exclusive family lock, immutable input/source 
 
 Each output directory and its .control journal belong to exactly one immutable family/model binding. The journal is not multiplexed: a different model or family needs a separate output and control journal, with any applicable prior histories qualified explicitly by the caller.
 
-The queue retains the two-client ceiling and 80 GiB local-storage floor. Callers may choose a stricter single-client bound; any host-specific resource or scientific scope must be qualified separately. Importing this module performs no I/O.
+The queue retains the two-client ceiling and defaults to an 80 GiB local-storage floor. Callers may select a reviewed positive floor or a stricter single-client bound; any host-specific resource or scientific scope must be qualified separately. Importing this module performs no I/O.
 """
 import concurrent.futures
 import copy
@@ -16,6 +16,15 @@ from pathlib import Path
 import re
 import shutil
 import threading
+
+
+DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES = 80 * 1024**3
+
+
+def local_space_floor(value):
+    if type(value) is not int or value <= 0:
+        raise IntegrityError('invalid_local_space_floor')
+    return value
 
 
 def namespace_component(value):
@@ -274,12 +283,13 @@ def prepare_request(job, contexts, config, runner):
     return context, question
 
 
-def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, *, family, model, initial_failures=0, phase='pilot', max_clients=2):
+def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, *, family, model, initial_failures=0, phase='pilot', max_clients=2, local_free_space_floor_bytes=DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES):
     """Caller holds the unique family lock and binds this output/journal to one family/model. A partial attempt is never replayed."""
     if type(max_clients) is not int or max_clients not in (1, 2):
         raise IntegrityError('client_cap')
     if type(initial_failures) is not int or initial_failures < 0:
         raise IntegrityError('initial_failure_count')
+    local_free_space_floor_bytes = local_space_floor(local_free_space_floor_bytes)
     output = canonical(output)
     namespace_component(family)
     namespace_component(model)
@@ -304,7 +314,7 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
     if ambiguous:
         journal(log, {'event': 'unresolved_prior_attempt', 'measurement_ids': ambiguous})
         raise AdmissionHold('partial_attempt_requires_manual_reconciliation')
-    journal(log, {'event': 'controller_started', 'phase': phase, 'existing_finals': len(existing), 'pending': len(pending), 'inherited_failures': failures})
+    journal(log, {'event': 'controller_started', 'phase': phase, 'existing_finals': len(existing), 'pending': len(pending), 'inherited_failures': failures, 'local_free_space_floor_bytes': local_free_space_floor_bytes})
     stopped = threading.Event()
     lock = threading.Lock()
     stop_reason = None
@@ -361,8 +371,10 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
                 try:
                     if any(path.exists() for path in pause_paths):
                         raise AdmissionHold('operator_pause')
-                    if shutil.disk_usage(output).free < 80 * 1024**3:
-                        raise AdmissionHold('local_disk_below80GiB')
+                    if shutil.disk_usage(output).free < local_free_space_floor_bytes:
+                        reason = ('local_disk_below80GiB' if local_free_space_floor_bytes == DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES
+                                  else 'local_disk_below_floor:' + str(local_free_space_floor_bytes))
+                        raise AdmissionHold(reason)
                     observation = admission_check()
                     job = pending[0]
                     source_check(job)
@@ -392,7 +404,7 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
                 break
             done, _ = concurrent.futures.wait(active, timeout=.5, return_when=concurrent.futures.FIRST_COMPLETED)
             harvest(active, done)
-    result = {'at': now(), 'phase': phase, 'existing_final': len(existing), 'new_final': len(completed), 'remaining_unclaimed': len(pending), 'stop_reason': stop_reason, 'consecutive_failures': failures, 'active': 0, 'completed_ids': completed}
+    result = {'at': now(), 'phase': phase, 'existing_final': len(existing), 'new_final': len(completed), 'remaining_unclaimed': len(pending), 'stop_reason': stop_reason, 'consecutive_failures': failures, 'active': 0, 'completed_ids': completed, 'local_free_space_floor_bytes': local_free_space_floor_bytes}
     journal(log, {'event': 'controller_finished', **result})
     return result
 

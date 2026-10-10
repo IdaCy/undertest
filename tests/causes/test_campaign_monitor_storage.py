@@ -167,5 +167,47 @@ class StorageMonitorTests(unittest.TestCase):
             self.validate(values)
 
 
+
+class CapacityStorageMonitorTests(unittest.TestCase):
+    validate = StorageMonitorTests.validate
+    def capacity_values(self):
+        values = storage_fixture('mi_waiting')
+        owner = values[2]['/fixture/registration']['owners']['new_mi']
+        binding = {'guard_argv': ['python', 'exact_capacity_guard']}
+        owner['guard'] = {'binding': {'capacity_guard': binding}}
+        row = values[1]['source_identity']['overlay']['succession_observations'][0]['observations']['new_mi']
+        capacity = {'status': 'healthy', 'admission_allowed': True,
+                    'candidate': copy.deepcopy(owner['process']),
+                    'guard': {'argv': binding['guard_argv']}}
+        row['guard']['capacity_guard'] = capacity
+        row['guard']['fresh_storage'] = {'capacity_guard': copy.deepcopy(capacity)}
+        row['guard']['alarms']['capacity_guard_not_ready'] = False
+        return values, owner, row
+
+    def test_registered_capacity_guard_healthy_extra_alarm_is_accepted(self):
+        self.validate(self.capacity_values()[0])
+
+    def test_capacity_alarm_without_registered_binding_is_rejected(self):
+        values, owner, row = self.capacity_values()
+        owner.pop('guard')
+        with self.assertRaises(ValueError):
+            self.validate(values)
+
+    def test_capacity_binding_status_owner_and_fresh_evidence_fail_closed(self):
+        changes = [lambda o,r: o['guard']['binding'].update(capacity_guard=None),
+                   lambda o,r: r['guard']['capacity_guard'].update(status='startup_held'),
+                   lambda o,r: r['guard']['capacity_guard'].update(admission_allowed=False),
+                   lambda o,r: r['guard']['capacity_guard']['candidate'].update(pid=999),
+                   lambda o,r: r['guard']['capacity_guard']['guard'].update(argv=['different']),
+                   lambda o,r: r['guard']['fresh_storage'].update(capacity_guard={}),
+                   lambda o,r: r['guard']['alarms'].update(capacity_guard_not_ready=True),
+                   lambda o,r: r['guard']['alarms'].pop('capacity_guard_not_ready'),
+                   lambda o,r: r['guard']['alarms'].update(unrecognized=False)]
+        for change in changes:
+            values, owner, row = self.capacity_values()
+            change(owner,row)
+            with self.subTest(change=change), self.assertRaises((ValueError, KeyError)):
+                self.validate(values)
+
 if __name__ == '__main__':
     unittest.main()
