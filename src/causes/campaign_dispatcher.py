@@ -117,10 +117,11 @@ def validate_job(job):
     return run_id
 
 
-def extension_block(prototypes, config, block_index):
+def extension_block(prototypes, config, block_index, *, namespace=None):
     base_seed = config.get('dispatcher', {}).get('seed', 61806)
     model = config.get('model', 'model')
-    seed = lambda *parts: int(sha([base_seed, *parts])[:16], 16) % (2**31 - 1)
+    seed_scope = [] if namespace is None else ['prefix_extension', namespace]
+    seed = lambda *parts: int(sha([base_seed, *seed_scope, *parts])[:16], 16) % (2**31 - 1)
     block_seed = seed('block', block_index, model)
     jobs = []
     eligible = [job for job in prototypes if job.get('eligible', True)]
@@ -133,15 +134,17 @@ def extension_block(prototypes, config, block_index):
         task = job['spec']['task_id']
         variant = job['variant']['id']
         slug = lambda value, length: re.sub('[^A-Za-z0-9_.-]', '_', str(value))[:length]
-        run_id = f'ext_b{block_index:08d}_{slug(model, 20)}_{slug(task, 36)}_{slug(variant, 24)}_{prototype_sha[:12]}'
+        run_id = f'{namespace or "ext"}_b{block_index:08d}_{slug(model, 20)}_{slug(task, 36)}_{slug(variant, 24)}_{prototype_sha[:12]}'
         allocation = job['allocation']
         allocation.update(run_id=run_id, stage='corpus_extension', instruments=['evaluation_presence'],
                           seed=seed('episode', block_index, model, task, variant, prototype_sha),
                           block_index=block_index, block_seed=block_seed,
                           task_seed=seed('task', block_index, task), model_seed=seed('model', block_index, model),
                           prototype_sha256=prototype_sha, prototype_run_id=prototype['allocation'].get('run_id'))
+        if namespace is not None:
+            allocation.update(extension_namespace=namespace, fixed_study_inference=False)
         if 'pair_id' in allocation:
-            allocation['pair_id'] = f'extension_b{block_index:08d}:' + str(allocation['pair_id'])
+            allocation['pair_id'] = f'{namespace or "extension"}_b{block_index:08d}:' + str(allocation['pair_id'])
         validate_job(job)
         jobs.append(job)
     random.Random(block_seed).shuffle(jobs)
@@ -155,7 +158,7 @@ class Dispatcher:
                  admission_holds=None, admission_holds_sha256=None,
                  code_succession=None, code_succession_sha256=None, global_pause_file=None, start_barrier_file=None,
                  corpus_continuation=None, corpus_continuation_sha256=None,
-                 system_prompts_by_run_id=None):
+                 system_prompts_by_run_id=None, prefix_extension=None):
         if type(workers) is not int or workers < 1 or type(max_full) is not int or not 0 <= max_full <= workers:
             raise ValueError('invalid_worker_limits')
         self.jobs = copy.deepcopy(jobs)
@@ -165,10 +168,23 @@ class Dispatcher:
         if len(set(ids)) != len(ids):
             raise ValueError('duplicate_fixed_run_id')
         self.system_prompts = None
+        self.prefix_extension = None
+        if prefix_extension is not None:
+            if (not isinstance(prefix_extension, Mapping)
+                    or set(prefix_extension) != {'namespace', 'system_prompt'}
+                    or not isinstance(prefix_extension['namespace'], str)
+                    or re.fullmatch('[A-Za-z][A-Za-z0-9_]{0,47}', prefix_extension['namespace']) is None
+                    or not isinstance(prefix_extension['system_prompt'], str)
+                    or system_prompts_by_run_id is None or not self.prototypes
+                    or any(job['allocation'].get('continue_to_end') is not False
+                           or 'system_prompt_intervention' in job['allocation'] for job in self.prototypes)
+                    or any(run_id.startswith(prefix_extension['namespace'] + '_b') for run_id in ids)):
+                raise ValueError('invalid_prefix_extension_scope')
+            self.prefix_extension = copy.deepcopy(dict(prefix_extension))
         if system_prompts_by_run_id is not None:
             if (not isinstance(system_prompts_by_run_id, Mapping)
                     or set(system_prompts_by_run_id) != set(ids)
-                    or not ids or self.prototypes or corpus_continuation is not None
+                    or not ids or (self.prototypes and self.prefix_extension is None) or corpus_continuation is not None
                     or any(not isinstance(value, str) for value in system_prompts_by_run_id.values())):
                 raise ValueError('system_prompts_require_exact_fixed_queue')
             self.system_prompts = copy.deepcopy(dict(system_prompts_by_run_id))
@@ -217,12 +233,18 @@ class Dispatcher:
     def config_for(self, job):
         if self.system_prompts is None:
             return self.config
+        if (self.prefix_extension is not None
+                and job['allocation'].get('extension_namespace') == self.prefix_extension['namespace']
+                and job['allocation'].get('stage') == 'corpus_extension'
+                and job['allocation']['run_id'].startswith(self.prefix_extension['namespace'] + '_b')):
+            return {**self.config, 'system': self.prefix_extension['system_prompt']}
         return {**self.config, 'system': self.system_prompts[job['allocation']['run_id']]}
 
     def make_extension_block(self, index):
         if self.continuation is not None:
             return self.continuation.block(index)
-        return extension_block(self.prototypes, self.config, index)
+        return extension_block(self.prototypes, self.config, index,
+                               namespace=self.prefix_extension['namespace'] if self.prefix_extension else None)
 
     def admission_paused(self):
         return self.pause_file.exists() or (self.global_pause_file is not None and self.global_pause_file.exists())
@@ -460,6 +482,8 @@ class Dispatcher:
                         'prototypes_sha256': sha(self.prototypes), 'execution_code': code}
             if self.system_prompts is not None:
                 identity['system_prompts_sha256'] = sha(self.system_prompts)
+            if self.prefix_extension is not None:
+                identity['prefix_extension_sha256'] = sha(self.prefix_extension)
             if self.continuation is not None:
                 for name in ('corpus_allocation.py', 'corpus_continuation.py'):
                     code[name + '_sha256'] = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
@@ -627,6 +651,8 @@ def main():
     parser.add_argument('--code-succession-sha256')
     parser.add_argument('--system-prompts')
     parser.add_argument('--system-prompts-sha256')
+    parser.add_argument('--prefix-extension')
+    parser.add_argument('--prefix-extension-sha256')
     args = parser.parse_args()
     jobs = json.loads(Path(args.jobs).read_bytes())
     config = json.loads(Path(args.config).read_bytes())
@@ -635,13 +661,18 @@ def main():
         parser.error('--system-prompts and --system-prompts-sha256 must be supplied together')
     system_prompts = (pinned_json(args.system_prompts, args.system_prompts_sha256)[0]
                       if args.system_prompts is not None else None)
+    if bool(args.prefix_extension) != bool(args.prefix_extension_sha256):
+        parser.error('--prefix-extension and --prefix-extension-sha256 must be supplied together')
+    prefix_extension = (pinned_json(args.prefix_extension, args.prefix_extension_sha256)[0]
+                        if args.prefix_extension is not None else None)
     result = Dispatcher(jobs, config, args.output, args.workers, args.max_full, prototypes, args.pause_file,
                         admission_holds=args.admission_holds, admission_holds_sha256=args.admission_holds_sha256,
                         code_succession=args.code_succession, code_succession_sha256=args.code_succession_sha256,
                         global_pause_file=args.global_pause_file, start_barrier_file=args.start_barrier_file,
                         corpus_continuation=args.corpus_continuation,
                         corpus_continuation_sha256=args.corpus_continuation_sha256,
-                        system_prompts_by_run_id=system_prompts).run()
+                        system_prompts_by_run_id=system_prompts,
+                        prefix_extension=prefix_extension).run()
     print(json.dumps(result))
 
 
