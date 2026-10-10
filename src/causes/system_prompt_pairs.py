@@ -19,8 +19,9 @@ def _identifier(value, maximum):
 def build_pairs(jobs, config, arms, *, namespace, expected_model, expected_arm_count):
     """Return new jobs/configs without changing or filtering originals by outcomes.
 
-    Each intervention reuses its original sampling seed intentionally. The
-    original allocation is retained as provenance, including study membership.
+    Each arm reuses its original sampling seed intentionally. An arm marked
+    unchanged_control=True must have empty text and keeps the baseline system
+    prompt exactly. The original allocation remains provenance only.
     """
     if not _identifier(namespace, 48):
         raise ValueError('invalid_namespace')
@@ -34,12 +35,16 @@ def build_pairs(jobs, config, arms, *, namespace, expected_model, expected_arm_c
         raise ValueError('arm_count_mismatch')
     arm_ids, texts = set(), set()
     for arm in arms:
-        if not isinstance(arm, dict) or set(arm) - {'id', 'text', 'primary'}:
+        if not isinstance(arm, dict) or set(arm) - {'id', 'text', 'primary', 'unchanged_control'}:
             raise ValueError('invalid_arm')
         arm_id, text = arm.get('id'), arm.get('text')
         if not _identifier(arm_id, 24) or arm_id in arm_ids:
             raise ValueError('duplicate_or_invalid_arm_id')
-        if not isinstance(text, str) or not text or text.strip() != text or '\0' in text or text in texts:
+        control = 'unchanged_control' in arm
+        if control and (arm['unchanged_control'] is not True or text != '' or arm.get('primary', False)):
+            raise ValueError('invalid_unchanged_control')
+        if (not isinstance(text, str) or (not text and not control)
+                or text.strip() != text or '\0' in text or text in texts):
             raise ValueError('duplicate_or_invalid_intervention')
         if 'primary' in arm and type(arm['primary']) is not bool:
             raise ValueError('invalid_primary_arm')
@@ -85,9 +90,10 @@ def build_pairs(jobs, config, arms, *, namespace, expected_model, expected_arm_c
               'source': source, 'pairs': [], 'arms': []}
     for arm in arms:
         derived_config = copy.deepcopy(config)
-        # The runner formats {workspace}; intervention braces must stay literal.
-        literal_text = arm['text'].replace('{', '{{').replace('}', '}}')
-        derived_config['system'] += '\n\n' + literal_text
+        if not arm.get('unchanged_control', False):
+            # The runner formats {workspace}; intervention braces must stay literal.
+            literal_text = arm['text'].replace('{', '{{').replace('}', '}}')
+            derived_config['system'] += '\n\n' + literal_text
         result['arms'].append({'arm': copy.deepcopy(arm), 'config': derived_config, 'jobs': []})
     generated_ids = set()
     for original in baseline:

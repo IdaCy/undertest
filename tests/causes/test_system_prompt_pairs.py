@@ -137,6 +137,62 @@ class SystemPromptPairsTests(unittest.TestCase):
         self.assertEqual(config['system'].format(workspace='/workspace'),
                          'Work in /workspace.\n\nPreserve {these} and {workspace} literally.')
 
+    def test_explicit_control_preserves_exact_prompt_and_paired_seeds(self):
+        control = {'id': 'control', 'text': '', 'unchanged_control': True}
+        config = dict(self.config, system='\n Work in {workspace}.\n')
+        before = copy.deepcopy((self.jobs, config, control))
+        result = self.build(config=config, arms=[control], expected_arm_count=1)
+        output, = result['arms']
+        self.assertEqual(output['config'], config)
+        self.assertEqual(output['config']['system'].encode(), config['system'].encode())
+        self.assertEqual(output['config']['system'].format(workspace='/workspace'),
+                         '\n Work in /workspace.\n')
+        for original, derived in zip(self.jobs[:2], output['jobs']):
+            self.assertNotEqual(derived['allocation']['run_id'], original['allocation']['run_id'])
+            self.assertEqual(derived['spec'], original['spec'])
+            self.assertEqual(derived['variant'], original['variant'])
+            for key in ('seed', 'task_seed', 'model_seed', 'continue_to_end', 'instruments', 'reader_stages'):
+                self.assertEqual(derived['allocation'][key], original['allocation'][key])
+            self.assertTrue(derived['allocation']['system_prompt_intervention']['same_seed_intentional'])
+            self.assertEqual(derived['allocation']['system_prompt_intervention']['arm'], control)
+        self.assertEqual((self.jobs, config, control), before)
+
+    def test_adding_control_preserves_every_existing_arm_and_pair(self):
+        original = self.build()
+        control = {'id': 'control', 'text': '', 'primary': False, 'unchanged_control': True}
+        combined = self.build(arms=self.arms + [control], expected_arm_count=6)
+        standalone = self.build(arms=[control], expected_arm_count=1)
+        self.assertEqual(combined['arms'][:5], original['arms'])
+        self.assertEqual(combined['arms'][5], standalone['arms'][0])
+        for old, new, single in zip(original['pairs'], combined['pairs'], standalone['pairs']):
+            self.assertEqual({k: v for k, v in new.items() if k != 'runs'},
+                             {k: v for k, v in old.items() if k != 'runs'})
+            self.assertEqual({k: v for k, v in new['runs'].items() if k != 'control'}, old['runs'])
+            self.assertEqual(new['runs']['control'], single['runs']['control'])
+            self.assertNotIn(single['runs']['control'], old['runs'].values())
+
+    def test_control_requires_explicit_true_marker_and_empty_text(self):
+        invalid = [
+            {'id': 'control', 'text': ''},
+            *[{'id': 'control', 'text': '', 'unchanged_control': value}
+              for value in (False, 1, 'true', None)],
+            *[{'id': 'control', 'text': value, 'unchanged_control': True}
+              for value in ('An intervention.', ' ', '\n', '\0', None)],
+            {'id': 'control', 'text': '', 'unchanged_control': True, 'primary': True},
+        ]
+        for arm in invalid:
+            with self.subTest(arm=arm), self.assertRaises(ValueError):
+                self.build(arms=[arm], expected_arm_count=1)
+        controls = [{'id': name, 'text': '', 'unchanged_control': True} for name in ('one', 'two')]
+        with self.assertRaisesRegex(ValueError, 'duplicate_or_invalid_intervention'):
+            self.build(arms=controls, expected_arm_count=2)
+
+    def test_control_does_not_become_an_original_baseline(self):
+        control = {'id': 'control', 'text': '', 'unchanged_control': True}
+        jobs = self.build(arms=[control], expected_arm_count=1)['arms'][0]['jobs']
+        with self.assertRaisesRegex(ValueError, 'original_already_has_intervention'):
+            self.build(jobs=jobs)
+
     def _manifest(self, root):
         def save(name, value):
             data = json.dumps(value).encode()
@@ -181,6 +237,21 @@ class SystemPromptPairsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'baseline_count_mismatch'):
                 build_from_manifest(manifest, root / 'wrong_count')
             self.assertFalse((root / 'wrong_count').exists())
+
+    def test_offline_control_bundle_keeps_original_config_exact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = self._manifest(root)
+            body = json.loads(manifest.read_text())
+            body['arms'] = [{'id': 'control', 'text': '', 'unchanged_control': True}]
+            body['expected_arm_count'] = 1
+            manifest.write_text(json.dumps(body))
+            build_from_manifest(manifest, root / 'output')
+            self.assertEqual(json.loads((root / 'output/control.config.json').read_bytes()), self.config)
+            before = {p.name: p.read_bytes() for p in (root / 'output').iterdir()}
+            with self.assertRaises(FileExistsError):
+                build_from_manifest(manifest, root / 'output')
+            self.assertEqual(before, {p.name: p.read_bytes() for p in (root / 'output').iterdir()})
 
 
 if __name__ == '__main__':
