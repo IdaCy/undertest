@@ -168,6 +168,148 @@ def native_reservation_augmentation(original, current, allocation):
     return reservation_unchanged(expected, current)
 
 
+def native_reservation_foreign_blocks(original, current, allocation, growth, config_reference, *, waiting=False):
+    """Preserve a generated queue while reviewed foreign roots append full blocks.
+
+    The original allocator reservation is never rebased. Pinned census metadata
+    proves every added identity, including unclaimed jobs. Only the declared
+    foreign roots may grow; this is an explicit alternative to strict equality.
+    """
+    from causes import campaign_census as census
+    from causes.campaign_corpus_succession import native_allocation
+    control = h.checked(allocation['allocation_control'])
+    require(h.encoded(h.checked(control['reservation'])) == h.encoded(original),
+            'native_generation_reservation_changed')
+    jobs, _, _, _ = native_allocation(allocation)
+    require(set(growth) == {'baseline_census_config', 'foreign_roots'}, 'foreign_growth_scope_changed')
+    baseline_config, config = h.checked(growth['baseline_census_config']), h.checked(config_reference)
+    require(original['configuration'] == growth['baseline_census_config'] and current['configuration'] == config_reference,
+            'foreign_reservation_configuration_changed')
+    for value in (original, current):
+        source = value['composition_source']; h.checked_bytes(source)
+        require(all(source[key] == h.pin(census.__file__)[key] for key in ('bytes', 'sha256')),
+                'foreign_census_source_changed')
+    hosts = [row['host'] for row in baseline_config['hosts']]
+    require(hosts and len(set(hosts)) == len(hosts), 'native_reservation_hosts_changed')
+    own_host = next((row for row in baseline_config['hosts'] if row['host'] == allocation['controller_host']), None)
+    require(own_host is not None, 'native_owner_host_missing')
+    root = Path(allocation['output_root'])
+    require(root.is_absolute() and root.is_relative_to(Path(own_host['base'])), 'native_owner_root_changed')
+    own_root = str(root.relative_to(own_host['base']))
+    require(own_root not in own_host['roots'], 'native_initial_root_already_reserved')
+    expected_config = json.loads(h.encoded(baseline_config))
+    own_spec = dict(pin=allocation['jobs'], selector=[], kind='jobs', expected_count=len(jobs))
+    if waiting:
+        own_spec['allowed_locations'] = [[allocation['controller_host'], own_root]]
+        next(row for row in expected_config['hosts'] if row['host'] == allocation['controller_host'])['roots'].append(own_root)
+    expected_config['frozen_inputs'].append(own_spec)
+    require(h.encoded(config) == h.encoded(expected_config), 'foreign_growth_census_config_changed')
+    require(original['frozen_input_pins'] == [row['pin'] for row in baseline_config['frozen_inputs']]
+            and all(row['pin']['path'] != allocation['jobs']['path'] for row in baseline_config['frozen_inputs']),
+            'foreign_growth_frozen_inputs_changed')
+    allowed = set()
+    for row in growth['foreign_roots']:
+        require(set(row) == {'host', 'root'}, 'foreign_growth_root_changed')
+        host = next((item for item in baseline_config['hosts'] if item['host'] == row['host']), None)
+        require(host is not None and row['root'] in host['roots']
+                and (row['host'], row['root']) != (allocation['controller_host'], own_root), 'foreign_growth_root_changed')
+        key = (row['host'], str(Path(host['base'])/row['root']))
+        require(key not in allowed, 'foreign_growth_duplicate_root'); allowed.add(key)
+    require(allowed, 'foreign_growth_roots_required')
+
+    def capture_projection(value, configuration):
+        require(len(value['capture_pins']) == len(configuration['hosts']), 'foreign_capture_inventory_changed')
+        require(h.checked(value['capture_map']) == {host['host']: ref for host, ref in
+                zip(configuration['hosts'], value['capture_pins'])}, 'foreign_capture_map_changed')
+        captures = {}; blocks = {}
+        for host, reference in zip(configuration['hosts'], value['capture_pins']):
+            require(0 < reference['bytes'] <= configuration['max_capture_bytes'], 'foreign_capture_bound')
+            captured = census.strict_json(h.checked_bytes(reference))
+            require(captured['host'] == host['host'] and host['host'] not in captures, 'foreign_capture_host_changed')
+            require(captured['configuration'] == value['configuration']
+                    and captured['composition_source'] == captured['collector_source']
+                    and all(captured['collector_source'][key] == value['composition_source'][key]
+                            for key in ('bytes', 'sha256')), 'foreign_capture_source_or_config_changed')
+            captures[host['host']] = dict(pin=reference, value=captured)
+            for item in captured['files']:
+                if item['kind'] != 'persisted_extension_block':
+                    continue
+                key = (host['host'], item['path'])
+                require(key not in blocks, 'foreign_duplicate_block')
+                blocks[key] = item
+        # This is a capture-only projection, not a substitute census or an
+        # acceptance of new frozen inputs. The original frozen union is retained
+        # below, and the actual full census still has its independent review.
+        selected = json.loads(h.encoded(configuration)); selected['frozen_inputs'] = []
+        projection = census.compose_reservation(selected, captures, [])
+        require(all(h.encoded(projection[key]) == h.encoded(value[key]) for key in
+                    ('host_cuts', 'capture_pins', 'persisted_full_blocks')), 'foreign_capture_projection_changed')
+        return projection, blocks
+
+    old_projection, old_blocks = capture_projection(original, baseline_config)
+    new_projection, new_blocks = capture_projection(current, config)
+    require(all(key in new_blocks and h.encoded(new_blocks[key]) == h.encoded(row)
+                for key, row in old_blocks.items()), 'foreign_prior_block_changed')
+
+    def identities(rows):
+        result = {}
+        for raw in rows:
+            row = identity(raw)
+            require(row['run_id'] not in result, 'duplicate_reservation_identity')
+            result[row['run_id']] = row
+        return result
+
+    seeds = lambda rows: sorted({row[key] for row in rows for key in ('seed', 'block_seed', 'task_seed', 'model_seed')
+                                 if type(row[key]) is int and row[key] > 0})
+    old = identities(original['allocation_identities'])
+    require(sorted(old) == original['run_ids'] and h.encoded(seeds(old.values())) == h.encoded(original['allocation_seeds']),
+            'foreign_original_union_changed')
+    require(all(old.get(row['run_id']) == row for row in old_projection['allocation_identities']),
+            'foreign_original_capture_changed')
+    own = identities([job['allocation'] for job in jobs])
+    require(not set(own) & set(old) and not set(seeds(own.values())) & set(seeds(old.values())),
+            'native_own_allocation_collision')
+    added = {}; added_blocks = {key: row for key, row in new_blocks.items() if key not in old_blocks}
+    for key, row in added_blocks.items():
+        scope = (key[0], str(Path(key[1]).parent.parent.parent))
+        require(scope in allowed, 'foreign_unreviewed_growth_root')
+        rows = identities(row['allocations'])
+        require(rows and not (set(rows) & (set(old) | set(own) | set(added))), 'foreign_added_identity_collision')
+        added.update(rows)
+    for host, output_root in allowed:
+        def sequence(blocks):
+            result = {}
+            for (owner, path), item in blocks.items():
+                if owner != host or str(Path(path).parent.parent.parent) != output_root:
+                    continue
+                stem = Path(path).stem
+                require(stem and all('0' <= char <= '9' for char in stem), 'foreign_block_index_invalid')
+                index = int(stem)
+                require(index not in result, 'foreign_duplicate_block_index')
+                result[index] = item
+            return result
+        before, after = sequence(old_blocks), sequence(new_blocks)
+        require(before, 'foreign_baseline_blocks_required')
+        first, last = min(before), max(before)
+        require(sorted(before) == list(range(first, last+1))
+                and sorted(after) == list(range(first, max(after)+1)), 'foreign_block_gap')
+        counts = {len(row['allocations']) for row in before.values()}
+        widths = {len(Path(row['path']).stem) for row in before.values()}
+        require(len(counts) == len(widths) == 1 and next(iter(counts)) > 0, 'foreign_baseline_block_shape_changed')
+        require(all(len(row['allocations']) in counts and len(Path(row['path']).stem) in widths
+                    and len(identities(row['allocations'])) == len(row['allocations']) for row in after.values()),
+                'foreign_partial_or_duplicate_block')
+    rows = {**old, **own, **added}
+    require(all(rows.get(row['run_id']) == row for row in new_projection['allocation_identities']),
+            'foreign_unattributed_capture_identity')
+    require(not set(seeds(own.values())) & set(seeds([*old.values(), *added.values()])), 'native_own_allocation_collision')
+    expected = {**original, 'allocation_identities': list(rows.values()), 'run_ids': sorted(rows),
+                'allocation_seeds': seeds(rows.values()), 'frozen_input_pins': [*original['frozen_input_pins'], allocation['jobs']]}
+    require(h.encoded(expected['allocation_seeds']) == h.encoded(current['allocation_seeds']),
+            'reservation_seed_union_changed')
+    return reservation_unchanged(expected, current)
+
+
 def donor_cuts_clear(history_policy, baseline, current):
     keys=('host','output_root','mode','recorder_relevant')
     require([{k:r[k] for k in keys} for r in baseline]==history_policy['donor_scopes']
@@ -762,8 +904,19 @@ class NativeAdmission(ContinuousAdmission):
         require(control['reservation'] == x['precreation_reservation']['evidence'], 'native_reservation_changed')
         old, fresh = (h.checked(x[k]['evidence']) for k in ('precreation_reservation', 'fresh_reservation'))
         if 'reservation_transition' in p:
-            require(p['reservation_transition'] == 'exact_own_allocation_v1', 'native_reservation_transition_unknown')
-            native_reservation_augmentation(old, fresh, allocation)
+            if p['reservation_transition'] == 'exact_own_and_foreign_blocks_v1':
+                proof = h.checked(x['fresh_reservation']['review'])
+                require(proof.get('accepted_dual_host_capture_custody') is True
+                        and proof.get('accepted_native_foreign_block_extension') is True
+                        and proof['generation_reservation'] == x['precreation_reservation']['evidence']
+                        and proof['reservation_growth'] == p['reservation_growth']
+                        and proof['capture_pins'] == fresh['capture_pins'], 'foreign_capture_proof_not_accepted')
+                native_reservation_foreign_blocks(old, fresh, allocation, p['reservation_growth'],
+                    p['census_configs']['before_start' if action == self.start_action else 'waiting_release'],
+                    waiting=action == self.release_action)
+            else:
+                require(p['reservation_transition'] == 'exact_own_allocation_v1', 'native_reservation_transition_unknown')
+                native_reservation_augmentation(old, fresh, allocation)
         else:
             reservation_unchanged(old, fresh)
         require([row['host'] for row in fresh['host_cuts']] == p['census_hosts'], 'native_reservation_hosts_changed')
