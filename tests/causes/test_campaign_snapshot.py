@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from causes.campaign_snapshot import (
-    REMOTE_CODE, SnapshotConfig, synchronize_completed, validate_manifest,
+    REMOTE_CODE, SnapshotConfig, SnapshotSpaceHold, synchronize_completed, validate_manifest,
 )
 
 
@@ -275,8 +275,12 @@ class SnapshotTests(unittest.TestCase):
         config = replace(self.config, selected_runs=selection, free_space_floor_bytes=floor)
         with patch('causes.campaign_snapshot.subprocess.run', side_effect=self.transport), \
              patch('causes.campaign_snapshot.shutil.disk_usage', return_value=SimpleNamespace(free=required + floor - 1)), \
-             self.assertRaisesRegex(RuntimeError, 'free-space floor'):
+             self.assertRaisesRegex(SnapshotSpaceHold, 'free-space floor') as caught:
             synchronize_completed(config, self.authorize)
+        self.assertEqual(caught.exception.required_bytes, required)
+        self.assertEqual(caught.exception.available_bytes, required + floor - 1)
+        self.assertEqual(caught.exception.floor_bytes, floor)
+        self.assertTrue((caught.exception.attempt / 'MANIFEST.json').is_file())
         self.assertEqual(self.transport_calls, ['ssh'])
         self.assertFalse((self.config.destination / 'accepted.jsonl').exists())
         with patch('causes.campaign_snapshot.subprocess.run', side_effect=self.transport), \
