@@ -14,9 +14,11 @@ failure and cannot be reused. Imports perform no I/O.
 
 Version two can carry an independently accepted cumulative export into a new
 physical batch. Logical obligations retain their original identity and order.
-The predecessor must be terminal and independently certified drained/sealed;
-this offline check grants no permission to run another client. Carried rows are
-copied exactly, including technical failures, without reparsing old captures.
+The predecessor must be terminal and independently certified drained/sealed.
+An explicit unclaimed-only handoff can instead preserve a stopped partial
+batch: every claim must be terminal and only its exact never-claimed jobs may
+move. This offline check grants no permission to run another client. Carried
+rows are copied exactly, including failures, without reparsing old captures.
 """
 import collections
 import copy
@@ -113,7 +115,9 @@ def context_source_matches(original_rows, job):
 def carry_forward(binding, prepared, roster, obligations, config, original_rows, record):
     """Validate one accepted predecessor; earlier links remain in its provenance."""
     prior = binding['prior_export']
-    require(set(prior) == {'binding', 'summary', 'independent_review', 'retirement_review'},
+    partial = prior.get('handoff_mode') == 'unclaimed_only'
+    references = {'binding', 'summary', 'independent_review', 'retirement_review'}
+    require(set(prior) == references | ({'handoff_mode'} if partial else set()),
             'exact_prior_export_references_required')
     previous = json.loads(record(prior['binding'], read=True))
     summary = json.loads(record(prior['summary'], read=True))
@@ -129,12 +133,15 @@ def carry_forward(binding, prepared, roster, obligations, config, original_rows,
     old_root, root = core.canonical(previous['supplement_root']), core.canonical(binding['supplement_root'])
     require(not root.is_relative_to(old_root) and not old_root.is_relative_to(root), 'distinct_batch_root_required')
     require(summary.get('family') == binding['family'] and summary.get('model') == binding['model']
-            and summary.get('all_ready_final') is True, 'prior_batch_not_terminal')
-    require(retirement.get('accepted_supplement_batch_retirement') is True
+            and summary.get('all_ready_final') is (not partial), 'prior_batch_not_terminal')
+    acceptance = ('accepted_supplement_partial_batch_handoff' if partial else
+                  'accepted_supplement_batch_retirement')
+    require(retirement.get(acceptance) is True
             and retirement.get('prepared_inputs') == previous['prepared_inputs']
             and retirement.get('supplement_root') == previous['supplement_root']
             and retirement.get('journal_cut') == previous['journal_cut'], 'prior_retirement_binding_changed')
-    require(all(retirement.get(k) is True for k in ('all_ready_terminal', 'journal_sealed',
+    terminal_check = 'all_claimed_terminal' if partial else 'all_ready_terminal'
+    require(all(retirement.get(k) is True for k in (terminal_check, 'journal_sealed',
                 'client_process_absent', 'executor_lock_acquired_nonblocking'))
             and type(retirement.get('ambiguous_attempts')) is int and retirement['ambiguous_attempts'] == 0,
             'prior_batch_not_drained_and_sealed')
@@ -142,10 +149,37 @@ def carry_forward(binding, prepared, roster, obligations, config, original_rows,
     for ref in retirement['evidence']:
         record(ref)
     old_prepared = json.loads(record(previous['prepared_inputs'], read=True))
-    _, old_ready, _ = validate_inputs(previous, old_prepared, roster, obligations, config)
+    _, old_ready, old_contexts = validate_inputs(previous, old_prepared, roster, obligations, config)
     require(old_prepared['frozen_config'] == previous['config']
             and old_prepared['frozen_runner'] == previous['runner_source'], 'prior_prepared_source_changed')
     old_carried = old_prepared['carried_measurement_ids'] if previous['schema'].endswith('.v2') else []
+    unclaimed, old_claims = [], {}
+    if partial:
+        raw = record(previous['journal_cut'], read=True)
+        require(not raw or raw.endswith(b'\n'), 'partial_predecessor_journal_tail')
+        old_claims, old_finals = journal_index([json.loads(line) for line in raw.splitlines()], old_ready)
+        require(set(old_claims) == set(old_finals), 'partial_predecessor_unresolved_claim')
+        for mid, claim in old_claims.items():
+            require(claim['input_sha256'] == core.digest(old_ready[mid]), 'partial_predecessor_claim_identity')
+        unclaimed = [mid for mid in old_ready if mid not in old_claims]
+        require(unclaimed and retirement.get('unclaimed_measurement_ids') == unclaimed
+                and retirement.get('unclaimed_destinations_absent') is True
+                and retirement.get('all_ready_terminal') is False,
+                'partial_predecessor_unclaimed_evidence')
+        require(type(summary.get('claims_at_consumed_cut')) is int
+                and type(summary.get('terminals_at_consumed_cut')) is int
+                and summary.get('claims_at_consumed_cut') == len(old_claims)
+                and summary.get('terminals_at_consumed_cut') == len(old_finals),
+                'partial_predecessor_journal_counts')
+        require(core.encoded(binding['trajectories']) == core.encoded(previous['trajectories'])
+                and prepared['pending_measurement_ids'] == old_prepared['pending_measurement_ids']
+                and prepared['unavailable_measurement_ids'] == old_prepared['unavailable_measurement_ids'],
+                'partial_predecessor_availability_changed')
+        require(core.encoded(prepared['ready_jobs']) == core.encoded([old_ready[mid] for mid in unclaimed]),
+                'partial_predecessor_unclaimed_jobs_changed')
+        contexts = {(row['run_id'], row['stage']): row for row in prepared['contexts']}
+        require(all(core.encoded(row) == core.encoded(old_contexts[key]) for key, row in contexts.items()),
+                'partial_predecessor_context_changed')
     rows = [json.loads(line) for line in record(summary['measurements'], read=True).splitlines()]
     ids = [j['measurement_id'] for j in obligations]
     require([r['measurement_id'] for r in rows] == ids, 'prior_measurement_grid_or_order_changed')
@@ -164,15 +198,18 @@ def carry_forward(binding, prepared, roster, obligations, config, original_rows,
         elif state == 'assigned_stage_unavailable':
             require(mid in old_prepared['unavailable_measurement_ids'], 'prior_unavailable_partition_changed')
             unavailable[mid] = row
+        elif partial and state == 'unclaimed_at_journal_cut':
+            require(mid in unclaimed, 'partial_predecessor_unclaimed_row_changed')
         else:
             require(state == 'pending_original_context_at_cut'
                     and mid in old_prepared['pending_measurement_ids'], 'prior_outstanding_or_unresolved_attempt')
-    require(set(carried) == set(old_ready) | set(old_carried)
+    require(set(carried) == (set(old_claims) if partial else set(old_ready)) | set(old_carried)
             and set(unavailable) == set(old_prepared['unavailable_measurement_ids']), 'prior_terminal_partition_changed')
     require(prepared['carried_measurement_ids'] == list(carried), 'every_prior_final_must_be_carried')
     require(set(unavailable) <= set(prepared['unavailable_measurement_ids']), 'prior_unavailable_cannot_be_promoted')
     ready_ids = {j['measurement_id'] for j in prepared['ready_jobs']}
-    require(ready_ids <= set(old_prepared['pending_measurement_ids']), 'only_prior_pending_may_become_ready')
+    require(ready_ids <= set(unclaimed if partial else old_prepared['pending_measurement_ids']),
+            'only_prior_pending_may_become_ready')
     for job in prepared['ready_jobs']:
         context_source_matches(original_rows, job)
     require(summary['dispositions'] == dict(collections.Counter(r['disposition'] for r in rows))
@@ -190,6 +227,9 @@ def carry_forward(binding, prepared, roster, obligations, config, original_rows,
                   'prior_unavailable_measurement_ids': list(unavailable),
                   'predecessor_carry_forward': chain, 'prior_rows_unchanged': True,
                   'old_captures_reparsed': False, 'runtime_authorized': False}
+    if partial:
+        provenance.update(handoff_mode='unclaimed_only', unclaimed_measurement_ids=unclaimed,
+                          every_predecessor_claim_terminal=True, original_availability_unchanged=True)
     return carried, unavailable, provenance
 
 
