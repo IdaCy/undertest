@@ -166,12 +166,15 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
                           reader_inputs: ReaderInputs, awareness_types: Sequence[str],
                           quality_held: Mapping[str, Mapping[str, dict]] | None = None,
                           quality_unavailable: Mapping[str, Sequence[str]] | None = None,
-                          endpoint_transitions: Mapping[str, dict] | None = None):
+                          endpoint_transitions: Mapping[str, dict] | None = None,
+                          reader_inputs_by_assignment: Mapping[tuple[str, str], ReaderInputs] | None = None):
     """Return records/issues and separate unobserved/quality-unavailable coverage.
 
     Quality annotations and unavailability are supplied validated facts, never
     inferred here. Missing actor or reader results remain missing. Reader pins
     and explicit None values bind the input cut even if later files now exist.
+    Assignment overrides select a complete reader namespace, including its pins;
+    absent stages never fall back to another namespace.
     """
     _require(models and set(models) == set(registered_roots), 'model_root_scope_mismatch')
     _require(awareness_types and len(set(awareness_types)) == len(awareness_types)
@@ -195,6 +198,14 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
             root_models[root] = model
         _require(set(held.get(model, {})) <= set(jobs[model])
                  and set(unavailable.get(model, ())) <= set(jobs[model]), 'quality_assignment_scope_mismatch')
+    reader_overrides = {} if reader_inputs_by_assignment is None else reader_inputs_by_assignment
+    _require(isinstance(reader_overrides, Mapping), 'reader_override_mapping_required')
+    _require(isinstance(reader_inputs, ReaderInputs), 'reader_inputs_required')
+    for key, value in reader_overrides.items():
+        _require(isinstance(key, tuple) and len(key) == 2
+                 and key[0] in jobs and key[1] in jobs[key[0]],
+                 'reader_override_assignment_unknown')
+        _require(isinstance(value, ReaderInputs), 'reader_override_inputs_required')
     snapshots = {}
     for row in receipts:
         root = str(Path(row['run']).parent)
@@ -210,11 +221,12 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
             continue
         _require(run_id not in records[model], 'physical_assignment_present_in_multiple_output_roots')
         frozen = models[model];job = jobs[model][run_id]
+        assignment_reader = reader_overrides.get((model, run_id), reader_inputs)
         selected = {'model': model, 'job': job, 'config': frozen.config,
                     'jobs_file_sha256': frozen.jobs_file_sha256, 'model_file_sha256': frozen.config_file_sha256}
         if endpoint_transitions is not None:
             selected['endpoint_transitions'] = endpoint_transitions
-        binding, loaded = watch.bind_snapshot(snapshot, selected, snapshots_root, reader_inputs.binding_pins)
+        binding, loaded = watch.bind_snapshot(snapshot, selected, snapshots_root, assignment_reader.binding_pins)
         captured_config = frozen.config
         if 'endpoint_transition' in binding:
             captured_config, _ = watch.endpoint_transition.snapshot_config(
@@ -228,7 +240,7 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
         summary = loaded['summary.json'];contexts, sources = _contexts(job, loaded, binding)
         measured_self = _self_measurements(summary, contexts, sources, frozen.config)
         measured_reader, dispositions, found = _reader_measurements(model, run_id, job, frozen.config,
-            snapshot, loaded, contexts, reader_inputs, awareness_types, binding)
+            snapshot, loaded, contexts, assignment_reader, awareness_types, binding)
         issues.extend(found)
         record = {'run_id': run_id, 'model': model, 'task_id': job['spec']['task_id'],
             'variant_id': job['variant']['id'], 'allocation': copy.deepcopy(job['allocation']), 'source': str(Path(snapshot['path'])),
