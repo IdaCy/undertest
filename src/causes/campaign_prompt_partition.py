@@ -91,3 +91,37 @@ def partition_prompt_queue(jobs, system_prompts, host_by_pair, *, expected_arm_i
             shard['pair_ids'].append(pair_id)
             placed_pairs.add(pair_id)
     return partitions
+
+
+def partition_unclaimed_prompt_queue(jobs, system_prompts, host_by_pair, claimed_run_ids,
+                                     *, previous_host, expected_arm_ids):
+    """Partition only untouched jobs while keeping every started pair on its host.
+
+    Claimed IDs include active and failed attempts, not just successful results.
+    Callers must establish an admission-closed claim set before using this pure
+    projection; this function neither stops an owner nor authorizes a launch.
+    """
+    if (not isinstance(previous_host, str) or not previous_host
+            or not isinstance(claimed_run_ids, (list, tuple))
+            or any(not isinstance(run_id, str) or not run_id for run_id in claimed_run_ids)
+            or len(set(claimed_run_ids)) != len(claimed_run_ids)):
+        raise ValueError('invalid_prior_claims')
+    partitions = partition_prompt_queue(jobs, system_prompts, host_by_pair,
+                                        expected_arm_ids=expected_arm_ids)
+    claimed = set(claimed_run_ids)
+    known = {job['allocation']['run_id'] for job in jobs}
+    if not claimed <= known:
+        raise ValueError('unknown_claimed_run')
+    for job in jobs:
+        allocation = job['allocation']
+        pair_id = allocation['system_prompt_intervention']['pair_id']
+        if allocation['run_id'] in claimed and host_by_pair[pair_id] != previous_host:
+            raise ValueError('started_pair_host_changed')
+    for shard in partitions.values():
+        shard['jobs'] = [job for job in shard['jobs'] if job['allocation']['run_id'] not in claimed]
+        remaining = {job['allocation']['run_id'] for job in shard['jobs']}
+        pairs = {job['allocation']['system_prompt_intervention']['pair_id'] for job in shard['jobs']}
+        shard['system_prompts'] = {run_id: text for run_id, text in shard['system_prompts'].items()
+                                   if run_id in remaining}
+        shard['pair_ids'] = [pair_id for pair_id in shard['pair_ids'] if pair_id in pairs]
+    return partitions
