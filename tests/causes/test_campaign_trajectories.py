@@ -62,6 +62,55 @@ class TrajectoryAssemblyTests(unittest.TestCase):
             self.assertEqual(self.assemble(), value)
         self.assertEqual((self.models, self.artifacts), before)
 
+    def endpoint_fixture(self):
+        f = self.fixture
+        transition = f.endpoint_fixture()
+        self.models['mi27'] = replace(self.models['mi27'], config=f.config,
+            config_file_sha256=transition['value']['original_config']['sha256'])
+        return transition, {transition['root']: transition['pair']}
+
+    def test_endpoint_assembly_retains_primary_identity_and_secondary_backend_label(self):
+        transition, mapping = self.endpoint_fixture()
+        value = self.assemble(endpoint_transitions=mapping)
+        row = value['records']['mi27']['fixture']
+        self.assertEqual(row['allocation'], self.fixture.job['allocation'])
+        self.assertEqual(row['frozen_model_sha256'], assembly.reader.digest(transition['original']))
+        self.assertEqual(row['endpoint_transition']['captured_model_sha256'], assembly.reader.digest(transition['current']))
+        self.assertEqual(row['endpoint_transition']['backend_label'], 'synthetic-backend')
+        self.assertEqual(value['coverage']['mi27'], {'unobserved': [], 'quality_unavailable': []})
+        with self.assertRaisesRegex(ValueError, 'frozen_identity_mismatch:model'):
+            self.assemble()
+        wrong = copy.deepcopy(self.models['mi27'].jobs)
+        wrong[0]['allocation']['seed'] += 1
+        with self.assertRaisesRegex(ValueError, 'frozen_scope_mismatch'):
+            self.assemble(models={'mi27': replace(self.models['mi27'], jobs=wrong)}, endpoint_transitions=mapping)
+
+    def test_endpoint_reader_result_and_missingness_require_retained_transition_binding(self):
+        transition, mapping = self.endpoint_fixture();f = self.fixture
+        binding, _ = assembly.watch.bind_snapshot(f.receipt, f.frozen, f.snapshots, self.inputs.binding_pins)
+        binding_pin = self.save(f.output / 'mi27/fixture/BINDING.json', binding)
+        missing_pin = self.save(f.output / 'mi27/fixture/early/TECHNICAL_MISSING.json',
+            {'run_id': 'fixture', 'stage': 'early', 'status': 'technical_missing', 'admissible_labels': None,
+             'replayed': False, 'binding_sha256': assembly.reader.digest(binding)})
+        self.artifacts[('mi27', 'fixture', 'early')] = assembly.ReaderArtifacts(None, missing_pin, binding_pin)
+        row = self.assemble(endpoint_transitions=mapping)['records']['mi27']['fixture']
+        self.assertEqual(row['reader_dispositions']['early'], 'final_reader_technical_missing')
+        result = {'instruments': {}}
+        result_pin = self.save(f.output / 'mi27/fixture/end/RESULT.json', result)
+        self.artifacts[('mi27', 'fixture', 'end')] = assembly.ReaderArtifacts(result_pin, None, None)
+        with self.assertRaisesRegex(ValueError, 'endpoint_reader_binding_required'):
+            self.assemble(endpoint_transitions=mapping)
+        self.artifacts[('mi27', 'fixture', 'end')] = assembly.ReaderArtifacts(result_pin, None, binding_pin)
+        with patch.object(assembly, 'verify_reader_capture', return_value=result):
+            self.assertEqual(self.assemble(endpoint_transitions=mapping)['records']['mi27']['fixture']
+                ['reader_dispositions']['end'], 'final_verified_reader_result')
+        binding['endpoint_transition']['backend_label'] = 'wrong-backend'
+        changed = self.save(f.output / 'mi27/fixture/BINDING.json', binding)
+        self.artifacts[('mi27', 'fixture', 'early')] = assembly.ReaderArtifacts(None, None, None)
+        self.artifacts[('mi27', 'fixture', 'end')] = assembly.ReaderArtifacts(result_pin, None, changed)
+        with self.assertRaisesRegex(ValueError, 'endpoint_reader_binding_mismatch'):
+            self.assemble(endpoint_transitions=mapping)
+
     def test_snapshot_conflicts_and_physical_root_alias_duplicate_refuse(self):
         other = dict(self.fixture.receipt, summary_sha256='0' * 64)
         with self.assertRaisesRegex(ValueError, 'conflicting_snapshot_identity'):

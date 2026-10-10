@@ -87,6 +87,48 @@ class ReaderWatcherTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'paired_prefix_context_mismatch'):
             watch.stage_context('end', altered)
 
+    def endpoint_fixture(self):
+        from tests.causes.test_campaign_endpoint_transition import fixture
+        self.job['allocation']['continue_to_end'] = True
+        f = fixture(self.base, self.job, self.config, root='runs/mi27')
+        self.config = f['original']
+        self.frozen.update(config=self.config, model_file_sha256=f['value']['original_config']['sha256'],
+                           endpoint_transitions={f['root']: f['pair']})
+        (self.root / 'allocation.json').write_text(json.dumps(self.job['allocation']))
+        (self.root / 'model.json').write_text(json.dumps(f['current']))
+        self.refresh_manifest()
+        return f
+
+    def test_endpoint_binding_keeps_frozen_identity_and_captured_backend_separate(self):
+        f = self.endpoint_fixture()
+        binding, loaded = watch.bind_snapshot(self.receipt, self.frozen, self.snapshots, {})
+        self.assertEqual(binding['frozen_model_sha256'], watch.reader.digest(f['original']))
+        self.assertEqual(binding['model_file_sha256'], f['value']['original_config']['sha256'])
+        self.assertEqual(binding['endpoint_transition']['captured_model_sha256'], watch.reader.digest(f['current']))
+        self.assertEqual(binding['endpoint_transition']['backend_label'], 'synthetic-backend')
+        self.assertEqual(loaded['model.json'], f['current'])
+        changed = copy.deepcopy(f['current']);changed['system'] = 'Changed request'
+        (self.root / 'model.json').write_text(json.dumps(changed));self.refresh_manifest()
+        with self.assertRaisesRegex(ValueError, 'frozen_identity_mismatch:model'):
+            watch.bind_snapshot(self.receipt, self.frozen, self.snapshots, {})
+
+    def test_endpoint_binding_rejects_typed_allocation_change_before_reader_call(self):
+        self.endpoint_fixture()
+        changed = dict(self.job['allocation'], continue_to_end=1)
+        (self.root / 'allocation.json').write_text(json.dumps(changed));self.refresh_manifest()
+        with self.assertRaisesRegex(ValueError, 'typed_endpoint_identity_mismatch'):
+            watch.bind_snapshot(self.receipt, self.frozen, self.snapshots, {})
+
+    def test_endpoint_binding_requires_mapping_and_exact_output_root(self):
+        f = self.endpoint_fixture()
+        absent = dict(self.frozen);absent.pop('endpoint_transitions')
+        with self.assertRaisesRegex(ValueError, 'frozen_identity_mismatch:model'):
+            watch.bind_snapshot(self.receipt, absent, self.snapshots, {})
+        self.frozen['endpoint_transitions'] = {'runs/mi27': f['accepted'](dict(f['value'],
+            output_root=str(self.base / 'runs/different/mi27')))}
+        with self.assertRaisesRegex(ValueError, 'frozen_scope_mismatch'):
+            watch.bind_snapshot(self.receipt, self.frozen, self.snapshots, {})
+
     def test_snapshot_mutation_and_frozen_variant_mismatch_are_rejected(self):
         (self.root / 'early_context.json').write_text('[]')
         with self.assertRaisesRegex(ValueError, 'source_file_hash_mismatch'):
