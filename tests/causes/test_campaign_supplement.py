@@ -225,6 +225,44 @@ class SupplementTests(unittest.TestCase):
         with self.assertRaisesRegex(supplement.IntegrityError, 'unterminated_journal'):
             supplement.read_history(log)
 
+    def test_storage_hold_drains_and_resume_preserves_existing_measurement(self):
+        jobs = [self.job('run' + str(i)) for i in range(3)]
+        free = types.SimpleNamespace(free=79 * 1024**3)
+        worker = mock.Mock(return_value={'technical_status': 'complete'})
+        with mock.patch.object(supplement.shutil, 'disk_usage', return_value=free), \
+             mock.patch.object(runner, 'exchange', side_effect=self.exchange):
+            held = self.queue(jobs, worker=worker, max_clients=1)
+            self.assertIn('local_disk_below80GiB', held['stop_reason'])
+            worker.assert_not_called()
+
+            def finish(job, destination):
+                result = self.worker(job, destination)
+                free.free = 64 * 1024**3 - 1
+                return result
+
+            worker.side_effect = finish
+            stopped = self.queue(jobs, worker=worker, max_clients=1,
+                                 local_free_space_floor_bytes=64 * 1024**3)
+            self.assertEqual((stopped['new_final'], stopped['remaining_unclaimed'], stopped['active']), (1, 2, 0))
+            self.assertIn('local_disk_below_floor:', stopped['stop_reason'])
+            first = supplement.measurement_path(self.output, jobs[0], family=self.family, model=self.model)
+            retained = supplement.pin(first / 'FINAL.json')
+            free.free = 64 * 1024**3
+            worker.side_effect = self.worker
+            resumed = self.queue(jobs, worker=worker, max_clients=1,
+                                 local_free_space_floor_bytes=64 * 1024**3)
+        self.assertEqual((resumed['existing_final'], resumed['new_final'], resumed['remaining_unclaimed']), (1, 2, 0))
+        self.assertEqual(worker.call_count, 3)
+        self.assertEqual(supplement.pin(first / 'FINAL.json'), retained)
+        self.assertEqual(resumed['local_free_space_floor_bytes'], 64 * 1024**3)
+        self.assertEqual(sum(row['event'] == 'claimed' for row in self.history()), 3)
+
+    def test_invalid_storage_floor_refuses_before_any_output(self):
+        for value in (True, False, 0, -1, 1.0, '1', None):
+            with self.subTest(value=value), self.assertRaisesRegex(supplement.IntegrityError, 'invalid_local_space_floor'):
+                self.queue([self.job()], local_free_space_floor_bytes=value)
+            self.assertFalse(self.output.exists())
+
 
 if __name__ == '__main__':
     unittest.main()
