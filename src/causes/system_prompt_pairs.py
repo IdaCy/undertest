@@ -106,7 +106,8 @@ def build_pairs(jobs, config, arms, *, namespace, expected_model, expected_arm_c
             job = copy.deepcopy(original)
             job['allocation'].update(
                 run_id=run_id, stage='system_prompt_intervention', fixed_study_inference=False,
-                primary_memberships=[],
+                primary_memberships=[], descriptive_first_rep=False,
+                paired_stage_study=False, other_awareness_study=False,
                 paired_baseline={**binding, 'original_allocation': copy.deepcopy(allocation)},
                 system_prompt_intervention={'namespace': namespace, 'pair_id': pair_id,
                                             'arm': copy.deepcopy(arm), 'same_seed_intentional': True})

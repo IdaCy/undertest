@@ -83,6 +83,20 @@ class SystemPromptPairsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'original_already_has_intervention'):
             self.build(jobs=generated)
 
+    def test_original_study_flags_are_provenance_only(self):
+        jobs = copy.deepcopy(self.jobs)
+        flags = ('descriptive_first_rep', 'paired_stage_study', 'other_awareness_study')
+        jobs[0]['allocation'].update({key: True for key in flags})
+        jobs[0]['allocation']['reader_thresholds'] = ['presence', 'strongly_favors']
+        result = self.build(jobs=jobs)
+        for arm in result['arms']:
+            derived = arm['jobs'][0]['allocation']
+            self.assertTrue(all(derived[key] is False for key in flags))
+            self.assertTrue(all(derived['paired_baseline']['original_allocation'][key] is True for key in flags))
+            for key in ('continue_to_end', 'instruments', 'reader_stages', 'reader_thresholds'):
+                self.assertEqual(derived[key], jobs[0]['allocation'][key])
+        self.assertTrue(all(jobs[0]['allocation'][key] is True for key in flags))
+
     def test_duplicate_ids_text_and_main_arms_refuse(self):
         for key, value in [('id', self.arms[0]['id']), ('text', self.arms[0]['text']), ('primary', True)]:
             with self.subTest(key=key):
