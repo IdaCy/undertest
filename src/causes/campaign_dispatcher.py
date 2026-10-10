@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import concurrent.futures
 import copy
 import datetime as dt
@@ -153,7 +154,8 @@ class Dispatcher:
                  pause_file=None, runner=None, free_bytes=None, poll_seconds=2,
                  admission_holds=None, admission_holds_sha256=None,
                  code_succession=None, code_succession_sha256=None, global_pause_file=None, start_barrier_file=None,
-                 corpus_continuation=None, corpus_continuation_sha256=None):
+                 corpus_continuation=None, corpus_continuation_sha256=None,
+                 system_prompts_by_run_id=None):
         if type(workers) is not int or workers < 1 or type(max_full) is not int or not 0 <= max_full <= workers:
             raise ValueError('invalid_worker_limits')
         self.jobs = copy.deepcopy(jobs)
@@ -162,6 +164,14 @@ class Dispatcher:
         ids = [validate_job(job) for job in self.jobs]
         if len(set(ids)) != len(ids):
             raise ValueError('duplicate_fixed_run_id')
+        self.system_prompts = None
+        if system_prompts_by_run_id is not None:
+            if (not isinstance(system_prompts_by_run_id, Mapping)
+                    or set(system_prompts_by_run_id) != set(ids)
+                    or not ids or self.prototypes or corpus_continuation is not None
+                    or any(not isinstance(value, str) for value in system_prompts_by_run_id.values())):
+                raise ValueError('system_prompts_require_exact_fixed_queue')
+            self.system_prompts = copy.deepcopy(dict(system_prompts_by_run_id))
         for job in self.prototypes:
             if job.get('eligible', True):
                 validate_job(job)
@@ -201,6 +211,13 @@ class Dispatcher:
             from causes.corpus_continuation import CorpusContinuation
             control, self.continuation_control = pinned_json(corpus_continuation, corpus_continuation_sha256)
             self.continuation = CorpusContinuation.from_control(control, self.prototypes, self.config)
+            if self.continuation.full_selection is not None and self.max_full == 0:
+                raise ValueError('full_continuation_requires_positive_full_limit')
+
+    def config_for(self, job):
+        if self.system_prompts is None:
+            return self.config
+        return {**self.config, 'system': self.system_prompts[job['allocation']['run_id']]}
 
     def make_extension_block(self, index):
         if self.continuation is not None:
@@ -268,7 +285,7 @@ class Dispatcher:
                 if value.get('run_id') != run_id:
                     raise ValueError('summary_run_identity_mismatch')
                 for filename, expected in (('allocation.json', job['allocation']), ('spec.json', job['spec']),
-                                           ('variant.json', job['variant']), ('model.json', self.config)):
+                                           ('variant.json', job['variant']), ('model.json', self.config_for(job))):
                     if not (path / filename).is_file() or json.loads((path / filename).read_bytes()) != expected:
                         raise ValueError('completed_identity_mismatch')
                 self.receipt(run_id, 'existing_completed_summary', job_sha256=sha(job),
@@ -441,6 +458,8 @@ class Dispatcher:
                     code[name + '_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
             identity = {'jobs_sha256': sha(self.jobs), 'config_sha256': sha(self.config),
                         'prototypes_sha256': sha(self.prototypes), 'execution_code': code}
+            if self.system_prompts is not None:
+                identity['system_prompts_sha256'] = sha(self.system_prompts)
             if self.continuation is not None:
                 for name in ('corpus_allocation.py', 'corpus_continuation.py'):
                     code[name + '_sha256'] = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
@@ -571,11 +590,12 @@ class Dispatcher:
                             barrier = True
                             break
                         run_id = job['allocation']['run_id']
-                        self.event('claimed', run_id=run_id, job_sha256=sha(job), config_sha256=sha(self.config),
+                        job_config = self.config_for(job)
+                        self.event('claimed', run_id=run_id, job_sha256=sha(job), config_sha256=sha(job_config),
                                    full=job['allocation'].get('continue_to_end', False), stage=job['allocation'].get('stage'),
                                    free_bytes_before_admission=free)
                         self.claimed[run_id] = sha(job)
-                        future = pool.submit(self.runner, job['spec'], job['variant'], self.config, job['allocation'], self.output / run_id)
+                        future = pool.submit(self.runner, job['spec'], job['variant'], job_config, job['allocation'], self.output / run_id)
                         active[future] = job
                     if not self.admission_paused() and not self.admission_barred() and not pending and len(active) < self.workers and any(job.get('eligible', True) for job in self.prototypes):
                         continue
@@ -605,16 +625,23 @@ def main():
     parser.add_argument('--admission-holds-sha256')
     parser.add_argument('--code-succession')
     parser.add_argument('--code-succession-sha256')
+    parser.add_argument('--system-prompts')
+    parser.add_argument('--system-prompts-sha256')
     args = parser.parse_args()
     jobs = json.loads(Path(args.jobs).read_bytes())
     config = json.loads(Path(args.config).read_bytes())
     prototypes = json.loads(Path(args.extension_prototypes).read_bytes())
+    if bool(args.system_prompts) != bool(args.system_prompts_sha256):
+        parser.error('--system-prompts and --system-prompts-sha256 must be supplied together')
+    system_prompts = (pinned_json(args.system_prompts, args.system_prompts_sha256)[0]
+                      if args.system_prompts is not None else None)
     result = Dispatcher(jobs, config, args.output, args.workers, args.max_full, prototypes, args.pause_file,
                         admission_holds=args.admission_holds, admission_holds_sha256=args.admission_holds_sha256,
                         code_succession=args.code_succession, code_succession_sha256=args.code_succession_sha256,
                         global_pause_file=args.global_pause_file, start_barrier_file=args.start_barrier_file,
                         corpus_continuation=args.corpus_continuation,
-                        corpus_continuation_sha256=args.corpus_continuation_sha256).run()
+                        corpus_continuation_sha256=args.corpus_continuation_sha256,
+                        system_prompts_by_run_id=system_prompts).run()
     print(json.dumps(result))
 
 
