@@ -66,6 +66,7 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--foundation-binding', required=True)
     parser.add_argument('--foundation-binding-review', required=True)
+    parser.add_argument('--assembly-adoption')
     args = parser.parse_args()
     plan_pin, review_pin = pin(Path(args.plan)), pin(Path(args.review))
     plan, review = checked(plan_pin), checked(review_pin)
@@ -147,6 +148,14 @@ def main():
     receipt_refs = {action: pin(execution_dir / action / 'EXECUTION.v1.json') for action in ('status', 'sync')}
     ownership_ref = pin(Path(plan['ownership']['layout']['workspace']) / 'OWNERSHIP_ACTUAL.json')
     ownership = owner.verify_live_ownership(ownership_ref, plan_pin, plan['ownership'], receipt_refs)
+    assembly_adoption = None
+    if 'late_assembly' in plan:
+        assert args.assembly_adoption is not None
+        assembly_adoption = pin(Path(args.assembly_adoption))
+        owner.verify_assembly_adoption(assembly_adoption, plan_pin, review_pin, ownership['adoption'],
+            binding_pin, binding_review_pin, ownership_ref, receipt_refs)
+    else:
+        assert args.assembly_adoption is None
     storage = owner.verify_snapshot_storage(sync, checked(manifest_pin), verified, plan['ownership']['layout'])
     readiness = check_native(plan, status, records, mapped=owner.mapped, ownership=ownership)
     workflow = checked(ownership['adoption'])
@@ -159,6 +168,9 @@ def main():
         plan['native']['registration'], plan['native']['registration_review'],
         plan['native']['authorization_pointer'], plan['native']['monitor_policy'],
         request_pin, binding_pin, binding_review_pin, join_source, plan['join_source_review']]
+    if assembly_adoption is not None:
+        evidence_pins.append(assembly_adoption)
+        evidence_pins.append(pin(Path(plan['ownership']['layout']['workspace']) / 'STATUS_GATE.json'))
     readiness.update(schema='causes.native_startup_consumers.v1',
         assembled_at=dt.datetime.now(dt.timezone.utc).isoformat(), evidence_pins=evidence_pins,
         execution_plan=plan_pin, execution_plan_review=review_pin,
@@ -172,6 +184,8 @@ def main():
         isolated_ownership=ownership_ref, snapshot_storage=storage,
         actor_admission=False, independent_actual_review_required=True,
         workflow_adoption=ownership['adoption'], assembly_source=pin(Path(__file__).resolve()))
+    if assembly_adoption is not None:
+        readiness['assembly_adoption'] = assembly_adoption
     output = Path(args.output)
     assert output.is_absolute() and output.resolve() == output and output.is_relative_to(Path(plan['campaign_root']) / 'tasks')
     print(json.dumps(save(output, readiness)))

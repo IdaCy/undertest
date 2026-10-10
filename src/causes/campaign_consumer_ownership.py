@@ -244,6 +244,143 @@ def verify_live_ownership(ref, plan_ref, contract, receipts):
     return actual
 
 
+def with_late_assembly(plan, configuration, configuration_review, report_path,
+                       binding_path, binding_review_path, authority_path, wait_seconds=120):
+    """Add one scheduling contract to an otherwise unchanged concrete pair plan."""
+    require('late_assembly' not in plan and plan['native']['foundation'] is None
+            and plan['native']['waiting_report'] is None, 'external_foundation_join_required')
+    native = plan['native']; cfg, peer = map(checked, (configuration, configuration_review))
+    require(cfg['policy'] == native['policy'] and cfg['source'] == native['foundation_source']
+            and peer.get('accepted_native_foundation_configuration') is True
+            and peer['configuration'] == configuration and peer['source'] == cfg['source'],
+            'late_assembly_configuration_changed')
+    checked(native['policy']); checked(native['launch'])
+    result = copy.deepcopy(plan)
+    result['late_assembly'] = dict(foundation_binding=str(canonical(binding_path)),
+        foundation_binding_review=str(canonical(binding_review_path)), adoption=str(canonical(authority_path)),
+        wait_seconds=wait_seconds, status_after_report=dict(path=str(canonical(report_path)),
+            configuration=configuration, configuration_review=configuration_review, source=cfg['source'],
+            policy=native['policy'], launch=native['launch'], host=cfg['native_host'], wait_seconds=wait_seconds))
+    late_assembly_paths(result, {'late_assembly': result['late_assembly']},
+                        binding_path, binding_review_path, authority_path)
+    return result
+
+
+def late_assembly_paths(plan, adoption, binding, binding_review, authority):
+    """Bind future publication locations without pretending their bytes exist."""
+    value = plan['late_assembly']
+    require(set(value) == {'foundation_binding', 'foundation_binding_review', 'adoption', 'wait_seconds',
+                           'status_after_report'},
+            'late_assembly_contract_fields')
+    require(type(value['wait_seconds']) is int and 0 < value['wait_seconds'] <= 180,
+            'late_assembly_wait_invalid')
+    paths = [str(canonical(x)) for x in (binding, binding_review, authority)]
+    require(len(set(paths)) == 3 and paths == [value[x] for x in
+            ('foundation_binding', 'foundation_binding_review', 'adoption')], 'late_assembly_paths_changed')
+    require(adoption.get('late_assembly') == value, 'late_assembly_delegation_changed')
+    gate = value['status_after_report']
+    require(set(gate) == {'path', 'configuration', 'configuration_review', 'source', 'policy', 'launch',
+                         'host', 'wait_seconds'}, 'status_gate_contract_fields')
+    require(type(gate['wait_seconds']) is int and 0 < gate['wait_seconds'] <= 180, 'status_gate_wait_invalid')
+    require(str(canonical(gate['path'])) not in paths, 'status_gate_path_conflict')
+    for key in ('configuration', 'configuration_review', 'source', 'policy', 'launch'):
+        require(pin(gate[key]['path']) == gate[key], 'status_gate_fixed_pin_changed')
+    require(gate['policy'] == plan['native']['policy'] and gate['launch'] == plan['native']['launch']
+            and gate['source'] == plan['native']['foundation_source'], 'status_gate_native_scope_changed')
+    return value
+
+
+def verify_status_report(contract, report_ref):
+    """Check one completed native waiting capture solely to schedule status."""
+    require(report_ref['path'] == contract['path'], 'status_gate_report_path_changed')
+    report = checked(report_ref); root = canonical(report_ref['path']).parent
+    require(report['execution']['path'] == str(root / 'EXECUTION.json'), 'status_gate_execution_path_changed')
+    execution = checked(report['execution'])
+    require(type(execution['returncode']) is int and execution['returncode'] == 0
+            and execution['timed_out'] is False and execution['remote_completion_unknown'] is False,
+            'status_gate_capture_failed')
+    for key in ('stdout', 'stderr'):
+        require(execution[key]['path'] == str(root / key) and pin(execution[key]['path']) == execution[key],
+                'status_gate_stream_changed')
+    require(execution['stderr']['bytes'] == 0, 'status_gate_stderr')
+    require(execution['intent']['path'] == str(root / 'INTENT.json'), 'status_gate_intent_path_changed')
+    intent = checked(execution['intent'])
+    require(intent['source'] == contract['source'] and intent['review'] == contract['configuration_review']
+            and intent['read_only'] is True and intent['no_automatic_retry'] is True
+            and intent['request']['path'] == str(root / 'REQUEST.json'), 'status_gate_intent_changed')
+    request = checked(intent['request'])
+    expected = dict(configuration=contract['configuration'], review=contract['configuration_review'],
+        action='foundation', host=contract['host'], stage='waiting_release',
+        waiting=dict(policy=contract['policy'], launch=contract['launch']))
+    require(request == expected, 'status_gate_request_changed')
+    raw = checked(execution['stdout'])
+    require(report == {**{key: value for key, value in raw.items() if key != 'files'},
+            'configuration': contract['configuration'], 'execution': report['execution'],
+            'receipt_map': report['receipt_map']}, 'status_gate_report_not_raw_capture')
+    require(report['action'] == 'foundation' and report['host'] == contract['host']
+            and report['stage'] == 'waiting_release' and report['read_only'] is True,
+            'status_gate_capture_scope_changed')
+    waiting = report['observation']['waiting']
+    require(report['observation']['waiting_launch'] == waiting['launch'] == contract['launch']
+            and waiting['policy'] == contract['policy'], 'status_gate_waiting_scope_changed')
+    observed = dt.datetime.now(dt.timezone.utc)
+    times = [dt.datetime.fromisoformat(x) for x in
+             (report['started_at'], waiting['at'], report['at'], execution['at'])] + [observed]
+    require(all(a <= b for a, b in zip(times, times[1:])) and (observed-times[1]).total_seconds() <= 180,
+            'status_gate_capture_time_invalid')
+    require(pin(report['receipt_map']['path']) == report['receipt_map'], 'status_gate_receipt_map_changed')
+    return dict(report=report_ref, execution=report['execution'], waiting_at=waiting['at'],
+                observed_at=observed.isoformat(), scheduling_only=True, foundation_accepted=False)
+
+
+def verify_assembly_adoption(ref, plan_ref, review_ref, pair_adoption_ref,
+                             binding_ref, binding_review_ref, ownership_ref, receipts):
+    """Accept one fresh assembly authority for actual pair and foundation facts.
+
+    This does not grant a new observation interval or accept the foundation.
+    The native joiner and assembler still enforce those independent predicates.
+    """
+    plan, review, pair_adoption = map(checked, (plan_ref, review_ref, pair_adoption_ref))
+    late_assembly_paths(plan, pair_adoption, binding_ref['path'], binding_review_ref['path'], ref['path'])
+    require(review.get('accepted_isolated_consumer_execution') is True and review['plan'] == plan_ref,
+            'assembly_plan_review_changed')
+    require(pair_adoption.get('root_authorized') is True
+            and pair_adoption['action'] == 'one_isolated_status_sync_pair'
+            and pair_adoption['plan'] == plan_ref and pair_adoption['review'] == review_ref
+            and pair_adoption['source'] == plan['wrapper_source']
+            and pair_adoption['workflow'] == plan['workflow'], 'assembly_pair_adoption_changed')
+    for item in (binding_ref, binding_review_ref):
+        require(pin(item['path']) == item, 'assembly_foundation_pin_changed')
+    value = checked(ref)
+    require(value.get('root_authorized') is True
+            and value['action'] == 'one_isolated_consumer_assembly'
+            and type(value['maximum_invocations']) is int and value['maximum_invocations'] == 1
+            and value['automatic_retry'] is False, 'assembly_authority_scope')
+    expected = dict(plan=plan_ref, review=review_ref, pair_adoption=pair_adoption_ref,
+        source=plan['wrapper_source'], assembly_source=plan['assembly_source'], workflow=plan['workflow'],
+        foundation_binding=binding_ref, foundation_binding_review=binding_review_ref,
+        ownership=ownership_ref, receipts=receipts)
+    gate_ref = pin(Path(plan['ownership']['layout']['workspace']) / 'STATUS_GATE.json')
+    expected['status_gate'] = gate_ref
+    require(all(value.get(key) == item for key, item in expected.items()), 'assembly_authority_binding_changed')
+    age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(value['at'])).total_seconds()
+    require(0 <= age <= 180, 'assembly_authority_expired')
+    require(dt.datetime.fromisoformat(value['at']) >= dt.datetime.fromisoformat(checked(ownership_ref)['at']),
+            'assembly_authority_predates_pair')
+    actual = verify_live_ownership(ownership_ref, plan_ref, plan['ownership'], receipts)
+    require(actual['adoption'] == pair_adoption_ref, 'assembly_owned_pair_changed')
+    gate = checked(gate_ref)
+    require(gate['report']['path'] == plan['late_assembly']['status_after_report']['path']
+            and pin(gate['report']['path']) == gate['report']
+            and gate['scheduling_only'] is True and gate['foundation_accepted'] is False,
+            'assembly_status_gate_changed')
+    require(checked(binding_ref)['waiting_report'] == gate['report'], 'assembly_waiting_report_changed')
+    status = checked(receipts['status'])
+    require(dt.datetime.fromisoformat(gate['waiting_at']) <= dt.datetime.fromisoformat(gate['observed_at'])
+            <= dt.datetime.fromisoformat(status['started_at']), 'assembly_status_order_changed')
+    return value
+
+
 def verify_snapshot_storage(sync, manifest, verified, value):
     """Verify physical custody and the entire fresh isolated accepted index.
 

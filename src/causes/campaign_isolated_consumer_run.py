@@ -78,10 +78,38 @@ def run_child(argv, out, err, timeout):
                 process=process_info, owned_group_remaining=remaining, automatic_retry=False)
 
 
+def await_publication(path, seconds, pause_paths):
+    until = time.monotonic() + seconds
+    while not Path(path).exists():
+        assert not Path(path).is_symlink()
+        for pause in pause_paths:
+            assert not Path(pause).exists()
+        if time.monotonic() >= until:
+            raise TimeoutError('late_consumer_input_not_published:' + str(path))
+        time.sleep(0.05)
+    for pause in pause_paths:
+        assert not Path(pause).exists()
+    return pin(Path(path))
+
+
+def await_assembly(plan, review_ref, plan_ref, adoption_ref, binding, binding_review,
+                   authority, ownership_ref, receipts):
+    """Wait only for the predeclared authority, published after its dependencies."""
+    import causes.campaign_consumer_ownership as owner
+    contract = owner.late_assembly_paths(plan, checked(adoption_ref), binding, binding_review, authority)
+    authority_ref = await_publication(authority, contract['wait_seconds'], plan['pause_paths'])
+    # There is no retry after publication: incomplete, changed or refused input
+    # terminates this workspace and preserves the original consumer receipts.
+    owner.verify_assembly_adoption(authority_ref, plan_ref, review_ref, adoption_ref,
+        pin(Path(binding)), pin(Path(binding_review)), ownership_ref, receipts)
+    return authority_ref
+
+
 def main():
     parser = argparse.ArgumentParser()
     for field in ('plan', 'review', 'adoption', 'foundation-binding', 'foundation-binding-review'):
         parser.add_argument('--' + field, required=True)
+    parser.add_argument('--assembly-adoption')
     args = parser.parse_args()
     plan_ref, review_ref, adoption_ref = [pin(Path(getattr(args, x))) for x in ('plan', 'review', 'adoption')]
     plan, review, adoption = map(checked, (plan_ref, review_ref, adoption_ref))
@@ -93,8 +121,20 @@ def main():
     assert adoption['plan'] == plan_ref and adoption['review'] == review_ref
     assert adoption['source'] == plan['wrapper_source'] and adoption['maximum_invocations'] == 1
     assert adoption['workflow'] == plan['workflow']
-    assert adoption['foundation_binding'] == pin(Path(args.foundation_binding))
-    assert adoption['foundation_binding_review'] == pin(Path(args.foundation_binding_review))
+    late = args.assembly_adoption is not None
+    if not late:
+        assert 'late_assembly' not in plan and 'late_assembly' not in adoption
+        assert adoption['foundation_binding'] == pin(Path(args.foundation_binding))
+        assert adoption['foundation_binding_review'] == pin(Path(args.foundation_binding_review))
+    else:
+        import causes.campaign_consumer_ownership as owner
+        owner.late_assembly_paths(plan, adoption, args.foundation_binding,
+            args.foundation_binding_review, args.assembly_adoption)
+        assert 'foundation_binding' not in adoption and 'foundation_binding_review' not in adoption
+        for path in (args.foundation_binding, args.foundation_binding_review, args.assembly_adoption):
+            assert not Path(path).exists() and not Path(path).is_symlink()
+        gate_path = Path(plan['late_assembly']['status_after_report']['path'])
+        assert not gate_path.exists() and not gate_path.is_symlink()
     age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(adoption['at'])).total_seconds()
     assert 0 <= age <= 180
     for path in plan['pause_paths']:
@@ -126,24 +166,38 @@ def main():
             outcomes[name] = save(root / (name + '.EXECUTION.json'), record)
             return record
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                futures = [pool.submit(invoke, action,
+            def consumer(action):
+                if late and action == 'status':
+                    gate = plan['late_assembly']['status_after_report']
+                    report = await_publication(gate['path'], gate['wait_seconds'], plan['pause_paths'])
+                    save(root / 'STATUS_GATE.json', owner.verify_status_report(gate, report))
+                return invoke(action,
                     [sys.executable, '-B', plan['source']['path'], '--plan', args.plan, '--review', args.review,
-                     '--action', action], 170 if action == 'status' else 920) for action in ('status', 'sync')]
+                     '--action', action], 170 if action == 'status' else 920)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(consumer, action) for action in ('sync', 'status')]
                 results = [future.result() for future in futures]
             assert all(x['returncode'] == 0 and x['error'] is None and x['stderr']['bytes'] == 0 for x in results)
             receipts = {key: pin(Path(plan['execution_directory']) / key / 'EXECUTION.v1.json') for key in ('status', 'sync')}
             workspace.seal(receipts)
+            assembly_adoption = None
+            if late:
+                assembly_adoption = await_assembly(plan, review_ref, plan_ref, adoption_ref,
+                    args.foundation_binding, args.foundation_binding_review, args.assembly_adoption,
+                    workspace.actual, receipts)
             argv = [sys.executable, '-B', plan['assembly_source']['path'], '--plan', args.plan,
                 '--review', args.review, '--output', str(Path(plan['execution_directory']) / 'READINESS.v1.json'),
                 '--foundation-binding', args.foundation_binding,
                 '--foundation-binding-review', args.foundation_binding_review]
+            if late:
+                argv += ['--assembly-adoption', args.assembly_adoption]
             result = invoke('assembly', argv, 120)
             assert result['returncode'] == 0 and result['error'] is None and result['stderr']['bytes'] == 0
             for ref in plan['required_pins']:
                 assert pin(ref['path']) == ref
             final = save(root / 'RESULT.json', dict(passed=True, plan=plan_ref, review=review_ref,
                 adoption=adoption_ref, executions=outcomes, ownership=workspace.actual,
+                assembly_adoption=assembly_adoption,
                 readiness=pin(Path(plan['execution_directory']) / 'READINESS.v1.json'),
                 independent_actual_review_required=True, runtime_release_authorized=False))
             print(json.dumps(final))
