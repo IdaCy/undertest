@@ -158,11 +158,65 @@ class RecordedStorageRuntimeTests(unittest.TestCase):
                 self.options.pop(option)
         self.assertFalse(self.started)
 
+    def test_prompt_and_prefix_options_are_copied_and_bound_to_owner(self):
+        prompts = {'fixed': 'intervention'}
+        policy = {'namespace': 'extra', 'system_prompt': 'baseline'}
+        self.options.update(system_prompts_by_run_id=prompts, prefix_extension=policy)
+        self.run_fake(self.authority())
+        forwarded = self.constructed[0]
+        self.assertEqual(forwarded['system_prompts_by_run_id'], prompts)
+        self.assertEqual(forwarded['prefix_extension'], policy)
+        self.assertIsNot(forwarded['system_prompts_by_run_id'], prompts)
+        self.assertIsNot(forwarded['prefix_extension'], policy)
+        owner = json.loads((self.records / 'OWNER.json').read_bytes())
+        self.assertEqual(owner['binding']['dispatcher_options'], self.options)
+        self.assertEqual((forwarded['workers'], forwarded['max_full']), (8, 2))
+        self.assertIsInstance(forwarded['free_bytes'], s.StorageGuard)
+
+    def test_changed_prompt_or_prefix_policy_refuses_before_construction(self):
+        self.options.update(system_prompts_by_run_id={'fixed': 'intervention'},
+                            prefix_extension={'namespace': 'extra', 'system_prompt': 'baseline'})
+        authority = self.authority()
+        for option, key in (('system_prompts_by_run_id', 'fixed'),
+                            ('prefix_extension', 'system_prompt')):
+            with self.subTest(option=option):
+                original = self.options[option][key]
+                self.options[option][key] = 'changed after authority'
+                with self.assertRaisesRegex(ValueError, 'authority_binding_changed'):
+                    self.run_fake(authority)
+                self.options[option][key] = original
+        self.assertFalse(self.records.exists())
+        self.assertFalse(self.constructed)
+
+    def test_invalid_prompt_map_still_rejected_by_native_dispatcher(self):
+        self.kwargs['jobs'] = [{'spec': {}, 'variant': {},
+                               'allocation': {'run_id': 'fixed', 'continue_to_end': False}}]
+        self.options['system_prompts_by_run_id'] = {'unassigned': 'wrong membership'}
+        real_guard = s.StorageGuard
+        def observed_guard(binding, *, report):
+            return real_guard(binding, lambda _: self.observation, report)
+        with patch.object(s, 'StorageGuard', side_effect=observed_guard):
+            with self.assertRaisesRegex(ValueError, 'system_prompts_require_exact_fixed_queue'):
+                runtime.run_recorded_dispatcher(**self.kwargs, authority=self.authority())
+        self.assertFalse((self.output / '.dispatcher').exists())
+        self.assertFalse(json.loads((self.records / 'FAILED.json').read_bytes())['dispatcher_run_entered'])
+
     def test_real_dispatcher_waits_without_claims_and_exits_on_role_pause(self):
+        self.assert_real_dispatcher_waiting()
+
+    def test_real_prompt_and_prefix_owner_preserves_barrier_guard_and_identity(self):
+        self.assert_real_dispatcher_waiting(prompt_and_prefix=True)
+
+    def assert_real_dispatcher_waiting(self, *, prompt_and_prefix=False):
         holds = h.save_new(self.base, 'holds.json', {'schema': 'caus.admission_holds.v1', 'holds': []})
         self.options['admission_holds_sha256'] = holds['sha256']
         self.kwargs['jobs'] = [{'spec': {'task_id': 'fixture'}, 'variant': {'id': 'baseline'},
                                'allocation': {'run_id': 'never_called', 'continue_to_end': True}}]
+        if prompt_and_prefix:
+            self.options.update(system_prompts_by_run_id={'never_called': 'fixed intervention'},
+                prefix_extension={'namespace': 'extra', 'system_prompt': 'baseline'},
+                extension_prototypes=[{'spec': {'task_id': 'fixture'}, 'variant': {'id': 'baseline'},
+                    'allocation': {'run_id': 'prototype', 'continue_to_end': False}}])
         authority = self.authority()
         real_guard = s.StorageGuard
         results, failures = [], []
@@ -198,6 +252,17 @@ class RecordedStorageRuntimeTests(unittest.TestCase):
                                        owner['controller_id'] / 'identity.json').read_bytes())
                 self.assertEqual(identity['jobs_sha256'], sha(self.kwargs['jobs']))
                 self.assertEqual(identity['start_barrier_file'], self.options['start_barrier_file'])
+                self.assertEqual((identity['workers'], identity['max_full']), (8, 2))
+                queue = json.loads((self.output / '.dispatcher/queue_identity.json').read_bytes())
+                if prompt_and_prefix:
+                    for key, option in (('system_prompts_sha256', 'system_prompts_by_run_id'),
+                                        ('prefix_extension_sha256', 'prefix_extension'),
+                                        ('prototypes_sha256', 'extension_prototypes')):
+                        self.assertEqual(identity[key], sha(self.options[option]))
+                        self.assertEqual(queue[key], identity[key])
+                else:
+                    self.assertNotIn('system_prompts_sha256', queue)
+                    self.assertNotIn('prefix_extension_sha256', queue)
                 self.assertTrue(h.lock_owned_by(self.output / '.dispatcher.lock', owner['process']['pid']))
                 self.assertTrue(h.lock_owned_by(self.records / 'guard/reporting.lock', owner['process']['pid']))
                 self.assertFalse((self.output / 'never_called').exists())

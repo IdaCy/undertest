@@ -14,7 +14,8 @@ _SOURCE_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 START = 'start_storage_owner_behind_barrier'
 _REQUIRED_OPTIONS = {'workers', 'max_full', 'pause_file', 'global_pause_file',
                      'start_barrier_file', 'admission_holds', 'admission_holds_sha256'}
-_OPTIONAL_OPTIONS = {'extension_prototypes', 'corpus_continuation', 'corpus_continuation_sha256'}
+_OPTIONAL_OPTIONS = {'extension_prototypes', 'corpus_continuation', 'corpus_continuation_sha256',
+                     'system_prompts_by_run_id', 'prefix_extension'}
 
 
 def launch_binding(jobs, config, output, storage_binding, record_directory,
