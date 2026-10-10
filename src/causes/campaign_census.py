@@ -52,10 +52,15 @@ def canonical(path):
 
 
 def identity(value):
+    return _identity(value, ())
+
+
+def _identity(value, known_run_ids):
     if type(value) is not dict:
         raise ValueError('allocation_object_required')
     rid = value.get('run_id')
-    if type(rid) is not str or not rid or len(PurePosixPath(rid).parts) != 1 or relative(rid).name != rid:
+    if type(rid) is not str or not rid or (rid not in known_run_ids and
+            (len(PurePosixPath(rid).parts) != 1 or relative(rid).name != rid)):
         raise ValueError('invalid_allocation_run_id')
     out = {'run_id': rid}
     for key in FIELDS[1:]:
@@ -206,8 +211,8 @@ def compose_reservation(config, captures, frozen_inputs):
         raise ValueError('exact_census_inputs_required')
     by_id, locations, provenance = {}, {}, []
     def reserve(value):
-        row = identity(value); rid = row['run_id']
-        if rid in by_id and encoded(by_id[rid]) != encoded(row):
+        row = _identity(value, by_id); rid = row['run_id']
+        if rid in by_id and by_id[rid] != row:
             raise ValueError('allocation_identity_conflict')
         by_id[rid] = row
         return rid
@@ -232,6 +237,8 @@ def compose_reservation(config, captures, frozen_inputs):
     for host in hosts:
         validate_host(host)
         item = captures[host['host']];data = item['value'];base = PurePosixPath(host['base'])
+        root_paths = {root: base/root for root in host['roots']}
+        block_paths = {root: path/'.dispatcher/blocks' for root, path in root_paths.items()}
         if (data.get('schema') != CAPTURE_SCHEMA or data.get('host') != host['host'] or
                 data.get('host_config_sha256') != hashlib.sha256(encoded(host)).hexdigest() or
                 data.get('reads_actor_or_probe_outcomes') is not False):
@@ -258,10 +265,10 @@ def compose_reservation(config, captures, frozen_inputs):
             elif root not in host['roots']:
                 raise ValueError('allocation_root_scope')
             elif kind == 'actual_allocation':
-                if path.name != 'allocation.json' or path.parent.parent != base/root or len(f['allocations']) != 1:
+                if path.name != 'allocation.json' or path.parent.parent != root_paths[root] or len(f['allocations']) != 1:
                     raise ValueError('actual_allocation_path_scope')
             elif kind == 'persisted_extension_block':
-                if path.parent != base/root/'.dispatcher/blocks' or not path.match('[0-9]*.json'):
+                if path.parent != block_paths[root] or not path.match('[0-9]*.json'):
                     raise ValueError('persisted_block_path_scope')
                 blocks.append({'host': host['host'], 'file': {k: f[k] for k in ('path','bytes','sha256')}, 'allocation_count': len(f['allocations'])})
             else:
