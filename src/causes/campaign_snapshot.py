@@ -21,6 +21,8 @@ class SnapshotConfig:
     destination: Path
     free_space_floor_bytes: int = 80 * 1024**3
     limit: int = 128
+    # Keep roots broad enough for shared history while limiting new copies.
+    selected_runs: tuple[str, ...] | None = None
 
     def validate(self):
         if not isinstance(self.host, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.host) is None:
@@ -32,6 +34,14 @@ class SnapshotConfig:
             raise ValueError('explicit_distinct_snapshot_roots_required')
         for root in self.roots:
             relative_path(root)
+        if self.selected_runs is not None:
+            if type(self.selected_runs) is not tuple or not self.selected_runs:
+                raise ValueError('explicit_snapshot_run_selection_required')
+            for run in self.selected_runs:
+                if str(relative_path(run).parent) not in self.roots:
+                    raise ValueError('selected_snapshot_run_outside_roots')
+            if len(set(self.selected_runs)) != len(self.selected_runs):
+                raise ValueError('duplicate_selected_snapshot_run')
         if type(self.limit) is not int or self.limit <= 0 or type(self.free_space_floor_bytes) is not int or self.free_space_floor_bytes < 0:
             raise ValueError('invalid_snapshot_resource_limit')
         canonical_path(self.destination)
@@ -57,6 +67,8 @@ def checked_authorization(config, authorize):
     value = authorize(config)
     if not isinstance(value, Mapping) or value.get('host') != config.host or value.get('remote_base') != config.remote_base or value.get('roots') != list(config.roots) or not value.get('evidence'):
         raise ValueError('snapshot_authorization_scope_mismatch')
+    if config.selected_runs is not None and value.get('selected_runs') != list(config.selected_runs):
+        raise ValueError('snapshot_authorization_selection_mismatch')
     # The caller validates its registration policy and returns immutable evidence.
     return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
 
@@ -67,6 +79,7 @@ import datetime,hashlib,json,os,stat,sys
 request=json.load(sys.stdin)
 base=Path(request['base'])
 accepted=set(request['accepted'])
+selected=set(request['selected_runs']) if request.get('selected_runs') is not None else None
 rows=[];skipped=[]
 excluded={'upper','work','merged','reflink_workspace','pilot_copy_workspace'}
 def digest(p):
@@ -84,6 +97,7 @@ for root in request['roots']:
   skipped.append({'root':root,'reason':'root_not_present'});continue
  for run in sorted(group.iterdir()):
   key=str(run.relative_to(base))
+  if selected is not None and key not in selected:continue
   if key in accepted:continue
   if run.is_symlink() or not run.is_dir():continue
   summary=run/'summary.json'
@@ -169,6 +183,8 @@ def validate_manifest(manifest, config, accepted):
         run = relative_path(row['run'])
         if str(run.parent) not in config.roots or row['run'] in seen or row['run'] in accepted:
             raise ValueError('invalid_or_repeated_manifest_run')
+        if config.selected_runs is not None and row['run'] not in config.selected_runs:
+            raise ValueError('unselected_manifest_run')
         seen.add(row['run'])
         files = {}
         for item in row['files']:
@@ -205,6 +221,8 @@ def _synchronize_under_lock(config, authorize, authorization):
     attempt = attempts / (datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid.uuid4().hex[:8])
     attempt.mkdir(parents=True, exist_ok=False)
     request = {'host': config.host, 'base': config.remote_base, 'roots': list(config.roots), 'accepted': accepted, 'limit': config.limit}
+    if config.selected_runs is not None:
+        request['selected_runs'] = list(config.selected_runs)
     save(attempt / 'AUTHORIZATION.json', authorization)
     save(attempt / 'REQUEST.json', request)
     ssh = ['ssh', '-C', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', config.host, 'python3', '-c', shlex.quote(REMOTE_CODE)]
