@@ -244,6 +244,24 @@ def verify_live_ownership(ref, plan_ref, contract, receipts):
     return actual
 
 
+def local_launch(plan):
+    """Read an explicitly retained launch without changing its native identity."""
+    original = plan['native']['launch']
+    custody = plan.get('launch_custody')
+    if custody is None:
+        return checked(original)
+    require(set(custody) == {'source', 'local'} and custody['source'] == original,
+            'launch_custody_original_changed')
+    local = custody['local']
+    require(local['path'] != original['path']
+            and all(local[key] == original[key] for key in ('bytes', 'sha256')),
+            'launch_custody_bytes_changed')
+    require(local in plan['required_pins']
+            and all(ref['path'] != original['path'] for ref in plan['required_pins']),
+            'launch_custody_local_projection_required')
+    return checked(local)
+
+
 def with_late_assembly(plan, configuration, configuration_review, report_path,
                        binding_path, binding_review_path, authority_path, wait_seconds=120):
     """Add one scheduling contract to an otherwise unchanged concrete pair plan."""
@@ -254,7 +272,7 @@ def with_late_assembly(plan, configuration, configuration_review, report_path,
             and peer.get('accepted_native_foundation_configuration') is True
             and peer['configuration'] == configuration and peer['source'] == cfg['source'],
             'late_assembly_configuration_changed')
-    checked(native['policy']); checked(native['launch'])
+    checked(native['policy']); local_launch(plan)
     result = copy.deepcopy(plan)
     result['late_assembly'] = dict(foundation_binding=str(canonical(binding_path)),
         foundation_binding_review=str(canonical(binding_review_path)), adoption=str(canonical(authority_path)),
@@ -283,10 +301,11 @@ def late_assembly_paths(plan, adoption, binding, binding_review, authority):
                          'host', 'wait_seconds'}, 'status_gate_contract_fields')
     require(type(gate['wait_seconds']) is int and 0 < gate['wait_seconds'] <= 180, 'status_gate_wait_invalid')
     require(str(canonical(gate['path'])) not in paths, 'status_gate_path_conflict')
-    for key in ('configuration', 'configuration_review', 'source', 'policy', 'launch'):
+    for key in ('configuration', 'configuration_review', 'source', 'policy'):
         require(pin(gate[key]['path']) == gate[key], 'status_gate_fixed_pin_changed')
     require(gate['policy'] == plan['native']['policy'] and gate['launch'] == plan['native']['launch']
             and gate['source'] == plan['native']['foundation_source'], 'status_gate_native_scope_changed')
+    local_launch(plan)
     return value
 
 

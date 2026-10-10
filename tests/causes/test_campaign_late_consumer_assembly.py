@@ -283,6 +283,55 @@ o.save(out/'EXECUTION.v1.json',{'plan':o.pin(a.plan),'returncode':0,'error':None
             own.with_late_assembly(wrong, configuration, peer, self.gate['path'],
                 self.binding, self.binding_review, self.authority)
 
+    def retained_launch_plan(self):
+        original = self.gate['launch']
+        retained = self.base / 'retained-launch.json'
+        Path(original['path']).rename(retained)
+        local = own.pin(retained)
+        return dict(native=dict(policy=self.gate['policy'], launch=original,
+            foundation_source=self.gate['source'], foundation=None, waiting_report=None),
+            launch_custody=dict(source=original, local=local), required_pins=[local])
+
+    def test_retained_launch_preserves_original_in_plan_and_status_gate(self):
+        plan = self.retained_launch_plan()
+        configuration = own.save(self.base / 'retained-config.json', dict(policy=self.gate['policy'],
+            source=self.gate['source'], native_host=self.gate['host']))
+        peer = own.save(self.base / 'retained-config-peer.json', dict(accepted_native_foundation_configuration=True,
+            configuration=configuration, source=self.gate['source']))
+        result = own.with_late_assembly(plan, configuration, peer, self.gate['path'],
+            self.binding, self.binding_review, self.authority, wait_seconds=5)
+        self.assertFalse(Path(self.gate['launch']['path']).exists())
+        self.assertEqual(result['native']['launch'], self.gate['launch'])
+        self.assertEqual(result['late_assembly']['status_after_report']['launch'], self.gate['launch'])
+        own.late_assembly_paths(result, {'late_assembly': result['late_assembly']},
+            self.binding, self.binding_review, self.authority)
+        for ref in result['required_pins']:
+            self.assertEqual(own.pin(ref['path']), ref)
+        self.assertEqual(own.local_launch(result), {'fixture': 'launch'})
+
+    def test_retained_launch_rejects_wrong_source_bytes_and_local_projection(self):
+        plan = self.retained_launch_plan()
+        cases = []
+        wrong = copy.deepcopy(plan); wrong['launch_custody']['source'] = self.gate['policy']; cases.append(wrong)
+        wrong = copy.deepcopy(plan); wrong['launch_custody']['local']['sha256'] = '0' * 64; cases.append(wrong)
+        wrong = copy.deepcopy(plan); wrong['launch_custody']['local']['bytes'] += 1; cases.append(wrong)
+        wrong = copy.deepcopy(plan); wrong['required_pins'] = []; cases.append(wrong)
+        wrong = copy.deepcopy(plan); wrong['required_pins'].append(self.gate['launch']); cases.append(wrong)
+        wrong = copy.deepcopy(plan); wrong['launch_custody']['local'] = self.gate['launch']; cases.append(wrong)
+        for number, wrong in enumerate(cases):
+            with self.subTest(number=number), self.assertRaises(ValueError):
+                own.local_launch(wrong)
+        Path(plan['launch_custody']['local']['path']).write_text('changed retained bytes')
+        with self.assertRaisesRegex(ValueError, 'workspace_input_changed'):
+            own.local_launch(plan)
+
+    def test_retained_launch_mapping_does_not_allow_a_changed_gate_identity(self):
+        plan = self.retained_launch_plan(); plan['late_assembly'] = copy.deepcopy(self.late)
+        plan['late_assembly']['status_after_report']['launch'] = plan['launch_custody']['local']
+        with self.assertRaisesRegex(ValueError, 'status_gate_native_scope_changed'):
+            own.late_assembly_paths(plan, {'late_assembly': plan['late_assembly']},
+                self.binding, self.binding_review, self.authority)
+
 
 if __name__ == '__main__':
     unittest.main()
