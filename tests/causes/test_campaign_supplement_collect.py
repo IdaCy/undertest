@@ -335,6 +335,147 @@ class SupplementCarryForwardTests(SupplementCollectFixture):
         change(p); b['prepared_inputs'] = self.save('changed_prepared.json', p)
         return self.save('changed_binding.json', b)
 
+    def accepted_partial(self, binding, summary):
+        prior = self.accepted(binding, summary)
+        previous = json.loads(core.pinned(binding))
+        prepared = json.loads(core.pinned(previous['prepared_inputs']))
+        claimed = {row['measurement_id'] for row in
+                   map(json.loads, core.pinned(previous['journal_cut']).splitlines()) if row['event'] == 'claimed'}
+        retirement = json.loads(core.pinned(prior['retirement_review']))
+        retirement.update(accepted_supplement_batch_retirement=False, all_ready_terminal=False,
+            accepted_supplement_partial_batch_handoff=True, all_claimed_terminal=True,
+            unclaimed_destinations_absent=True,
+            unclaimed_measurement_ids=[mid for mid in prepared['ready_order'] if mid not in claimed])
+        prior['retirement_review'] = self.save('partial_retirement.json', retirement)
+        prior['handoff_mode'] = 'unclaimed_only'
+        return prior
+
+    def partial_prior(self, *, unresolved=False):
+        self.final(self.ready[0])
+        self.final(self.ready[1], 'transport_failure')
+        if unresolved:
+            self.history.append({'event': 'claimed', 'measurement_id': self.ready[2]['measurement_id'],
+                                 'input_sha256': core.digest(self.ready[2])})
+        ids = [j['measurement_id'] for j in self.obligations]
+        binding = self.freeze_binding(0, pending=ids[4:5], unavailable=ids[5:])
+        self.output = self.base / 'export0'
+        return self.accepted_partial(binding, self.collect(binding))
+
+    def partial_wave(self, prior, batch=1, ready_indices=(2, 3)):
+        binding = self.wave(prior, batch, ready_indices)
+        value = json.loads(core.pinned(binding))
+        value['trajectories'] = json.loads(core.pinned(prior['binding']))['trajectories']
+        return self.save('partial_binding' + str(batch) + '.json', value)
+
+    def test_partial_handoff_preserves_failed_finals_and_exact_unclaimed_jobs_without_replay(self):
+        prior = self.partial_prior()
+        before = core.pinned(json.loads(core.pinned(prior['summary']))['measurements']).splitlines()
+        binding = self.partial_wave(prior)
+        real_pinned = core.pinned
+
+        def no_old_capture(ref):
+            self.assertFalse(Path(ref['path']).is_relative_to(self.base / 'attempts'))
+            return real_pinned(ref)
+
+        with mock.patch.object(core, 'pinned', side_effect=no_old_capture), \
+                mock.patch.object(collector, 'verify_final', wraps=collector.verify_final) as verifier:
+            summary = self.collect(binding)
+        after = core.pinned(summary['measurements']).splitlines()
+        self.assertEqual(after[:2], before[:2])
+        self.assertEqual(after[4:], before[4:])
+        self.assertEqual(verifier.call_count, 2)
+        self.assertEqual(summary['technical_final_statuses'], {'complete': 3, 'failure': 1})
+        self.assertTrue(summary['all_ready_final'])
+        provenance = json.loads(core.pinned(summary['carry_forward']))
+        self.assertEqual(provenance['unclaimed_measurement_ids'], [j['measurement_id'] for j in self.ready])
+        self.assertEqual(provenance['handoff_mode'], 'unclaimed_only')
+        self.assertFalse(provenance['runtime_authorized'])
+
+    def test_partial_handoff_keeps_an_earlier_cumulative_failure_and_provenance_chain(self):
+        prior = self.prior()
+        first = self.wave(prior, finish=False)
+        self.final(self.ready[0])
+        value = json.loads(core.pinned(first))
+        journal = self.base / 'partial_wave_journal.jsonl'
+        journal.write_bytes(b''.join(core.encoded(row) + b'\n' for row in self.history))
+        value['journal_cut'] = core.pin(journal)
+        first = self.save('partial_first_binding.json', value)
+        first_summary = self.collect(first)
+        first_rows = core.pinned(first_summary['measurements']).splitlines()
+        second = self.partial_wave(self.accepted_partial(first, first_summary), batch=2, ready_indices=(3,))
+        summary = self.collect(second)
+        self.assertEqual(summary['carried_final_count'], 3)
+        self.assertEqual(core.pinned(summary['measurements']).splitlines()[:3], first_rows[:3])
+        provenance = json.loads(core.pinned(summary['carry_forward']))
+        self.assertEqual(provenance['predecessor_carry_forward'], first_summary['carry_forward'])
+        self.assertEqual(summary['technical_final_statuses'], {'complete': 3, 'failure': 1})
+
+    def test_partial_handoff_is_explicit_and_requires_its_own_sealed_retirement(self):
+        prior = self.partial_prior(); binding = self.partial_wave(prior)
+        base = json.loads(core.pinned(binding))
+        for change in ('no_mode', 'invalid_mode', 'accepted_supplement_partial_batch_handoff',
+                       'all_claimed_terminal', 'journal_sealed', 'client_process_absent',
+                       'executor_lock_acquired_nonblocking', 'unclaimed_destinations_absent',
+                       'ambiguous_attempts', 'unclaimed_measurement_ids'):
+            with self.subTest(change=change):
+                value = copy.deepcopy(base)
+                if change == 'no_mode':
+                    del value['prior_export']['handoff_mode']
+                elif change == 'invalid_mode':
+                    value['prior_export']['handoff_mode'] = True
+                else:
+                    retirement = json.loads(core.pinned(prior['retirement_review']))
+                    retirement[change] = ([] if change == 'unclaimed_measurement_ids' else
+                                          1 if change == 'ambiguous_attempts' else False)
+                    value['prior_export']['retirement_review'] = self.save('bad_partial_retirement.json', retirement)
+                with self.assertRaises(core.IntegrityError):
+                    self.collect(self.save('bad_partial_binding.json', value))
+                self.assertFalse(self.output.exists())
+
+    def test_partial_handoff_rejects_unresolved_claim_even_with_acceptance_assertion(self):
+        prior = self.partial_prior(unresolved=True)
+        binding = self.partial_wave(prior, ready_indices=(3,))
+        with self.assertRaisesRegex(core.IntegrityError, 'partial_predecessor_unresolved_claim'):
+            self.collect(binding)
+        self.assertFalse(self.output.exists())
+
+    def test_partial_handoff_cannot_drop_reorder_change_or_reclassify_unclaimed_jobs(self):
+        prior = self.partial_prior(); binding = self.partial_wave(prior)
+        mutations = [lambda p: p['ready_jobs'].reverse(),
+                     lambda p: p['ready_jobs'][0].update(seed=999),
+                     lambda p: p['ready_jobs'][0].update(request_body_sha256='changed'),
+                     lambda p: p['contexts'][0].update(extra='changed'),
+                     lambda p: p['pending_measurement_ids'].append(p['ready_jobs'].pop()['measurement_id'])]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(core.IntegrityError):
+                self.collect(self.change_prepared(binding, mutation))
+            self.assertFalse(self.output.exists())
+
+    def test_partial_handoff_checks_claim_identity_and_journal_counts(self):
+        prior = self.partial_prior(); binding = self.partial_wave(prior)
+        for mutation in ('claim', 'summary'):
+            with self.subTest(mutation=mutation):
+                value = json.loads(core.pinned(binding)); previous = json.loads(core.pinned(prior['binding']))
+                if mutation == 'claim':
+                    history = [json.loads(line) for line in core.pinned(previous['journal_cut']).splitlines()]
+                    history[0]['input_sha256'] = 'changed'
+                    journal = self.base / 'bad_claim_journal.jsonl'
+                    journal.write_bytes(b''.join(core.encoded(row) + b'\n' for row in history))
+                    previous['journal_cut'] = core.pin(journal)
+                    value['prior_export']['binding'] = self.save('bad_claim_binding.json', previous)
+                    retirement = json.loads(core.pinned(prior['retirement_review']))
+                    retirement['journal_cut'] = previous['journal_cut']
+                    value['prior_export']['retirement_review'] = self.save('bad_claim_retirement.json', retirement)
+                else:
+                    summary = json.loads(core.pinned(prior['summary'])); summary['claims_at_consumed_cut'] += 1
+                    value['prior_export']['summary'] = self.save('bad_count_summary.json', summary)
+                review = json.loads(core.pinned(prior['independent_review']))
+                review.update(binding=value['prior_export']['binding'], summary=value['prior_export']['summary'])
+                value['prior_export']['independent_review'] = self.save('bad_partial_review.json', review)
+                with self.assertRaisesRegex(core.IntegrityError, 'partial_predecessor_(claim_identity|journal_counts)'):
+                    self.collect(self.save('bad_partial_binding.json', value))
+                self.assertFalse(self.output.exists())
+
     def test_carries_complete_and_failure_rows_exactly_without_old_capture_reads(self):
         prior = self.prior(); old = json.loads(core.pinned(prior['summary']))
         prior_lines = core.pinned(old['measurements']).splitlines()
