@@ -66,6 +66,7 @@ from pathlib import Path, PurePosixPath
 import datetime,hashlib,json,os,stat,sys
 request=json.load(sys.stdin)
 base=Path(request['base'])
+accepted=set(request['accepted'])
 rows=[];skipped=[]
 excluded={'upper','work','merged','reflink_workspace','pilot_copy_workspace'}
 def digest(p):
@@ -82,9 +83,9 @@ for root in request['roots']:
  if not group.is_dir():
   skipped.append({'root':root,'reason':'root_not_present'});continue
  for run in sorted(group.iterdir()):
-  if run.is_symlink() or not run.is_dir():continue
   key=str(run.relative_to(base))
-  if key in request['accepted']:continue
+  if key in accepted:continue
+  if run.is_symlink() or not run.is_dir():continue
   summary=run/'summary.json'
   if not summary.is_file() or summary.is_symlink():continue
   data=json.loads(summary.read_text())
@@ -206,7 +207,7 @@ def _synchronize_under_lock(config, authorize, authorization):
     request = {'host': config.host, 'base': config.remote_base, 'roots': list(config.roots), 'accepted': accepted, 'limit': config.limit}
     save(attempt / 'AUTHORIZATION.json', authorization)
     save(attempt / 'REQUEST.json', request)
-    ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', config.host, 'python3', '-c', shlex.quote(REMOTE_CODE)]
+    ssh = ['ssh', '-C', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', config.host, 'python3', '-c', shlex.quote(REMOTE_CODE)]
     process = subprocess.run(ssh, input=json.dumps(request), capture_output=True, text=True, timeout=120)
     (attempt / 'remote.stderr').write_text(process.stderr)
     (attempt / 'remote.stdout').write_text(process.stdout)

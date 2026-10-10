@@ -17,6 +17,21 @@ from causes.corpus_allocation import (
 )
 
 
+FULL_SELECTION = {'method': 'one_cell_per_task_rotating_v1'}
+
+
+def control_full_selection(control):
+    """Require explicit versioned opt-in; legacy controls stay prefix-only."""
+    if control.get('schema') == 'causes.corpus_continuation_control.v1':
+        if 'full_selection' in control:
+            raise ValueError('legacy_continuation_must_be_prefix_only')
+        return None
+    if (control.get('schema') != 'causes.corpus_continuation_control.v2'
+            or control.get('full_selection') != FULL_SELECTION):
+        raise ValueError('continuation_control_schema_or_full_selection')
+    return copy.deepcopy(FULL_SELECTION)
+
+
 def _pinned_json(ref):
     path = Path(ref['path'])
     if not path.is_absolute() or path.resolve() != path or any(p.is_symlink() for p in (path, *path.parents)):
@@ -30,7 +45,9 @@ def _pinned_json(ref):
 class CorpusContinuation:
     def __init__(self, catalog, prototypes, original_jobs, config, reservation, *,
                  family, model_key, task_host, provider_host, config_sha256,
-                 repetition_start=1):
+                 repetition_start=1, full_selection=None):
+        if full_selection is not None and full_selection != FULL_SELECTION:
+            raise ValueError('unsupported_full_selection')
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', family) or model_key not in MODELS:
             raise ValueError('invalid_continuation_namespace')
         if type(repetition_start) is not int or repetition_start < 1:
@@ -86,6 +103,7 @@ class CorpusContinuation:
         self.task_host, self.provider_host = task_host, provider_host
         self.config, self.config_sha256 = copy.deepcopy(config), config_sha256
         self.repetition_start = repetition_start
+        self.full_selection = copy.deepcopy(full_selection)
         self.used_ids, self.used_seeds = reserved_ids, reserved_seeds
         self.binding = {
             'schema': 'causes.corpus_continuation_binding.v1', 'family': family,
@@ -95,14 +113,16 @@ class CorpusContinuation:
             'config_object_sha256': digest(config), 'model_config_sha256': config_sha256,
             'reservation_sha256': digest(reservation),
         }
+        if self.full_selection is not None:
+            self.binding.update(schema='causes.corpus_continuation_binding.v2',
+                                full_selection=copy.deepcopy(self.full_selection))
         self.index, self.predecessor = 0, None
         self._pending = None
         self.block_hashes, self.job_hashes, self.job_blocks = {}, {}, {}
 
     @classmethod
     def from_control(cls, control, prototypes, config):
-        if control.get('schema') != 'causes.corpus_continuation_control.v1':
-            raise ValueError('continuation_control_schema')
+        full_selection = control_full_selection(control)
         if digest(_pinned_json(control['config'])) != digest(config):
             raise ValueError('continuation_config_changed')
         if digest(_pinned_json(control['prototypes'])) != digest(prototypes):
@@ -111,7 +131,26 @@ class CorpusContinuation:
                    _pinned_json(control['original_jobs']), config,
                    _pinned_json(control['reservation']),
                    **{k: control[k] for k in ('family', 'model_key', 'task_host', 'provider_host', 'repetition_start')},
-                   config_sha256=control['config']['sha256'])
+                   config_sha256=control['config']['sha256'], full_selection=full_selection)
+
+    def full_cells(self, index):
+        """Select physical cells independently of model and admission order.
+
+        Rotation describes planned allocations, not completed full coverage.
+        The dispatcher may admit later prefix blocks while full jobs wait.
+        """
+        if self.full_selection is None:
+            return set()
+        grouped = {}
+        for cell in self.cells:
+            grouped.setdefault(cell['task_id'], []).append(cell)
+        selected = set()
+        for task, cells in grouped.items():
+            cells.sort(key=lambda cell: (digest([self.family, 'full_rotation', task,
+                                                 cell['stimulus_sha256']]),
+                                          cell['stimulus_sha256']))
+            selected.add(key(cells[index % len(cells)]))
+        return selected
 
     def block(self, index):
         if type(index) is not int or index != self.index:
@@ -125,6 +164,7 @@ class CorpusContinuation:
         task_seeds = {task: ledger.fresh('task', index, model, task)
                       for task in sorted({cell['task_id'] for cell in self.cells})}
         episode_seeds = {key(cell): ledger.fresh('episode', index, model, *key(cell)) for cell in self.cells}
+        full_cells = self.full_cells(index)
         jobs, new_ids = [], set()
         for position, ordered in enumerate(ordered_cells(self.cells, model, index, family=self.family)):
             cell = ordered['cell']
@@ -141,7 +181,7 @@ class CorpusContinuation:
                 'repetition': self.repetition_start + index,
                 'seed': episode_seeds[key(cell)], 'block_seed': block_seed,
                 'task_seed': task_seeds[cell['task_id']], 'model_seed': model_seed,
-                'continue_to_end': False, 'instruments': ['evaluation_presence'],
+                'continue_to_end': key(cell) in full_cells, 'instruments': ['evaluation_presence'],
                 'reader_stages': [], 'reader_thresholds': [], 'primary_memberships': [],
                 'fixed_study_inference': False, 'paired_stage_study': False,
                 'other_awareness_study': False, 'replacement_for_prior_assignment': False,
