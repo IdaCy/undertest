@@ -352,6 +352,101 @@ class DispatcherTests(unittest.TestCase):
         self.assertTrue(first['jobs'][0]['allocation']['continue_to_end'])
         self.assertEqual(prototypes, frozen)
 
+    def test_interleaved_system_prompts_share_full_capacity_and_preserve_resume(self):
+        jobs = [job('full_a', True), job('full_b', True), job('full_c', True), job('prefix')]
+        prompts = {item['allocation']['run_id']: 'system for ' + item['allocation']['run_id'] for item in jobs}
+        original = copy.deepcopy(prompts)
+        started_a, started_b, started_prefix = (threading.Event() for _ in range(3))
+        mutex = threading.Lock()
+        seen, active_full, maximum_full, finished = {}, [0], [0], [0]
+
+        def runner(spec, variant, config, allocation, output):
+            run_id, full = allocation['run_id'], allocation['continue_to_end']
+            with mutex:
+                active_full[0] += int(full)
+                maximum_full[0] = max(maximum_full[0], active_full[0])
+                seen[run_id] = copy.deepcopy(config)
+            if run_id == 'full_a':
+                started_a.set()
+                self.assertTrue(started_b.wait(2))
+                self.assertTrue(started_prefix.wait(2))
+            elif run_id == 'full_b':
+                started_b.set()
+                self.assertTrue(started_a.wait(2))
+                self.assertTrue(started_prefix.wait(2))
+            elif run_id == 'prefix':
+                started_prefix.set()
+            result = finish(spec, variant, config, allocation, output)
+            with mutex:
+                active_full[0] -= int(full)
+                finished[0] += 1
+                if finished[0] == len(jobs):
+                    self.pause.touch()
+            return result
+
+        dispatcher = self.dispatcher(jobs, runner, workers=3, max_full=2, system_prompts_by_run_id=prompts)
+        prompts['full_a'] = 'caller mutation must not change the frozen queue'
+        self.run_bounded(dispatcher)
+        self.assertEqual(maximum_full[0], 2)
+        self.assertEqual(set(seen), set(original))
+        for run_id, config in seen.items():
+            self.assertEqual(config, {**self.config, 'system': original[run_id]})
+        claims = [row for row in self.events() if row['event'] == 'claimed']
+        self.assertEqual(len(claims), 4)
+        self.assertTrue(all(row['config_sha256'] == sha(seen[row['run_id']]) for row in claims))
+        identity = json.loads((self.output / '.dispatcher/queue_identity.json').read_text())
+        self.assertEqual(identity['system_prompts_sha256'], sha(original))
+        self.run_bounded(self.dispatcher(jobs, lambda *args: self.fail('completed prompt replayed'),
+                                        system_prompts_by_run_id=original))
+        self.assertEqual({row['run_id'] for row in self.events() if row['event'] == 'existing_completed_summary'}, set(original))
+        with self.assertRaisesRegex(RuntimeError, 'queue_identity_changed'):
+            self.run_bounded(self.dispatcher(jobs, lambda *args: self.fail('changed prompt admitted'),
+                                            system_prompts_by_run_id=prompts))
+
+    def test_system_prompt_map_requires_exact_finite_coverage(self):
+        for mapping in ({}, [], {'a': 1}, {'extra': 'text'}, {'a': 'text', 'extra': 'text'}):
+            with self.subTest(mapping=mapping), self.assertRaisesRegex(ValueError, 'system_prompts_require_exact_fixed_queue'):
+                self.dispatcher([job('a')], lambda *args: None, system_prompts_by_run_id=mapping)
+        for kwargs in ({'extension_prototypes': [job('prototype')]}, {'corpus_continuation': 'control'}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, 'system_prompts_require_exact_fixed_queue'):
+                self.dispatcher([job('a')], lambda *args: None, system_prompts_by_run_id={'a': 'text'}, **kwargs)
+
+    def test_completed_system_prompt_mismatch_is_retained_without_replay(self):
+        item = job('a')
+        finish(item['spec'], item['variant'], self.config, item['allocation'], self.output / 'a')
+        self.pause.touch()
+        self.run_bounded(self.dispatcher([item], lambda *args: self.fail('mismatched original replayed'),
+                                        system_prompts_by_run_id={'a': 'different system'}))
+        self.assertEqual(json.loads((self.output / 'a/model.json').read_text()), self.config)
+        events = self.events()
+        self.assertEqual(len([row for row in events if row['event'] == 'unresolved_completed_evidence']), 1)
+        self.assertFalse(any(row['event'] == 'claimed' for row in events))
+
+    def test_system_prompt_cli_verifies_mapping_file_before_dispatch(self):
+        import hashlib
+        from unittest.mock import patch
+        from causes import campaign_dispatcher
+
+        inputs = {'jobs': [job('a')], 'config': self.config, 'prototypes': [], 'prompts': {'a': 'system a'}}
+        paths = {}
+        for name, value in inputs.items():
+            paths[name] = Path(self.temporary.name) / (name + '.json')
+            paths[name].write_text(json.dumps(value))
+        prompt_hash = hashlib.sha256(paths['prompts'].read_bytes()).hexdigest()
+        args = ['dispatcher', '--jobs', str(paths['jobs']), '--config', str(paths['config']),
+                '--output', str(self.output), '--extension-prototypes', str(paths['prototypes']),
+                '--pause-file', str(self.pause), '--system-prompts', str(paths['prompts']),
+                '--system-prompts-sha256', prompt_hash]
+        with patch('sys.argv', args), patch.object(campaign_dispatcher, 'Dispatcher') as constructor, patch('builtins.print'):
+            constructor.return_value.run.return_value = {}
+            campaign_dispatcher.main()
+            self.assertEqual(constructor.call_args.kwargs['system_prompts_by_run_id'], inputs['prompts'])
+            paths['prompts'].write_text(json.dumps({'a': 'changed'}))
+            constructor.reset_mock()
+            with self.assertRaises(ValueError):
+                campaign_dispatcher.main()
+            constructor.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
