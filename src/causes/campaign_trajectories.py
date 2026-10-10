@@ -100,7 +100,8 @@ def _self_measurements(summary, contexts, sources, config):
     return measured
 
 
-def _reader_measurements(model, run_id, job, config, snapshot, loaded, contexts, inputs, awareness_types):
+def _reader_measurements(model, run_id, job, config, snapshot, loaded, contexts, inputs, awareness_types,
+                         expected_binding):
     measured, dispositions, issues = {}, {}, []
     for stage in job['allocation']['reader_stages']:
         _require(stage in ('early', 'end'), 'unknown_reader_stage')
@@ -131,6 +132,15 @@ def _reader_measurements(model, run_id, job, config, snapshot, loaded, contexts,
             dispositions[stage] = 'final_reader_technical_missing'
         else:
             dispositions[stage] = 'pending_reader'
+        if expected_binding.get('endpoint_transition') is not None and (
+                artifacts.result is not None or artifacts.technical_missing is not None):
+            _require(artifacts.binding is not None, 'endpoint_reader_binding_required')
+            retained_binding = _reader_json(artifacts.binding, inputs)
+            _require(retained_binding.get('endpoint_transition') == expected_binding['endpoint_transition']
+                     and retained_binding.get('frozen_job_sha256') == reader.digest(job)
+                     and retained_binding.get('frozen_model_sha256') == reader.digest(config)
+                     and retained_binding.get('snapshot_receipt') == snapshot,
+                     'endpoint_reader_binding_mismatch')
         if artifacts.result is None:
             continue
         _reader_json(artifacts.result, inputs)
@@ -155,12 +165,16 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
                           registered_roots: Mapping[str, Sequence[str]], snapshots_root: Path,
                           reader_inputs: ReaderInputs, awareness_types: Sequence[str],
                           quality_held: Mapping[str, Mapping[str, dict]] | None = None,
-                          quality_unavailable: Mapping[str, Sequence[str]] | None = None):
+                          quality_unavailable: Mapping[str, Sequence[str]] | None = None,
+                          endpoint_transitions: Mapping[str, dict] | None = None,
+                          reader_inputs_by_assignment: Mapping[tuple[str, str], ReaderInputs] | None = None):
     """Return records/issues and separate unobserved/quality-unavailable coverage.
 
     Quality annotations and unavailability are supplied validated facts, never
     inferred here. Missing actor or reader results remain missing. Reader pins
     and explicit None values bind the input cut even if later files now exist.
+    Assignment overrides select a complete reader namespace, including its pins;
+    absent stages never fall back to another namespace.
     """
     _require(models and set(models) == set(registered_roots), 'model_root_scope_mismatch')
     _require(awareness_types and len(set(awareness_types)) == len(awareness_types)
@@ -184,6 +198,14 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
             root_models[root] = model
         _require(set(held.get(model, {})) <= set(jobs[model])
                  and set(unavailable.get(model, ())) <= set(jobs[model]), 'quality_assignment_scope_mismatch')
+    reader_overrides = {} if reader_inputs_by_assignment is None else reader_inputs_by_assignment
+    _require(isinstance(reader_overrides, Mapping), 'reader_override_mapping_required')
+    _require(isinstance(reader_inputs, ReaderInputs), 'reader_inputs_required')
+    for key, value in reader_overrides.items():
+        _require(isinstance(key, tuple) and len(key) == 2
+                 and key[0] in jobs and key[1] in jobs[key[0]],
+                 'reader_override_assignment_unknown')
+        _require(isinstance(value, ReaderInputs), 'reader_override_inputs_required')
     snapshots = {}
     for row in receipts:
         root = str(Path(row['run']).parent)
@@ -199,18 +221,26 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
             continue
         _require(run_id not in records[model], 'physical_assignment_present_in_multiple_output_roots')
         frozen = models[model];job = jobs[model][run_id]
+        assignment_reader = reader_overrides.get((model, run_id), reader_inputs)
         selected = {'model': model, 'job': job, 'config': frozen.config,
                     'jobs_file_sha256': frozen.jobs_file_sha256, 'model_file_sha256': frozen.config_file_sha256}
-        binding, loaded = watch.bind_snapshot(snapshot, selected, snapshots_root, reader_inputs.binding_pins)
+        if endpoint_transitions is not None:
+            selected['endpoint_transitions'] = endpoint_transitions
+        binding, loaded = watch.bind_snapshot(snapshot, selected, snapshots_root, assignment_reader.binding_pins)
+        captured_config = frozen.config
+        if 'endpoint_transition' in binding:
+            captured_config, _ = watch.endpoint_transition.snapshot_config(
+                endpoint_transitions[str(Path(run).parent)], root=str(Path(run).parent), job=job,
+                original_config=frozen.config, original_file_sha256=frozen.config_file_sha256)
         # The inherited binder compares Python values. Preserve numeric type as
         # part of frozen allocation/spec/variant/config identity as well.
         _require(reader.encoded([loaded[name + '.json'] for name in ('allocation', 'spec', 'variant', 'model')])
-                 == reader.encoded([job['allocation'], job['spec'], job['variant'], frozen.config]),
+                 == reader.encoded([job['allocation'], job['spec'], job['variant'], captured_config]),
                  'typed_frozen_identity_mismatch')
         summary = loaded['summary.json'];contexts, sources = _contexts(job, loaded, binding)
         measured_self = _self_measurements(summary, contexts, sources, frozen.config)
         measured_reader, dispositions, found = _reader_measurements(model, run_id, job, frozen.config,
-            snapshot, loaded, contexts, reader_inputs, awareness_types)
+            snapshot, loaded, contexts, assignment_reader, awareness_types, binding)
         issues.extend(found)
         record = {'run_id': run_id, 'model': model, 'task_id': job['spec']['task_id'],
             'variant_id': job['variant']['id'], 'allocation': copy.deepcopy(job['allocation']), 'source': str(Path(snapshot['path'])),
@@ -218,6 +248,9 @@ def assemble_trajectories(receipts: Sequence[dict], models: Mapping[str, FrozenM
             'end_status': summary['end_status'], 'early_status': summary['early_status'],
             'actor_calls': summary['calls'], 'tool_results': summary['tool_results'],
             'context_sources': sources, 'self': measured_self, 'reader': measured_reader, 'reader_dispositions': dispositions}
+        if 'endpoint_transition' in binding:
+            record['endpoint_transition'] = copy.deepcopy(binding['endpoint_transition'])
+            record['frozen_model_sha256'] = reader.digest(frozen.config)
         _require(run_id not in set(unavailable.get(model, ())), 'quality_unissued_disposition_conflicts_with_observed_episode')
         if run_id in held.get(model, {}):
             record['intervention_quality'] = copy.deepcopy(held[model][run_id])

@@ -11,6 +11,12 @@ runner's parser. Its exchange/save boundaries are replaced only in a private
 function globals dictionary; the caller's runner and original files are not
 modified. Only the fresh export directory is written. Partial exports survive
 failure and cannot be reused. Imports perform no I/O.
+
+Version two can carry an independently accepted cumulative export into a new
+physical batch. Logical obligations retain their original identity and order.
+The predecessor must be terminal and independently certified drained/sealed;
+this offline check grants no permission to run another client. Carried rows are
+copied exactly, including technical failures, without reparsing old captures.
 """
 import collections
 import copy
@@ -77,10 +83,11 @@ def validate_inputs(binding, prepared, roster, obligations, config):
     ready = prepared['ready_jobs']
     ready_ids = [j['measurement_id'] for j in ready]
     pending, unavailable = prepared['pending_measurement_ids'], prepared['unavailable_measurement_ids']
-    partition = ready_ids + pending + unavailable
+    carried = prepared['carried_measurement_ids'] if binding['schema'] == 'causes.supplement_export_binding.v2' else []
+    partition = ready_ids + pending + unavailable + carried
     require(len(partition) == len(set(partition)) == len(ids) and set(partition) == set(ids),
             'readiness_partition')
-    for group in (ready_ids, pending, unavailable):
+    for group in (ready_ids, pending, unavailable, carried):
         require([mid for mid in ids if mid in set(group)] == group, 'partition_order_changed')
     require(prepared['ready_order'] == ready_ids, 'ready_order_changed')
     for job in ready:
@@ -91,6 +98,99 @@ def validate_inputs(binding, prepared, roster, obligations, config):
     require(len(contexts) == len(prepared['contexts']) and
             set(contexts) == {(j['run_id'], j['stage']) for j in ready}, 'ready_context_scope')
     return by_id, {j['measurement_id']: j for j in ready}, contexts
+
+
+def context_source_matches(original_rows, job):
+    """Join metadata to the current accepted original cut, without reading context."""
+    original = original_rows.get(job['run_id'])
+    source = original.get('context_sources', {}).get(job['stage']) if original is not None else None
+    require(source is not None and source.get('path') == job['context']['path']
+            and source.get('bytes_sha256') == job['context']['sha256']
+            and source.get('context_sha256') == job['context_canonical_sha256'],
+            'carried_or_ready_context_source_changed')
+
+
+def carry_forward(binding, prepared, roster, obligations, config, original_rows, record):
+    """Validate one accepted predecessor; earlier links remain in its provenance."""
+    prior = binding['prior_export']
+    require(set(prior) == {'binding', 'summary', 'independent_review', 'retirement_review'},
+            'exact_prior_export_references_required')
+    previous = json.loads(record(prior['binding'], read=True))
+    summary = json.loads(record(prior['summary'], read=True))
+    review = json.loads(record(prior['independent_review'], read=True))
+    retirement = json.loads(record(prior['retirement_review'], read=True))
+    require(review.get('accepted_supplement_export') is True
+            and review.get('binding') == prior['binding'] and review.get('summary') == prior['summary'],
+            'accepted_prior_export_required')
+    require(previous['schema'] in ('causes.supplement_export_binding.v1', 'causes.supplement_export_binding.v2'),
+            'prior_binding_schema')
+    for key in ('family', 'model', 'stages', 'question_ids', 'roster', 'original_obligations', 'config', 'runner_source'):
+        require(core.encoded(previous[key]) == core.encoded(binding[key]), 'prior_original_scope_changed:' + key)
+    old_root, root = core.canonical(previous['supplement_root']), core.canonical(binding['supplement_root'])
+    require(not root.is_relative_to(old_root) and not old_root.is_relative_to(root), 'distinct_batch_root_required')
+    require(summary.get('family') == binding['family'] and summary.get('model') == binding['model']
+            and summary.get('all_ready_final') is True, 'prior_batch_not_terminal')
+    require(retirement.get('accepted_supplement_batch_retirement') is True
+            and retirement.get('prepared_inputs') == previous['prepared_inputs']
+            and retirement.get('supplement_root') == previous['supplement_root']
+            and retirement.get('journal_cut') == previous['journal_cut'], 'prior_retirement_binding_changed')
+    require(all(retirement.get(k) is True for k in ('all_ready_terminal', 'journal_sealed',
+                'client_process_absent', 'executor_lock_acquired_nonblocking'))
+            and type(retirement.get('ambiguous_attempts')) is int and retirement['ambiguous_attempts'] == 0,
+            'prior_batch_not_drained_and_sealed')
+    require(retirement.get('evidence'), 'prior_retirement_evidence_required')
+    for ref in retirement['evidence']:
+        record(ref)
+    old_prepared = json.loads(record(previous['prepared_inputs'], read=True))
+    _, old_ready, _ = validate_inputs(previous, old_prepared, roster, obligations, config)
+    require(old_prepared['frozen_config'] == previous['config']
+            and old_prepared['frozen_runner'] == previous['runner_source'], 'prior_prepared_source_changed')
+    old_carried = old_prepared['carried_measurement_ids'] if previous['schema'].endswith('.v2') else []
+    rows = [json.loads(line) for line in record(summary['measurements'], read=True).splitlines()]
+    ids = [j['measurement_id'] for j in obligations]
+    require([r['measurement_id'] for r in rows] == ids, 'prior_measurement_grid_or_order_changed')
+    carried, unavailable = {}, {}
+    for original, row in zip(obligations, rows):
+        require(core.encoded(row['original_obligation']) == core.encoded(original)
+                and row.get('source_family') == binding['family']
+                and all(core.encoded(row[k]) == core.encoded(original[k]) for k in
+                        ('measurement_id', 'model', 'run_id', 'stage', 'question_id', 'awareness_type', 'threshold')),
+                'prior_measurement_identity_changed')
+        mid, state = row['measurement_id'], row['disposition']
+        if state == 'final_verified':
+            require(mid in old_ready or mid in old_carried, 'unready_prior_final')
+            context_source_matches(original_rows, row)
+            carried[mid] = row
+        elif state == 'assigned_stage_unavailable':
+            require(mid in old_prepared['unavailable_measurement_ids'], 'prior_unavailable_partition_changed')
+            unavailable[mid] = row
+        else:
+            require(state == 'pending_original_context_at_cut'
+                    and mid in old_prepared['pending_measurement_ids'], 'prior_outstanding_or_unresolved_attempt')
+    require(set(carried) == set(old_ready) | set(old_carried)
+            and set(unavailable) == set(old_prepared['unavailable_measurement_ids']), 'prior_terminal_partition_changed')
+    require(prepared['carried_measurement_ids'] == list(carried), 'every_prior_final_must_be_carried')
+    require(set(unavailable) <= set(prepared['unavailable_measurement_ids']), 'prior_unavailable_cannot_be_promoted')
+    ready_ids = {j['measurement_id'] for j in prepared['ready_jobs']}
+    require(ready_ids <= set(old_prepared['pending_measurement_ids']), 'only_prior_pending_may_become_ready')
+    for job in prepared['ready_jobs']:
+        context_source_matches(original_rows, job)
+    require(summary['dispositions'] == dict(collections.Counter(r['disposition'] for r in rows))
+            and summary['supplement_assigned'] == len(obligations), 'prior_summary_counts_changed')
+    # Join the sealed raw journal to the predecessor's exported copy; no old
+    # request, response, context or FINAL body is reopened or interpreted.
+    require(record(previous['journal_cut'], read=True) == record(summary['consumed_journal'], read=True),
+            'prior_consumed_journal_changed')
+    record(summary['source_pins'])
+    if previous['schema'] == 'causes.supplement_export_binding.v2':
+        require(summary.get('carried_final_count') == len(old_carried)
+                and 'carry_forward' in summary, 'prior_carry_forward_provenance_missing')
+    chain = record(summary['carry_forward']) if 'carry_forward' in summary else None
+    provenance = {'prior_export': prior, 'carried_measurement_ids': list(carried),
+                  'prior_unavailable_measurement_ids': list(unavailable),
+                  'predecessor_carry_forward': chain, 'prior_rows_unchanged': True,
+                  'old_captures_reparsed': False, 'runtime_authorized': False}
+    return carried, unavailable, provenance
 
 
 def verify_final(job, terminal, *, root, family, model, contexts, config, runner, record):
@@ -185,7 +285,7 @@ def collect(binding_reference, output, *, runner):
     The resulting summary is descriptive custody, never analysis authorization.
     """
     binding = json.loads(core.pinned(binding_reference))
-    require(binding['schema'] == 'causes.supplement_export_binding.v1', 'binding_schema')
+    require(binding['schema'] in ('causes.supplement_export_binding.v1', 'causes.supplement_export_binding.v2'), 'binding_schema')
     root, output = core.canonical(binding['supplement_root']), core.canonical(output)
     require(not output.exists() and not output.is_relative_to(root) and not root.is_relative_to(output),
             'fresh_separate_output_required')
@@ -227,6 +327,13 @@ def collect(binding_reference, output, *, runner):
     require(set(claims) <= ready.keys(), 'unready_obligation_attempted')
     for mid, claim in claims.items():
         require(claim['input_sha256'] == core.digest(ready[mid]), 'journal_claim_input_mismatch')
+    carried, old_unavailable, carry_provenance = {}, {}, None
+    if binding['schema'] == 'causes.supplement_export_binding.v2':
+        prior_root = core.canonical(json.loads(record(binding['prior_export']['binding'], read=True))['supplement_root'])
+        require(not output.is_relative_to(prior_root) and not prior_root.is_relative_to(output),
+                'fresh_separate_prior_output_required')
+        carried, old_unavailable, carry_provenance = carry_forward(
+            binding, prepared, roster, obligations, config, original_rows, record)
     output.mkdir()  # Exclusive reservation; a failed export never becomes reusable.
     core.save(output / 'INTENT.json', {'at': core.now(), 'binding': binding_reference,
                                       'journal_cut': binding['journal_cut'], 'no_network_or_inference': True})
@@ -240,7 +347,9 @@ def collect(binding_reference, output, *, runner):
             row = {k: copy.deepcopy(original[k]) for k in ('measurement_id', 'model', 'run_id', 'stage',
                                                           'question_id', 'awareness_type', 'threshold')}
             row.update(original_obligation=copy.deepcopy(original), source_family=binding['family'])
-            if mid in finals:
+            if mid in carried or mid in old_unavailable:
+                row = copy.deepcopy(carried[mid] if mid in carried else old_unavailable[mid])
+            elif mid in finals:
                 row.update(verify_final(ready[mid], finals[mid], root=root, family=binding['family'],
                                         model=binding['model'], contexts=contexts, config=config, runner=runner, record=record))
             else:
@@ -285,6 +394,10 @@ def collect(binding_reference, output, *, runner):
         with (output / 'MEASUREMENTS.jsonl').open('xb') as stream:
             stream.write(b''.join(core.encoded(row) + b'\n' for row in measurements))
         core.save(output / 'INDEX.json', index)
+        carry_pin = None
+        if carry_provenance is not None:
+            core.save(output / 'CARRY_FORWARD.json', carry_provenance)
+            carry_pin = core.pin(output / 'CARRY_FORWARD.json')
         for item in all_pins.values():
             core.pinned(item)
         core.save(output / 'SOURCE_PINS.json', list(all_pins.values()))
@@ -297,12 +410,15 @@ def collect(binding_reference, output, *, runner):
                    'dispositions': counts,
                    'technical_final_statuses': dict(collections.Counter(r['technical_status'] for r in measurements if r['disposition'] == 'final_verified')),
                    'all_ready_final': len(finals) == len(ready),
-                   'all_obligations_final_or_unavailable': len(finals) + len(unavailable) == len(obligations),
+                   'all_obligations_final_or_unavailable': len(finals) + len(carried) + len(unavailable) == len(obligations),
                    'claims_at_consumed_cut': len(claims), 'terminals_at_consumed_cut': len(finals),
                    'consumed_journal': core.pin(output / 'CONSUMED_JOURNAL.jsonl'),
                    'index': core.pin(output / 'INDEX.json'), 'measurements': core.pin(output / 'MEASUREMENTS.jsonl'),
                    'source_pins': core.pin(output / 'SOURCE_PINS.json'),
                    'analysis_authorized': False, 'no_network_calls': True, 'no_original_files_modified': True}
+        if carry_pin is not None:
+            summary.update(carried_final_count=len(carried), carry_forward=carry_pin,
+                           prior_unavailable_preserved=len(old_unavailable))
         core.save(output / 'SUMMARY.json', summary)
         return core.pin(output / 'SUMMARY.json')
     except BaseException as error:

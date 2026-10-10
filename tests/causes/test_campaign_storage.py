@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -428,6 +429,49 @@ class GuardReportingTests(unittest.TestCase):
                 self.guard()
             with self.assertRaisesRegex(ValueError, 'loaded_storage_source_changed'):
                 GuardJournal(str(Path(self.temporary.name) / 'another'), self.binding, self.owner)
+
+    def retained_reporter(self):
+        from causes import campaign_storage as storage
+        from causes import campaign_handoff as h
+        source = Path(self.temporary.name) / 'retained_storage.py'
+        source.write_bytes(Path(storage.__file__).read_bytes() + b'\n# retained reporter fixture\n')
+        reference = h.pin(source)
+        self.guard()
+        path = self.journal.directory / '00000000.json'
+        record = json.loads(path.read_bytes())
+        record['source_sha256'] = reference['sha256']
+        path.write_bytes(h.encoded(record) + b'\n')
+        return reference
+
+    def reporter_health(self, reference):
+        return observe_guard(self.journal.directory, self.binding, self.owner,
+            self.journal.lock_identity, reporter_source=reference,
+            observe_storage=lambda _: copy.deepcopy(self.observation))
+
+    def test_explicit_retained_reporter_preserves_default_and_fresh_storage_checks(self):
+        reference = self.retained_reporter()
+        self.assertTrue(self.health()['alarms']['guard_record_invalid'])
+        result = self.reporter_health(reference)
+        self.assertTrue(result['healthy'])
+        self.assertEqual(result['reporter_source'], reference)
+        self.observation['paths']['output']['inode'] = 'replaced'
+        result = self.reporter_health(reference)
+        self.assertFalse(result['healthy'])
+        self.assertTrue(result['alarms']['storage_binding_invalid'])
+
+    def test_reporter_pin_cannot_replace_loaded_observer_or_record_identity(self):
+        reference = self.retained_reporter()
+        with patch('causes.campaign_storage._SOURCE_SHA', 'wrong_loaded_observer'):
+            self.assertTrue(self.reporter_health(reference)['alarms']['guard_record_invalid'])
+        other = Path(self.temporary.name) / 'unrelated.py'
+        other.write_text('# different source\n')
+        wrong = {'path': str(other), 'bytes': other.stat().st_size,
+                 'sha256': hashlib.sha256(other.read_bytes()).hexdigest()}
+        self.assertTrue(self.reporter_health(wrong)['alarms']['guard_record_invalid'])
+        Path(reference['path']).write_text('# modified retained source\n')
+        self.assertTrue(self.reporter_health(reference)['alarms']['guard_record_invalid'])
+        Path(reference['path']).unlink()
+        self.assertTrue(self.reporter_health(reference)['alarms']['guard_record_invalid'])
 
 
 if __name__ == '__main__':
