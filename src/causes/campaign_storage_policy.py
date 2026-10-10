@@ -56,6 +56,99 @@ def _accepted(pair, flag, key):
     return value
 
 
+def capacity_scope(policy):
+    """Bind an optional capacity transition to its prospective reference."""
+    p = policy
+    if p['schema'] == 'causes.storage_admission_policy.v1':
+        storage.require('capacity_trial' not in p
+                        and 'capacity_guard' not in p['launch']['storage_binding'],
+                        'capacity_requires_explicit_policy_schema')
+        return None
+    storage.require(p['schema'] == 'causes.storage_capacity_admission_policy.v1'
+                    and p['role'] == 'mi' and p['model'] == 'mi27'
+                    and type(p['workers']) is int and p['workers'] == 8,
+                    'capacity_policy_scope_changed')
+    trial = p['capacity_trial']
+    storage.require(type(trial['trial_id']) is str and trial['trial_id']
+                    and trial['mode'] in ('candidate', 'return_to_qualified'),
+                    'capacity_trial_identity_required')
+    criteria = _accepted(trial['criteria'],
+                         'accepted_prospective_operational_criteria', 'criteria')
+    adoption = h.checked(trial['criteria_adoption'])
+    storage.require(adoption.get('adopted_prospective_operational_criteria') is True
+                    and adoption['criteria'] == trial['criteria']['evidence'],
+                    'capacity_criteria_not_adopted')
+    limits = criteria['invariants']
+    storage.require(limits['workers'] == 8 and limits['qualified_max_full'] == 2
+                    and limits['candidate_max_full'] == 4
+                    and limits['provider_restart'] is False
+                    and limits['extra_workers'] is False
+                    and limits['no_replay_or_replacement'] is True
+                    and limits['fixed_queue_only'] is True,
+                    'capacity_criteria_scope_changed')
+    wanted_full = limits['candidate_max_full'] if trial['mode'] == 'candidate' else limits['qualified_max_full']
+    storage.require(type(p['max_full']) is int and p['max_full'] == wanted_full,
+                    'capacity_limit_not_approved')
+    operating_pair = trial['operational_bindings']
+    operating = _accepted(operating_pair, 'accepted_capacity_operational_binding_addendum', 'addendum')
+    operating_adoption = h.checked(operating_pair['adoption'])
+    storage.require(operating['schema'] == 'causes.capacity_operational_binding_addendum.v1'
+                    and operating['criteria'] == trial['criteria']['evidence']
+                    and operating['criteria_adoption'] == trial['criteria_adoption']
+                    and operating_adoption.get('root_adopted_capacity_operational_binding_addendum') is True
+                    and operating_adoption['addendum'] == operating_pair['evidence']
+                    and operating_adoption['independent_review'] == operating_pair['review']
+                    and operating_adoption['criteria'] == trial['criteria']['evidence'],
+                    'capacity_operational_bindings_not_adopted')
+    target = operating[trial['mode']]
+    options = p['launch']['options']
+    storage.require(target['workers'] == p['workers'] and target['max_full'] == p['max_full']
+                    and target['output_namespace'] == p['output_root']
+                    and target['sole_hold_path'] == options['pause_file']
+                    and target['startup_barrier'] == options['start_barrier_file']
+                    and operating['preserved_controls']['global'] == options['global_pause_file'],
+                    'capacity_operational_target_changed')
+    reference = trial['reference']
+    _accepted(reference, 'accepted_capacity_reference', 'summary')
+    review = h.checked(reference['review'])
+    storage.require(review['criteria'] == trial['criteria']['evidence'],
+                    'capacity_reference_criteria_changed')
+    declaration = h.checked(review['declaration'])
+    storage.require(declaration['model_key'] == p['model']
+                    and declaration['owner']['workers'] == limits['workers']
+                    and declaration['owner']['max_full'] == limits['qualified_max_full']
+                    and p['launch']['config'] in declaration['required_pins'],
+                    'capacity_reference_workload_changed')
+    provider = [entry for entry in declaration['processes']
+                if entry['role'] == trial['reference_provider_role']]
+    storage.require(len(provider) == 1
+                    and {key: provider[0][key] for key in ('pid', 'process_starttime_ticks', 'argv')}
+                    == p['provider']['process'], 'capacity_reference_provider_changed')
+    guard = p['launch']['storage_binding'].get('capacity_guard')
+    if trial['mode'] == 'candidate':
+        storage.require(type(guard) is dict and guard['trial_id'] == trial['trial_id']
+                        and guard['output_root'] == p['output_root']
+                        and guard['owned_startup_barrier'] == p['launch']['owned_barrier']
+                        and guard['criteria'] == trial['criteria']
+                        and guard['criteria_adoption'] == trial['criteria_adoption']
+                        and guard['reference'] == trial['reference']
+                        and guard['pause_file'] == p['launch']['options']['pause_file']
+                        and guard['pause_file'] not in (p['launch']['options']['global_pause_file'],
+                                                        p['launch']['options']['start_barrier_file']),
+                        'capacity_guard_binding_changed')
+    else:
+        storage.require('capacity_guard' not in p['launch']['storage_binding'],
+                        'qualified_return_must_not_reuse_candidate_guard')
+    previous = p['predecessor_observations']['old_mi']
+    storage.require(previous['observation_state'] == 'retired'
+                    and previous['output_root'] != p['output_root']
+                    and any(row['output_root'] == previous['output_root']
+                            and row['process'] == previous['process']
+                            for row in p['fixed_membership']['roots']),
+                    'capacity_predecessor_not_preserved')
+    return trial
+
+
 def validate_route_scopes(config, jobs, scopes):
     model = 'model:' + dispatcher.sha([config.get('model'), config.get('endpoint')])
     tasks = {'task:' + dispatcher.sha([job['spec'].get('task_id'), job['spec'].get('image')])
@@ -256,7 +349,8 @@ class StorageAdmission:
     def static(self):
         p = self.policy
         storage.require(h.checked(self.policy_ref) == p
-                        and p['schema'] == 'causes.storage_admission_policy.v1',
+                        and p['schema'] in ('causes.storage_admission_policy.v1',
+                                            'causes.storage_capacity_admission_policy.v1'),
                         'storage_admission_policy_changed')
         storage.require(hashlib.sha256(Path(__file__).read_bytes()).hexdigest() == _SOURCE_SHA,
                         'loaded_storage_policy_source_changed')
@@ -266,12 +360,14 @@ class StorageAdmission:
         for module in (dispatcher, storage, observation, runtime):
             storage.require(hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest()
                             == module._SOURCE_SHA, 'loaded_storage_dependency_changed')
+        trial = capacity_scope(p)
+        required_readiness = _REQUIRED_READINESS + (('capacity_qualification',) if trial else ())
         ready = _accepted(self.readiness_pair, 'accepted_storage_admission_readiness', 'readiness')
         storage.require(ready['schema'] == 'causes.storage_admission_readiness.v1'
                         and ready['policy'] == self.policy_ref
-                        and set(ready['gates']) == set(_REQUIRED_READINESS),
+                        and set(ready['gates']) == set(required_readiness),
                         'storage_readiness_policy_changed')
-        for name in _REQUIRED_READINESS:
+        for name in required_readiness:
             gate = ready['gates'][name]
             storage.require(gate['accepted'] is True and gate['evidence'],
                             'storage_readiness_gate_missing:' + name)
@@ -280,7 +376,7 @@ class StorageAdmission:
         storage.require(p['role'] in ('mi', 'texas')
                         and p['model'] == {'mi': 'mi27', 'texas': 'tex9'}[p['role']]
                         and p['workers'] == 8
-                        and p['max_full'] == (2 if p['role'] == 'mi' else 0),
+                        and (trial is not None or p['max_full'] == (2 if p['role'] == 'mi' else 0)),
                         'storage_capacity_scope_changed')
         launch = p['launch']
         config = h.checked(launch['config'])
@@ -325,7 +421,7 @@ class StorageAdmission:
                         'positive_storage_resource_floors_required')
         return ready
 
-    def live(self):
+    def live(self, *, capacity_owner=None):
         self.static()
         p = self.policy
         routing = h.checked(p['pause_routing'])
@@ -359,7 +455,8 @@ class StorageAdmission:
         monitor.models(provider['port'], provider)
         for reference in provider['source_pins']:
             h.checked_bytes(reference)
-        guard = storage.StorageGuard(p['launch']['storage_binding'])
+        guard = storage.StorageGuard(p['launch']['storage_binding'],
+                                     capacity_owner=capacity_owner)
         storage.require(guard.check() >= guard.binding['floor_bytes'], 'storage_admission_floor')
         resources = admission.resources(p['campaign_root'])
         storage.require(resources['memory_available_bytes'] >= p['resource_floor']['memory_available_bytes']
@@ -374,13 +471,17 @@ class StorageAdmission:
                            for role,row in observed.items()}, 'resources': resources,
                 'storage': guard.last_observation}
 
-    def authority(self, action):
+    def authority(self, action, *, capacity_owner=None):
         p = self.policy
         def validate(value):
             storage.require(value['policy'] == self.policy_ref
                             and value['readiness'] == self.readiness_pair,
                             'storage_authority_scope_changed')
-            self.live()
+            if 'capacity_trial' in p:
+                storage.require(value.get('authorized_capacity_transition') is True
+                                and value.get('capacity_trial') == p['capacity_trial'],
+                                'capacity_runtime_authority_required')
+            self.live(capacity_owner=capacity_owner)
             return True
         options = p['launch']['options']
         paths = tuple(h.canonical_path(options[k]) for k in ('pause_file', 'global_pause_file'))
@@ -414,7 +515,7 @@ class StorageAdmission:
                         and receipt['controller_id'] == owner['controller_id']
                         and owner['output_root'] == p['output_root'],
                         'storage_release_owner_binding_changed')
-        ordinary = self.authority(RELEASE)
+        ordinary = self.authority(RELEASE, capacity_owner=owner['process'])
         def validate(value):
             storage.require(value['storage_phase_registration'] == phase_pair,
                             'storage_release_phase_authority_changed')
@@ -430,6 +531,9 @@ class StorageAdmission:
             storage.require(marker['output_root'] == p['output_root'],
                             'storage_release_barrier_output_changed')
             observation.observe_phase(registration)
+            if p.get('capacity_trial', {}).get('mode') == 'candidate':
+                storage.validate_capacity_guard(launch['storage_binding']['capacity_guard'],
+                                                owner['process'], require_healthy=True)
             return True
         authority.check()
         waiting(h.verify_owned_barrier(launch['owned_barrier'], launch['options']['start_barrier_file']))

@@ -73,6 +73,15 @@ def shared_histories(scopes, current, replay):
         after_state = {k: after[k] for k in HISTORY_FIELDS}
         require(core.encoded(before_state) == core.encoded(scope['accepted_state']),
                 'accepted_donor_baseline_changed')
+        progression = scope.get('history_progression')
+        if 'history_progression' in scope:
+            require(progression == 'append_only_lifetime_v1' and scope['mode'] == 'live_prefix',
+                    'unsupported_donor_history_progression')
+            old_lifetime, new_lifetime = (state['lifetime_route_failures'] for state in (before_state, after_state))
+            require(type(old_lifetime) is int and type(new_lifetime) is int
+                    and 0 <= old_lifetime <= new_lifetime, 'invalid_donor_lifetime_progression')
+            before_state = {k: v for k, v in before_state.items() if k != 'lifetime_route_failures'}
+            after_state = {k: v for k, v in after_state.items() if k != 'lifetime_route_failures'}
         if core.encoded(before_state) != core.encoded(after_state):
             raise core.AdmissionHold('shared_route_history_changed')
         aliases = scope['model_aliases']
@@ -100,7 +109,8 @@ def qualify_observation(value, policy, replay, *, initial=False, at=None):
     require(set(value['controls']) == set(policy['remote_pause_paths'])
             and all(state is False for state in value['controls'].values()), 'remote_pause_present_or_unknown')
     resources = value['resources']
-    for key, minimum in (('local_free_bytes', 80 * 1024**3),
+    local_floor = core.local_space_floor(policy.get('local_free_space_floor_bytes', core.DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES))
+    for key, minimum in (('local_free_bytes', local_floor),
                          ('remote_root_free_bytes', 20 * 1024**3),
                          ('remote_scratch_free_bytes', 80 * 1024**3)):
         if type(resources[key]) is not int or resources[key] < minimum:
@@ -114,17 +124,121 @@ def qualify_observation(value, policy, replay, *, initial=False, at=None):
     return value
 
 
+def launcher_succession_path(receipt, control):
+    name = ('LAUNCHER_SUCCESSION.' + receipt['succession_review']['sha256'] + '.json'
+            if 'previous_succession' in receipt else 'LAUNCHER_SUCCESSION.json')
+    return core.canonical(control) / name
+
+
+def validate_launcher_succession(policy, expected_identity, control, *, _ancestors=(), _paths=None):
+    """Check reviewed migrations while the caller holds the executor lock.
+
+    The original IDENTITY remains immutable. The returned receipt may only be
+    created exclusively or compared exactly; it is not a general source override.
+    Later journal suffixes remain subject to the unchanged core reconciliation.
+    """
+    control = core.canonical(control)
+    paths = set() if _paths is None else _paths
+    review_ref = policy['launcher_succession']
+    require(len(_ancestors) < 16 and review_ref['sha256'] not in _ancestors,
+            'launcher_succession_chain_limit_or_cycle')
+    review = json.loads(core.pinned(review_ref))
+    require(review.get('accepted_supplement_launcher_succession') is True,
+            'accepted_launcher_succession_required')
+    require(review['output_root'] == policy['output_root'] == str(control.parent)
+            and control.name == '.control', 'launcher_succession_output_changed')
+    for key in ('prepared', 'core', 'runner'):
+        require(core.encoded(review[key]) == core.encoded(expected_identity[key]),
+                'launcher_succession_binding_changed:' + key)
+        core.pinned(review[key])
+    require(review['new_launcher'] == expected_identity['launcher'] == policy['launcher_source']
+            and review['old_launcher'] != review['new_launcher'], 'launcher_succession_sources_changed')
+    core.pinned(review['old_launcher']); core.pinned(review['new_launcher'])
+    predecessor = review['predecessor_identity']
+    require(predecessor['path'] == str(control / 'IDENTITY.json'), 'launcher_succession_identity_path_changed')
+    actual_identity = json.loads(core.pinned(predecessor))
+    prior_identity = dict(expected_identity, launcher=review['old_launcher'])
+    previous_ref = review.get('previous_succession')
+    previous = None
+    if previous_ref is None:
+        require(core.encoded(actual_identity) == core.encoded(prior_identity), 'launcher_succession_identity_changed')
+    else:
+        previous = json.loads(core.pinned(previous_ref))
+        require(previous_ref['path'] == str(launcher_succession_path(previous, control))
+                and previous['predecessor_identity'] == predecessor
+                and previous['new_launcher'] == review['old_launcher'],
+                'launcher_succession_chain_disconnected')
+        previous_policy = dict(policy, launcher_source=review['old_launcher'],
+                               launcher_succession=previous['succession_review'])
+        checked_previous = validate_launcher_succession(
+            previous_policy, prior_identity, control,
+            _ancestors=(*_ancestors, review_ref['sha256']), _paths=paths)
+        require(core.encoded(previous) == core.encoded(checked_previous),
+                'launcher_previous_receipt_changed')
+        require(previous_ref in policy['required_pins'], 'launcher_previous_receipt_not_pinned')
+    retired = json.loads(core.pinned(review['retirement_review']))
+    require(retired.get('accepted_supplement_launcher_retirement') is True,
+            'accepted_launcher_retirement_required')
+    for key in ('predecessor_identity', 'prepared', 'output_root'):
+        require(core.encoded(retired[key]) == core.encoded(review[key]),
+                'launcher_retirement_binding_changed:' + key)
+    require(retired['journal_cut'] == review['journal_baseline'], 'launcher_retirement_journal_changed')
+    if previous is not None:
+        require(retired['effective_launcher'] == review['old_launcher'],
+                'launcher_retired_source_changed')
+    require(all(retired.get(k) is True for k in ('all_claimed_terminal', 'client_process_absent',
+                                               'executor_lock_acquired_nonblocking'))
+            and type(retired.get('ambiguous_attempts')) is int and retired['ambiguous_attempts'] == 0,
+            'launcher_predecessor_not_retired')
+    require(isinstance(retired.get('evidence'), list) and retired['evidence'], 'launcher_retirement_evidence_required')
+    proof = [review_ref, *[review[k] for k in
+             ('predecessor_identity', 'old_launcher', 'new_launcher', 'prepared', 'core', 'runner',
+              'retirement_review', 'journal_baseline')], *retired['evidence']]
+    require(all(reference in policy['required_pins'] for reference in proof),
+            'launcher_succession_proof_not_pinned')
+    for reference in retired['evidence']:
+        core.pinned(reference)
+    baseline = review['journal_baseline']
+    require(not core.canonical(baseline['path']).is_relative_to(control.parent),
+            'external_launcher_journal_baseline_required')
+    raw = core.pinned(baseline)
+    require(raw and raw.endswith(b'\n')
+            and core.canonical(control / 'journal.jsonl').read_bytes().startswith(raw),
+            'launcher_retirement_journal_prefix_changed')
+    if previous is not None:
+        require(raw.startswith(core.pinned(previous['journal_baseline'])),
+                'launcher_succession_journal_regressed')
+    receipt = {'schema': 'causes.supplement_launcher_succession.v1',
+               'succession_review': review_ref, **{k: review[k] for k in
+               ('predecessor_identity', 'old_launcher', 'new_launcher', 'prepared', 'core', 'runner',
+                'output_root', 'retirement_review', 'journal_baseline')}}
+    if previous_ref is not None:
+        receipt.update(schema='causes.supplement_launcher_succession.v2',
+                       previous_succession=previous_ref)
+    path = launcher_succession_path(receipt, control)
+    paths.add(path)
+    if path.exists():
+        require(core.encoded(core.load(path)) == core.encoded(receipt), 'launcher_succession_already_bound_differently')
+    if not _ancestors:
+        require(set(control.glob('LAUNCHER_SUCCESSION.*.json')) <= paths,
+                'launcher_succession_unbound_branch')
+    return receipt
+
+
 def launch(policy_reference, adoption_reference, *, runner, observation, replay, source_check):
     """Run one adopted invocation; callbacks must be the reviewed host adapter."""
     policy = json.loads(core.pinned(policy_reference))
     adoption = json.loads(core.pinned(adoption_reference))
     require(adoption.get('authorized_supplement_invocation') is True
             and adoption['policy'] == policy_reference, 'explicit_supplement_adoption_required')
-    require(policy['phase'] in ('pilot', 'continue') and policy['max_clients'] == 1
-            and type(policy['max_clients']) is int, 'single_client_scope')
+    require(policy['phase'] in ('pilot', 'continue') and policy['max_clients'] in (1, 2)
+            and type(policy['max_clients']) is int, 'supported_client_scope')
     require(adoption['phase'] == policy['phase'] and type(adoption['max_clients']) is int
-            and adoption['max_clients'] == 1,
+            and adoption['max_clients'] == policy['max_clients'],
             'adoption_scope_changed')
+    local_floor = core.local_space_floor(policy.get('local_free_space_floor_bytes', core.DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES))
+    adopted_floor = core.local_space_floor(adoption.get('local_free_space_floor_bytes', core.DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES))
+    require(adopted_floor == local_floor, 'adoption_storage_floor_changed')
     require(type(policy['initial_failures']) is int and 0 <= policy['initial_failures'] < 3,
             'qualified_failure_baseline_required')
     recent(adoption['at'], 180)
@@ -204,7 +318,13 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
                     'core': prepared['public_source'], 'runner': prepared['frozen_runner'],
                     'launcher': policy['launcher_source']}
         identity_path = control / 'IDENTITY.json'
-        if identity_path.exists():
+        if 'launcher_succession' in policy:
+            require(identity_path.exists(), 'launcher_succession_predecessor_required')
+            succession = validate_launcher_succession(policy, identity, control)
+            succession_path = launcher_succession_path(succession, control)
+            if not succession_path.exists():
+                core.save(succession_path, succession)
+        elif identity_path.exists():
             require(core.encoded(core.load(identity_path)) == core.encoded(identity), 'output_identity_changed')
         else:
             require(not list(control.glob('invocation_*')) and not (control / 'journal.jsonl').exists()
@@ -215,13 +335,16 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
         core.mkdir(invocation)
         core.save(invocation / 'INTENT.json', {'at': core.now(), 'policy': policy_reference,
                    'adoption': adoption_reference, 'phase': policy['phase'], 'pid': os.getpid(),
+                   'max_clients': policy['max_clients'],
+                   'local_free_space_floor_bytes': local_floor,
                    'measurement_ids': [j['measurement_id'] for j in jobs], 'initial': initial,
                    'original_endpoint': original['endpoint'], 'transport_endpoint': transport['endpoint']})
         try:
             result = core.run_queue(output, jobs,
                 lambda job, destination: core.probe_measurement(job, destination, request_check, transport, runner),
                 admit, request_check, policy['local_pause_paths'], family=family, model=model,
-                initial_failures=policy['initial_failures'], phase=policy['phase'], max_clients=1)
+                initial_failures=policy['initial_failures'], phase=policy['phase'], max_clients=policy['max_clients'],
+                local_free_space_floor_bytes=local_floor)
             core.save(invocation / 'RESULT.json', result)
             return result
         except BaseException as error:

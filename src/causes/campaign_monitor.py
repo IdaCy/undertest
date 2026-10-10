@@ -209,10 +209,24 @@ def validate_storage_legacy(identity, policy, at):
                     and row['queue_identity'] == owner['queue_identity'], 'storage_live_identity_changed')
             expected_live.append({'pid': process['pid'], 'model': transition['role_models'][role]})
             if role.startswith('new_'):
+                expected_alarms = {'owner_identity_invalid', 'reporting_lock_invalid',
+                                   'guard_record_invalid', 'guard_not_ready',
+                                   'storage_binding_invalid', 'volume_below_floor'}
+                registered_guard = owner.get('guard', {}).get('binding', {})
+                if 'capacity_guard' in registered_guard:
+                    capacity_binding = registered_guard['capacity_guard']
+                    require(type(capacity_binding) is dict and capacity_binding,
+                            'invalid_registered_capacity_guard')
+                    capacity = row['guard']['capacity_guard']
+                    require(capacity['status'] == 'healthy' and capacity['admission_allowed'] is True
+                            and capacity['candidate'] == process
+                            and capacity['guard']['argv'] == capacity_binding['guard_argv']
+                            and row['guard']['fresh_storage']['capacity_guard'] == capacity,
+                            'storage_capacity_guard_invalid')
+                    expected_alarms.add('capacity_guard_not_ready')
                 require(row['barrier_present'] is (state == 'waiting')
                         and row['guard']['healthy'] is True
-                        and set(row['guard']['alarms']) == {'owner_identity_invalid', 'reporting_lock_invalid',
-                            'guard_record_invalid', 'guard_not_ready', 'storage_binding_invalid', 'volume_below_floor'}
+                        and set(row['guard']['alarms']) == expected_alarms
                         and all(value is False for value in row['guard']['alarms'].values()),
                         'storage_successor_guard_or_barrier_invalid')
                 guard_at = dt.datetime.fromisoformat(row['guard']['at'])

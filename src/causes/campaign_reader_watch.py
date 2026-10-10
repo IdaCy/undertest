@@ -10,6 +10,7 @@ from pathlib import Path
 import time
 import uuid
 
+from causes import campaign_endpoint_transition as endpoint_transition
 from causes import campaign_reader as reader
 
 WATCH_SOURCE_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -70,6 +71,15 @@ def model_roster(models):
     return tuple(models)
 
 
+def run_id_roster(run_ids):
+    if (not isinstance(run_ids, (list, tuple)) or not run_ids
+            or any(type(run_id) is not str or not run_id or run_id in ('.', '..')
+                   or Path(run_id).name != run_id for run_id in run_ids)
+            or len(set(run_ids)) != len(run_ids)):
+        raise ValueError('explicit_distinct_run_ids_required')
+    return set(run_ids)
+
+
 def load_configuration(path):
     config = json.loads(Path(path).read_bytes())
     if config.get('schema') != 'causes.reader_watch_configuration.v1':
@@ -82,10 +92,22 @@ def load_configuration(path):
             raise ValueError('explicit_absolute_configuration_path_required:' + key)
     if type(config['workers']) is not int or not 1 <= config['workers'] <= 4:
         raise ValueError('reader_context_worker_limit')
+    if 'run_ids' in config:
+        run_id_roster(config['run_ids'])
     return config
 
 
-def load_frozen(protocol_path, milestone_path, *, models, pin_base, checker_config_path, prompts_path):
+def select_runs(selected, run_ids=None):
+    if run_ids is None:
+        return selected
+    requested = run_id_roster(run_ids)
+    if requested - selected.keys():
+        raise ValueError('unknown_reader_run_id')
+    return {run_id: frozen for run_id, frozen in selected.items() if run_id in requested}
+
+
+def load_frozen(protocol_path, milestone_path, *, models, pin_base, checker_config_path, prompts_path,
+                endpoint_transitions=None, run_ids=None):
     protocol_path, milestone_path = Path(protocol_path), Path(milestone_path)
     models = model_roster(models)
     pin_base = Path(pin_base).resolve()
@@ -125,6 +147,10 @@ def load_frozen(protocol_path, milestone_path, *, models, pin_base, checker_conf
                 raise ValueError('duplicate_or_unsafe_frozen_run_id')
             selected[run_id] = {'model': model, 'job': job, 'config': config,
                                 'jobs_file_sha256': job_pin['sha256'], 'model_file_sha256': config_pin['sha256']}
+    selected = select_runs(selected, run_ids)
+    if endpoint_transitions is not None:
+        for value in selected.values():
+            value['endpoint_transitions'] = endpoint_transitions
     checker_config = json.loads(checker_config_path.read_bytes())
     pins = {'protocol_sha256': file_sha(protocol_path), 'milestone_sha256': file_sha(milestone_path),
             'reader_source_sha256': milestone['source_sha256'], 'watcher_source_sha256': WATCH_SOURCE_SHA,
@@ -146,6 +172,13 @@ def bind_snapshot(receipt, frozen, snapshots_root, reader_pins):
     if len(files) != len(manifest_run['files']):
         raise ValueError('duplicate_manifest_file')
     job, config = frozen['job'], frozen['config']
+    actual_config, provenance = config, None
+    root_name = str(Path(receipt['run']).parent)
+    transitions = frozen.get('endpoint_transitions', {})
+    if root_name in transitions:
+        actual_config, provenance = endpoint_transition.snapshot_config(
+            transitions[root_name], root=root_name, job=job, original_config=config,
+            original_file_sha256=frozen['model_file_sha256'])
     loaded, verified = {}, {}
     for name in ('allocation.json', 'spec.json', 'variant.json', 'model.json', 'summary.json',
                  'initial_context.json', 'early_context.json', 'end_context.json'):
@@ -157,7 +190,7 @@ def bind_snapshot(receipt, frozen, snapshots_root, reader_pins):
         if verified[name]['bytes'] != files[name]['bytes']:
             raise ValueError('snapshot_file_size_mismatch')
     for name, expected in [('allocation.json', job['allocation']), ('spec.json', job['spec']),
-                           ('variant.json', job['variant']), ('model.json', config)]:
+                           ('variant.json', job['variant']), ('model.json', actual_config)]:
         if loaded.get(name) != expected:
             raise ValueError('frozen_identity_mismatch:' + name)
     summary = loaded.get('summary.json', {})
@@ -181,6 +214,11 @@ def bind_snapshot(receipt, frozen, snapshots_root, reader_pins):
                'reader_pins': reader_pins, 'source_files': verified,
                'actor_end_status': summary.get('end_status'),
                'expected_initial_context_sha256': reader.digest(expected_initial)}
+    if provenance is not None:
+        if reader.encoded([loaded[name + '.json'] for name in ('allocation', 'spec', 'variant', 'model')]) != reader.encoded(
+                [job['allocation'], job['spec'], job['variant'], actual_config]):
+            raise ValueError('typed_endpoint_identity_mismatch')
+        binding['endpoint_transition'] = provenance
     return binding, loaded
 
 
@@ -396,7 +434,8 @@ def main():
     options = load_configuration(args.configuration)
     selected, config, prompts, pins = load_frozen(options['protocol'], options['qualification'],
         models=options['models'], pin_base=options['pin_base'], checker_config_path=options['reader_config'],
-        prompts_path=options['prompts'])
+        prompts_path=options['prompts'], endpoint_transitions=options.get('endpoint_transitions'),
+        run_ids=options.get('run_ids'))
     from dotenv import dotenv_values
     from openai import OpenAI
     key = dotenv_values(options['env_file']).get('OPENAI_API_KEY')
