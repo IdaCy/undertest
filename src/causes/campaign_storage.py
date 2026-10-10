@@ -164,7 +164,8 @@ def drain_progress(events, controller_id):
 
 def validate_pause_routing(routing, drain_marker, controls_present, *, admitting_role):
     """Validate explicit control succession; an old pause is never silently ignored."""
-    require(routing['schema'] == 'causes.storage_pause_routing.v1'
+    require(routing['schema'] in ('causes.storage_pause_routing.v1',
+                                  'causes.storage_pause_routing.v2')
             and routing['root_accepted'] is True, 'accepted_pause_routing_required')
     require(drain_marker['origin'] == 'storage_transition'
             and drain_marker['transition_id'] == routing['transition_id']
@@ -174,7 +175,8 @@ def validate_pause_routing(routing, drain_marker, controls_present, *, admitting
     require(admitting_role in routing['successor_local_pauses'], 'explicit_admitting_role_required')
     old = routing['drain_marker']['path']
     successor_global = routing['successor_global_pause']
-    paths = [old, successor_global, *routing['successor_local_pauses'].values()]
+    retained = retained_owned_pauses(routing)
+    paths = [old, successor_global, *routing['successor_local_pauses'].values(), *retained]
     require(len(set(paths)) == len(paths), 'distinct_storage_pause_controls_required')
     for path in paths:
         absolute(path)
@@ -185,6 +187,8 @@ def validate_pause_routing(routing, drain_marker, controls_present, *, admitting
             and all(type(value) is bool for value in controls_present.values()),
             'exact_pause_observations_required')
     require(controls_present[old] is True, 'old_owner_drain_marker_missing')
+    require(all(controls_present[path] for path in retained),
+            'retained_owned_pause_missing')
     require(not controls_present[successor_global]
             and not controls_present[routing['successor_local_pauses'][admitting_role]],
             'user_or_successor_pause_blocks_admission')
@@ -193,6 +197,52 @@ def validate_pause_routing(routing, drain_marker, controls_present, *, admitting
             'admitting_role': admitting_role,
             'successor_global_pause': successor_global,
             'user_pause_fanout': list(routing['user_pause_fanout'])}
+
+
+def retained_owned_pauses(routing):
+    """Preserve reviewed MI drain markers through repeated owner succession."""
+    if routing['schema'] == 'causes.storage_pause_routing.v1':
+        require('retained_owned_pauses' not in routing and 'predecessor_routing' not in routing,
+                'pause_ancestry_requires_explicit_schema')
+        return []
+    require(routing['schema'] == 'causes.storage_pause_routing.v2', 'pause_ancestry_schema')
+    previous = h.checked(routing['predecessor_routing'])
+    require(previous['schema'] in ('causes.storage_pause_routing.v1',
+                                   'causes.storage_pause_routing.v2')
+            and previous['root_accepted'] is True, 'accepted_previous_pause_routing_required')
+    require(previous['schema'] != 'causes.storage_pause_routing.v1'
+            or ('retained_owned_pauses' not in previous and 'predecessor_routing' not in previous),
+            'previous_pause_ancestry_schema_changed')
+    for key in ('transition_id', 'drain_marker', 'successor_global_pause'):
+        require(routing[key] == previous[key], 'inherited_pause_control_changed')
+    require(routing['successor_local_pauses']['texas'] == previous['successor_local_pauses']['texas']
+            and routing['successor_local_pauses']['mi'] != previous['successor_local_pauses']['mi'],
+            'mi_only_pause_succession_required')
+    pairs = routing['retained_owned_pauses']
+    inherited = previous.get('retained_owned_pauses', [])
+    require(type(pairs) is list and 1 <= len(pairs) <= 32
+            and len(pairs) == len(inherited) + 1 and pairs[:-1] == inherited,
+            'complete_ordered_pause_ancestry_required')
+    paths = []
+    for pair in pairs:
+        value, review = h.checked(pair['evidence']), h.checked(pair['review'])
+        require(review.get('accepted_retired_owned_pause') is True
+                and review.get('ownership') == pair['evidence']
+                and value['schema'] == 'causes.retired_owned_pause.v1'
+                and value['role'] == 'mi' and value['owner_retired'] is True,
+                'unaccepted_retired_owned_pause')
+        marker = value['marker']
+        h.checked_bytes(marker)
+        require(h.stat_identity(marker['path']) == value['stat'], 'retained_owned_pause_changed')
+        paths.append(marker['path'])
+    require(paths[-1] == previous['successor_local_pauses']['mi']
+            and value['predecessor_routing'] == routing['predecessor_routing'],
+            'retired_pause_predecessor_changed')
+    require(type(previous['user_pause_fanout']) is list
+            and len(set(previous['user_pause_fanout'])) == len(previous['user_pause_fanout'])
+            and set(routing['user_pause_fanout']) == set(previous['user_pause_fanout'])
+                | {routing['successor_local_pauses']['mi']}, 'previous_pause_fanout_not_preserved')
+    return paths
 
 
 def validate_mixed_phase(registration, observations):
@@ -297,11 +347,17 @@ def storage_control_observation(binding):
             'controls_present': present, 'decision': decision}
 
 
+def validate_capacity_guard(binding, owner, *, require_healthy=False):
+    from causes.campaign_capacity_guard import validate_capacity_guard as validate
+    return validate(binding, owner, require_healthy=require_healthy)
+
+
 @dataclass
 class StorageGuard:
     binding: dict
     observe: Callable = storage_observation
     report: Callable | None = None
+    capacity_owner: dict | None = None
     last_observation: dict | None = field(default=None, init=False)
     last_error: str | None = field(default=None, init=False)
 
@@ -327,8 +383,10 @@ class StorageGuard:
         require(type(b['mount_identity']) is dict and set(b['mount_identity']) ==
                 {'mount_id', 'device', 'root', 'target', 'fstype'}, 'exact_mount_identity_required')
         require(b['mount_identity']['target'] == b['mount_target'], 'mount_target_identity_changed')
+        if 'capacity_guard' in b:
+            require(b['capacity_guard']['output_root'] == b['output'], 'capacity_guard_output_changed')
 
-    def _check(self):
+    def _check(self, allow_startup=True):
         b = self.binding
         observation = copy.deepcopy(self.observe(b))
         if 'admission_control' in b:
@@ -341,14 +399,21 @@ class StorageGuard:
                 and paths['root_volume']['device'] == b['root_device'], 'storage_volume_identity_changed')
         free = [observation['output_free_bytes'], observation['root_free_bytes']]
         require(all(type(value) is int and value >= 0 for value in free), 'invalid_storage_free_bytes')
+        if 'capacity_guard' in b:
+            from causes.campaign_capacity_guard import self_process
+            capacity = validate_capacity_guard(b['capacity_guard'], self.capacity_owner or self_process())
+            observation['capacity_guard'] = capacity
+            if not capacity['admission_allowed'] and not (allow_startup and capacity.get('construction_allowed', False)):
+                self.last_observation, self.last_error = copy.deepcopy(observation), None
+                return 0
         self.last_observation, self.last_error = copy.deepcopy(observation), None
         if 'root_floor_bytes' in b and free[1] >= b['root_floor_bytes']:
             return free[0]
         return min(free)
 
-    def check(self):
+    def check(self, *, allow_startup=True):
         try:
-            free = self._check()
+            free = self._check(allow_startup)
         except (OSError, ValueError, KeyError, TypeError) as error:
             self.last_observation = None
             self.last_error = type(error).__name__ + ':' + str(error)
@@ -362,7 +427,7 @@ class StorageGuard:
 
     def __call__(self):
         try:
-            return self.check()
+            return self.check(allow_startup=False)
         except (OSError, ValueError, KeyError, TypeError):
             return 0
 
@@ -424,7 +489,8 @@ class GuardJournal:
 
 
 def observe_guard(directory, binding, owner, expected_lock, *,
-                  observe_storage=storage_observation, max_records=10000):
+                  observe_storage=storage_observation, max_records=10000,
+                  reporter_source=None):
     """Fresh local observation; old ready transitions alone never prove health."""
     alarms = {'owner_identity_invalid': False, 'reporting_lock_invalid': False,
               'guard_record_invalid': False, 'guard_not_ready': False,
@@ -451,6 +517,9 @@ def observe_guard(directory, binding, owner, expected_lock, *,
         source = _SOURCE_SHA
         require(hashlib.sha256(Path(__file__).read_bytes()).hexdigest() == source,
                 'loaded_storage_source_changed')
+        if reporter_source is not None:
+            h.checked_bytes(reporter_source)
+            source = reporter_source['sha256']
         for sequence, path in enumerate(paths):
             require(path.name == f'{sequence:08d}.json', 'guard_history_sequence_gap')
             ref = h.pin(path)
@@ -471,14 +540,29 @@ def observe_guard(directory, binding, owner, expected_lock, *,
                     'guard_history_timestamp_invalid')
             previous = ref
         result['latest_transition'] = previous
+        if reporter_source is not None:
+            result['reporter_source'] = reporter_source
         alarms['guard_not_ready'] = record['state'] != 'ready'
+        if 'capacity_guard' in binding and record['state'] == 'floor_wait':
+            old = record['observation']
+            capacity_wait = old.get('capacity_guard', {}).get('status') in ('endpoint_pending', 'expired')
+            physical_ok = (old['output_free_bytes'] >= binding['floor_bytes']
+                           and old['root_free_bytes'] >= binding.get('root_floor_bytes', binding['floor_bytes']))
+            if capacity_wait and physical_ok:
+                alarms['guard_not_ready'] = False
     except (OSError, ValueError, KeyError, TypeError):
         alarms['guard_record_invalid'] = True
     try:
-        guard = StorageGuard(binding, observe_storage)
+        guard = StorageGuard(binding, observe_storage, capacity_owner=owner)
         free = guard.check()
         result['fresh_storage'] = guard.last_observation
         alarms['volume_below_floor'] = free < binding['floor_bytes']
+        if 'capacity_guard' in binding:
+            current = guard.last_observation
+            result['capacity_guard'] = current['capacity_guard']
+            alarms['capacity_guard_not_ready'] = current['capacity_guard']['status'] not in ('healthy', 'startup_held')
+            alarms['volume_below_floor'] = (current['output_free_bytes'] < binding['floor_bytes']
+                or current['root_free_bytes'] < binding.get('root_floor_bytes', binding['floor_bytes']))
     except (OSError, ValueError, KeyError, TypeError):
         alarms['storage_binding_invalid'] = True
     result['healthy'] = not any(alarms.values())

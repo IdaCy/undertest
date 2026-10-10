@@ -120,6 +120,68 @@ class TrajectoryAssemblyTests(unittest.TestCase):
             self.assemble(receipts=[self.fixture.receipt, alias],
                           registered_roots={'mi27': ['runs/mi27', 'z_recovery/mi27']})
 
+    def test_reader_namespaces_keep_assignment_custody_and_qualification_separate(self):
+        f = self.fixture
+        later_job = copy.deepcopy(f.job)
+        later_job['allocation']['run_id'] = 'later'
+        later_root = f.root.parent / 'later'
+        later_root.mkdir()
+        for path in f.root.iterdir():
+            value = json.loads(path.read_bytes())
+            if path.name in ('allocation.json', 'summary.json'):
+                value['run_id'] = 'later'
+            (later_root / path.name).write_text(json.dumps(value))
+        files = []
+        for path in later_root.iterdir():
+            raw = path.read_bytes()
+            files.append({'path': path.name, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()})
+        summary_hash = next(row['sha256'] for row in files if row['path'] == 'summary.json')
+        manifest = self.save(f.snapshots / 'later_manifest.json', {'runs': [
+            {'run': 'runs/mi27/later', 'files': files, 'summary_sha256': summary_hash}]})
+        receipt = {'run': 'runs/mi27/later', 'path': str(later_root), 'manifest': manifest['path'],
+                   'manifest_sha256': manifest['sha256'], 'summary_sha256': summary_hash}
+        result = {'instruments': {}}
+        old_pin = self.save(f.output / 'mi27/fixture/early/RESULT.json', result)
+        self.artifacts[('mi27', 'fixture', 'early')] = assembly.ReaderArtifacts(old_pin, None, None)
+        new_base = f.base / 'reader_successor'
+        new_pin = self.save(new_base / 'mi27/later/early/RESULT.json', result)
+        new_artifacts = {('mi27', 'later', stage): assembly.ReaderArtifacts(
+            new_pin if stage == 'early' else None, None, None) for stage in ('early', 'end')}
+        successor = replace(self.inputs, output_base=new_base, artifacts=new_artifacts,
+                            binding_pins={'qualification': 'successor'}, config={'reader': 'successor'})
+        with patch.object(assembly, 'verify_reader_capture', return_value=result) as verify, \
+                patch.object(assembly.watch, 'bind_snapshot', wraps=assembly.watch.bind_snapshot) as bind:
+            actual = self.assemble(receipts=[f.receipt, receipt],
+                models={'mi27': replace(self.models['mi27'], jobs=[f.job, later_job])},
+                reader_inputs_by_assignment={('mi27', 'later'): successor})
+        self.assertEqual(actual['records']['mi27']['fixture']['reader']['early']['path'], old_pin['path'])
+        self.assertEqual(actual['records']['mi27']['later']['reader']['early']['path'], new_pin['path'])
+        self.assertEqual([call.args[3] for call in bind.call_args_list],
+                         [self.inputs.binding_pins, successor.binding_pins])
+        self.assertEqual([call.args[4] for call in verify.call_args_list], [self.inputs.config, successor.config])
+        self.assertEqual(actual['coverage']['mi27'], {'unobserved': [], 'quality_unavailable': []})
+
+    def test_reader_override_never_borrows_another_namespaces_files_or_absences(self):
+        f = self.fixture
+        result_pin = self.save(f.output / 'mi27/fixture/early/RESULT.json', {'instruments': {}})
+        self.artifacts[('mi27', 'fixture', 'early')] = assembly.ReaderArtifacts(result_pin, None, None)
+        successor = replace(self.inputs, output_base=f.base / 'reader_successor', artifacts={})
+        with self.assertRaisesRegex(ValueError, 'explicit_reader_artifact_or_absence_required'):
+            self.assemble(reader_inputs_by_assignment={('mi27', 'fixture'): successor})
+        successor = replace(successor, artifacts=self.artifacts)
+        with self.assertRaisesRegex(ValueError, 'reader_artifact_identity_path_mismatch'):
+            self.assemble(reader_inputs_by_assignment={('mi27', 'fixture'): successor})
+
+    def test_reader_override_unknown_assignments_and_invalid_inputs_refuse(self):
+        for value in ([], 0, '', False, [('mi27', 'fixture')]):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'reader_override_mapping_required'):
+                self.assemble(reader_inputs_by_assignment=value)
+        for key in [('other_model', 'fixture'), ('mi27', 'absent'), ('mi27',), 'fixture']:
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'reader_override_assignment_unknown'):
+                self.assemble(reader_inputs_by_assignment={key: self.inputs})
+        with self.assertRaisesRegex(ValueError, 'reader_override_inputs_required'):
+            self.assemble(reader_inputs_by_assignment={('mi27', 'fixture'): {}})
+
     def test_typed_frozen_identity_and_paired_context_drift_refuse(self):
         f = self.fixture
         changed = copy.deepcopy(f.job['allocation']);changed['seed'] = 1.0
