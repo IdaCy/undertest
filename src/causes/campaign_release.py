@@ -1,8 +1,8 @@
 """Separately reviewed release-only composition over an unchanged native runtime.
 
-Only the final allocation reconstruction in registration validation shares the
-existing per-instance cache. Every original predicate and freshness/live check
-still executes; the source pair and full input bytes are rechecked each pass.
+Allocation reconstructions in registration validation use per-instance caches.
+Every original predicate and freshness/live check still executes; the source
+pair and full input bytes are rechecked each pass.
 """
 import argparse
 import copy
@@ -17,17 +17,20 @@ from causes.campaign_admission import (accepted, donor_cuts_clear, native_reserv
                                       native_reservation_foreign_blocks, recent, require,
                                       reservation_unchanged)
 from causes.campaign_monitor import digest, encoded, validate_policy
-from causes.campaign_corpus_succession import closed_predecessor, native_allocation
+from causes.campaign_corpus_succession import closed_predecessor, validate_native_allocation
 from causes.corpus_continuation import control_full_selection
 
 CONTRACT = 'causes.native_release_operator.v1'
 BASE_MODULES = (admission, monitor, succession, h)
 
-def release_native_lineage(policy, registration, reader=h.checked, *, allocation_ref, allocation_cache):
+def release_native_lineage(policy, registration, reader=h.checked, *, allocation_ref, allocation_cache,
+                           lineage_caches=None):
     """Validate an appended native lineage against its unchanged v1 base."""
     from causes.campaign_corpus_succession import accepted
     require(reader is h.checked and isinstance(allocation_cache, succession.NativeAllocationCache),
             'release_allocation_cache_scope_changed')
+    require(lineage_caches is None or type(lineage_caches) is dict,
+            'release_lineage_cache_scope_changed')
     lineage = policy['native_successions']
     base = reader(lineage['base_policy'])
     base_registration = reader(lineage['base_registration'])
@@ -64,9 +67,15 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
                               'allocation', reader)
         if index == len(phases) - 1:
             require(link['allocation']['evidence'] == allocation_ref, 'release_final_allocation_changed')
-            native_allocation(allocation, reader, cache=allocation_cache)
+            validate_native_allocation(allocation, reader, cache=allocation_cache)
         else:
-            native_allocation(allocation, reader)
+            cache = None
+            if lineage_caches is not None:
+                key = h.encoded(link['allocation']['evidence'])
+                if key not in lineage_caches:
+                    lineage_caches[key] = succession.NativeAllocationCache()
+                cache = lineage_caches[key]
+            validate_native_allocation(allocation, reader, cache=cache)
         adoption = reader(link['root_adoption'])
         require(adoption.get('root_accepted') is True
                 and adoption.get('allocation') == link['allocation']['evidence']
@@ -121,7 +130,8 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
         require(len(donors) == 1 and donors[0]['journal'] == closure['journal'], 'native_closed_history_pin_changed')
     return links[-1]
 
-def validate_release_registration(reg, policy, reader=h.checked, *, allocation_ref, allocation_cache):
+def validate_release_registration(reg, policy, reader=h.checked, *, allocation_ref, allocation_cache,
+                                  lineage_caches=None):
     validate_policy(policy)
     require(reg['schema'] == 'caus.jp_companion_registration.v1' and reg['status'] == 'active'
             and reg['root_authorized'] is True, 'inactive_registration')
@@ -132,7 +142,7 @@ def validate_release_registration(reg, policy, reader=h.checked, *, allocation_r
     index = phases.index(phase)
     if policy['schema'] == 'causes.campaign_monitor_policy.v2':
         release_native_lineage(policy, reg, reader, allocation_ref=allocation_ref,
-                               allocation_cache=allocation_cache)
+                               allocation_cache=allocation_cache, lineage_caches=lineage_caches)
     controller = reg['controller']
     require(reg['controller_host'] == policy['controller_host']
             and controller['model'] == policy['model_key']
@@ -271,6 +281,7 @@ class ReleaseOnlyNativeAdmission(admission.NativeAdmission):
         self._release_policy = h.encoded(self.policy)
         self._release_inputs = h.encoded(self.inputs)
         self._release_binding_invalid = False
+        self._release_lineage_caches = {}
         self._operator_binding(self.release_action)
 
     def _operator_binding(self, action):
@@ -368,7 +379,8 @@ class ReleaseOnlyNativeAdmission(admission.NativeAdmission):
                     and registration['controller']['process'] == launch['process']
                     and registration['controller']['launch_receipt'] == x['launch'], 'native_startup_registration_changed')
             validate_release_registration(registration, h.checked(ready['monitor_policy']), reader=h.checked,
-                                          allocation_ref=p['allocation'], allocation_cache=self._allocation_cache())
+                                          allocation_ref=p['allocation'], allocation_cache=self._allocation_cache(),
+                                          lineage_caches=self._release_lineage_caches)
             require(registration['donor_histories'] == p['donor_histories'], 'native_startup_history_changed')
         return foundation
 

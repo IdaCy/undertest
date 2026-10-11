@@ -274,11 +274,11 @@ def _native_reservation_foreign_blocks_proof(original, current, allocation, grow
     foreign roots may grow; this is an explicit alternative to strict equality.
     """
     from causes import campaign_census as census
-    from causes.campaign_corpus_succession import native_allocation
+    from causes.campaign_corpus_succession import native_allocation_components
     control = reader(allocation['allocation_control'])
     require(h.encoded(reader(control['reservation'])) == h.encoded(original),
             'native_generation_reservation_changed')
-    jobs, _, _, _ = native_allocation(allocation, cache=allocation_cache, dependency_sink=dependency_sink)
+    jobs, _, _, _ = native_allocation_components(allocation, cache=allocation_cache, dependency_sink=dependency_sink)
     require(set(growth) == {'baseline_census_config', 'foreign_roots'}, 'foreign_growth_scope_changed')
     baseline_config, config = reader(growth['baseline_census_config']), reader(config_reference)
     require(original['configuration'] == growth['baseline_census_config'] and current['configuration'] == config_reference,
@@ -822,8 +822,8 @@ class ContinuousAdmission:
 
 def native_runtime(allocation, template, common, *, allocation_cache=None):
     """Reconstruct one native queue and its exact command, without publishing it."""
-    from causes.campaign_corpus_succession import native_allocation
-    jobs, config, prototypes, allocator = native_allocation(allocation, cache=allocation_cache)
+    from causes.campaign_corpus_succession import native_allocation_components
+    jobs, config, prototypes, allocator_binding = native_allocation_components(allocation, cache=allocation_cache)
     t = template
     continuous = allocation['target_mode'] == 'continuous_corpus'
     extension_key = 'prototypes' if continuous else 'empty_extensions'
@@ -849,11 +849,11 @@ def native_runtime(allocation, template, common, *, allocation_cache=None):
              '--start-barrier-file': common['barrier'], '--admission-holds': common['holds']['path'],
              '--admission-holds-sha256': common['holds']['sha256']}
     if continuous:
-        continuation = {'control': allocation['control'], 'binding': allocator.binding,
+        continuation = {'control': allocation['control'], 'binding': allocator_binding,
                         'package': common['allocator_package'], 'source_review': common['allocator_review'],
                         'allocator_sources': {name: code[name] for name in
                             ('campaign_dispatcher.py', 'corpus_allocation.py', 'corpus_continuation.py')}}
-        queue['corpus_continuation'] = {'control': allocation['control'], 'binding': allocator.binding}
+        queue['corpus_continuation'] = {'control': allocation['control'], 'binding': allocator_binding}
         flags.update({'--corpus-continuation': allocation['control']['path'],
                       '--corpus-continuation-sha256': allocation['control']['sha256']})
     argv = t['argv_template_at_proposed_cap'][2:]
@@ -982,7 +982,7 @@ class NativeAdmission(ContinuousAdmission):
                 'native_full_local_history_required')
         require(p['history']['donor_scopes'][:len(base['history']['donor_scopes'])] == base['history']['donor_scopes'],
                 'native_base_history_changed')
-        jobs, _, prototypes, _ = s.native_allocation(allocation, cache=self._allocation_cache())
+        jobs, _, prototypes, _ = s.native_allocation_components(allocation, cache=self._allocation_cache())
         routes = sorted({'task:'+object_sha([job['spec'].get('task_id'), job['spec'].get('image')])
                          for job in jobs + prototypes})
         aliases = sorted({'model:'+object_sha([cfg.get('model'), cfg.get('endpoint')])
