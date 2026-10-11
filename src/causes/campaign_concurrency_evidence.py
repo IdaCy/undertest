@@ -9,7 +9,7 @@ from pathlib import Path
 import types
 
 from causes import campaign_runner as runner
-from causes.campaign_actor_evidence import _read
+from causes.campaign_actor_evidence import _closed_stages, _read
 from causes.campaign_handoff import canonical_path
 
 
@@ -39,14 +39,16 @@ def _union(intervals):
     return result
 
 
-def actor_request_exposure(episodes, *, maximum_clock_difference_seconds):
+def actor_request_exposure(episodes, *, maximum_clock_difference_seconds, minimum_concurrent_runs=2):
     """Project independently audited actor receipts, excluding self requests.
 
     Each episode has a unique run_id and ordered requests from the actor audit.
     This function checks timing, not request content or closed-payload custody.
+    Overlap is the union with at least minimum_concurrent_runs distinct runs.
     A clock discrepancy is retained and makes temporal evidence inconclusive.
     """
     tolerance = _number(maximum_clock_difference_seconds, 'invalid_clock_tolerance')
+    _require(type(minimum_concurrent_runs) is int and minimum_concurrent_runs >= 2, 'invalid_overlap_concurrency')
     identities, projected, by_run = set(), [], []
     for episode in episodes:
         rid = episode['run_id']
@@ -73,10 +75,18 @@ def actor_request_exposure(episodes, *, maximum_clock_difference_seconds):
                           'request_elapsed_seconds': sum(row['receipt_elapsed_seconds'] for row in rows),
                           'timing_consistent': all(row['timing_consistent'] for row in rows), 'requests': rows})
     _require(len(projected) >= 2, 'multiple_episodes_required')
-    overlaps = []
-    for index, first in enumerate(by_run):
-        for second in by_run[index + 1:]:
-            overlaps.extend((max(a, c), min(b, d)) for a, b in first for c, d in second if max(a, c) < min(b, d))
+    changes = {}
+    for intervals in by_run:
+        for start, end in _union(intervals):
+            if start < end:
+                changes[start] = changes.get(start, 0) + 1
+                changes[end] = changes.get(end, 0) - 1
+    overlaps, active, previous = [], 0, None
+    for timestamp, change in sorted(changes.items()):
+        if previous is not None and active >= minimum_concurrent_runs:
+            overlaps.append((previous, timestamp))
+        active += change
+        previous = timestamp
     merged = _union(overlaps)
     return {'episodes': projected, 'successful_requests': sum(row['successful_requests'] for row in projected),
             'sum_actor_span_seconds': sum(row['actor_span_seconds'] for row in projected),
@@ -142,6 +152,20 @@ def audit_self_probe_traffic(directory, job, config):
     Failed calls remain capacity concerns; completed but unusable measurements
     retain their native status without being classified as service failures.
     """
+    return _audit_self_probe_traffic(directory, job, config, captured_stages_only=False)
+
+
+def audit_captured_self_probe_traffic(directory, job, config):
+    """Audit native self traffic only for stages captured by a closed full run.
+
+    Uncaptured assigned slots are reported separately without inventing a call
+    or a technical response. Audit actor content and snapshot custody first.
+    The existing two-stage API remains strict about both stages being present.
+    """
+    return _audit_self_probe_traffic(directory, job, config, captured_stages_only=True)
+
+
+def _audit_self_probe_traffic(directory, job, config, *, captured_stages_only):
     root = canonical_path(directory)
     allocation = job['allocation']
     _require(_read(root, 'allocation.json') == allocation and _read(root, 'model.json') == config,
@@ -150,7 +174,14 @@ def audit_self_probe_traffic(directory, job, config):
     probes = summary.get('probes', [])
     selected = [q for q in config['questions'] if q['id'] in allocation['instruments']]
     _require(len(selected) == len(set(allocation['instruments'])), 'self_question_roster_changed')
-    expected = [(stage, q['id']) for stage in ('early', 'end') for q in selected]
+    stages = _closed_stages(root, summary, allocation) if captured_stages_only else ['early', 'end']
+    if captured_stages_only:
+        _require(summary['run_id'] == allocation['run_id'], 'self_probe_identity_changed')
+        for stage in stages:
+            path = root / 'probes' / stage
+            actual = {item.name for item in path.iterdir()} if path.exists() else set()
+            _require(actual <= {q['id'] for q in selected}, 'unexpected_self_probe_evidence')
+    expected = [(stage, q['id']) for stage in stages for q in selected]
     _require([(p['stage'], p['instrument']) for p in probes] == expected, 'self_probe_stage_roster_changed')
     rows = []
     for probe, (stage, instrument) in zip(probes, expected):
@@ -204,7 +235,13 @@ def audit_self_probe_traffic(directory, job, config):
                      'context_sha256': reconstructed['context_sha256'], 'question_sha256': reconstructed['question_sha256'],
                      'elapsed_seconds': receipt['elapsed_seconds'], 'finish_reason': reconstructed['finish_reason'],
                      'usage': receipt.get('usage')})
-    return {'run_id': allocation['run_id'], 'probes': rows, 'capacity_faults': sum(row['capacity_fault'] for row in rows),
+    result = {'run_id': allocation['run_id'], 'probes': rows, 'capacity_faults': sum(row['capacity_fault'] for row in rows),
             'completed_http_requests': sum(not row['capacity_fault'] for row in rows),
             'measurement_only_technical': sum(row['technical_status'] in ('invalid_answer_schema', 'truncated') for row in rows),
             'model_calls': 0, 'scope': 'Self traffic only; native statuses retained and no awareness-effect comparison.'}
+    if captured_stages_only:
+        absent = [stage for stage in ('early', 'end') if stage not in stages]
+        result.update(captured_stages=stages, uncaptured_stages=absent,
+                      unattempted_probes=[{'stage': stage, 'instrument': q['id'], 'reason': 'context_not_captured'}
+                                          for stage in absent for q in selected])
+    return result

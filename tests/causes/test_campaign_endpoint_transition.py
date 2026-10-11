@@ -87,6 +87,24 @@ class EndpointTransitionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'pin_changed'):
             transition.validate(f['pair'])
 
+    def test_explicitly_reviewed_full_three_and_invalid_limits(self):
+        f = self.f
+        qualification = h.checked(f['value']['qualification']['evidence'])
+        for limit in (1, 2, 3, 0, True, 4, 3.0):
+            ref = f['save'](dict(qualification, qualified_max_full=limit))
+            pair = {'evidence': ref, 'review': f['save']({
+                'accepted_storage_endpoint_qualification': True, 'qualification': ref})}
+            candidate = f['accepted'](dict(f['value'], qualification=pair))
+            with self.subTest(limit=limit):
+                if type(limit) is int and limit in (1, 2, 3):
+                    self.assertEqual(transition.validate(candidate)['qualification']['qualified_max_full'], limit)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'provider_qualification_changed'):
+                        transition.validate(candidate)
+        pair['review'] = f['save']({'accepted_storage_endpoint_qualification': False, 'qualification': ref})
+        with self.assertRaisesRegex(ValueError, 'unaccepted_storage_input'):
+            transition.validate(f['accepted'](dict(f['value'], qualification=pair)))
+
 
 if __name__ == '__main__':
     unittest.main()
