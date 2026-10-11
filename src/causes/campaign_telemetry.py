@@ -47,8 +47,8 @@ def select_health_series(metrics, *, name_pattern, histogram_families=(),
             if types.get(name) == 'counter' and name.endswith('_total'):
                 pass
             else:
-                family = next((family for family in histogram_families
-                               if name.startswith(family + '_')), None)
+                family = max((family for family in histogram_families
+                              if name.startswith(family + '_')), key=len, default=None)
                 _require(family is not None, 'unrecognized_health_metric_type:' + name)
                 _require(types.get(family) == 'histogram', 'health_histogram_type:' + family)
                 if name.endswith(('_count', '_bucket')):

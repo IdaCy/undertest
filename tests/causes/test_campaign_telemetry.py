@@ -150,6 +150,22 @@ class HealthSeriesTests(unittest.TestCase):
                     t.select_health_series(value, name_pattern='preempt',
                                            histogram_families=('engine:preemptions',))
 
+    def test_nested_histogram_families_are_order_independent(self):
+        value = metrics([('engine:requests', 'histogram'), ('engine:requests_errors', 'histogram')],
+                        [('engine:requests_errors_sum', '', 0),
+                         ('engine:requests_errors_count', '', 7),
+                         ('engine:requests_errors_bucket', '{le="+Inf"}', 7)])
+        for families in (('engine:requests', 'engine:requests_errors'),
+                         ('engine:requests_errors', 'engine:requests')):
+            with self.subTest(families=families):
+                self.assertEqual(t.select_health_series(value, name_pattern='error',
+                                                         histogram_families=families),
+                                 {('engine:requests_errors_sum', ''): 0})
+                changed = copy.deepcopy(value)
+                changed['values'][0]['name'] = 'engine:requests_errors_unknown'
+                with self.assertRaisesRegex(ValueError, 'unrecognized_health_histogram_series'):
+                    t.select_health_series(changed, name_pattern='error', histogram_families=families)
+
     def test_epoch_requires_gauge_and_counter_or_histogram_family(self):
         for types in ([('engine:errors_created', 'gauge')],
                       [('engine:errors_created', 'counter'), ('engine:errors_total', 'counter')],
