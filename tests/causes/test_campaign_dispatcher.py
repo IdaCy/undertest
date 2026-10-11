@@ -117,6 +117,34 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual({e['run_id'] for e in unresolved}, {'partial', 'lost'})
         self.assertTrue(all(e['replayed'] is False and e['counted_completed'] is False for e in unresolved))
 
+    def test_runner_exception_preserves_cause_without_replaying_attempt(self):
+        assignment = job('initialization_failure')
+
+        def runner(*args):
+            self.pause.touch()
+            try:
+                raise FileNotFoundError('source seed is absent')
+            except FileNotFoundError as error:
+                raise ValueError('sandbox initialization failed') from error
+
+        self.run_bounded(self.dispatcher([assignment], runner, workers=1, max_full=1))
+        failed = [e for e in self.events() if e['event'] == 'unresolved_current_attempt']
+        self.assertEqual(len(failed), 1)
+        receipt = failed[0]
+        self.assertEqual(receipt['controller_error_type'], 'ValueError')
+        self.assertIn('FileNotFoundError: source seed is absent', receipt['controller_traceback'])
+        self.assertIn('ValueError: sandbox initialization failed', receipt['controller_traceback'])
+        self.assertIn('in runner', receipt['controller_traceback'])
+        self.assertTrue(receipt['technical_failure'])
+        self.assertFalse(receipt['replayed'])
+        self.assertIsNone(receipt['summary_sha256'])
+        self.assertFalse((self.output / 'initialization_failure/summary.json').exists())
+
+        self.run_bounded(self.dispatcher([assignment], lambda *args: self.fail('failed attempt replayed'),
+                                        workers=1, max_full=1))
+        self.assertEqual(len([e for e in self.events() if e['event'] == 'claimed']), 1)
+        self.assertEqual([e for e in self.events() if e['event'] == 'unresolved_current_attempt'], failed)
+
     def test_extensions_keep_forming_balanced_blocks_until_operator_pause(self):
         prototypes = [job('proto_a'), job('proto_b')]
         allocations = []
