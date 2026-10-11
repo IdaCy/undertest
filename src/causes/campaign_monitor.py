@@ -599,8 +599,10 @@ def listener_owned(pid, port):
     return {'port':port,'pid':pid,'socket_inode':rows[0][9]}
 
 
-def models(port, policy):
-    with urllib.request.urlopen('http://127.0.0.1:' + str(port) + '/v1/models', timeout=4) as response:
+def models(port, policy, *, timeout_seconds=4):
+    require(type(timeout_seconds) in (int, float) and 0 < timeout_seconds <= 10,
+            'model_read_timeout_out_of_range')
+    with urllib.request.urlopen('http://127.0.0.1:' + str(port) + '/v1/models', timeout=timeout_seconds) as response:
         raw = response.read(1024*1024); require(response.status == 200, 'endpoint_http_failure')
     data = json.loads(raw)['data']
     require(len(data) == 1 and data[0]['id'] == policy['model'] and data[0]['max_model_len'] == policy['max_model_len'], 'endpoint_model_changed')
