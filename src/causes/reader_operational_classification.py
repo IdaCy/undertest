@@ -1,9 +1,6 @@
 """Distinguish completed citation-invalid annotations from route failures.
 
-This optional scheduling classifier never changes judgments or missingness. Its
-caller must retain the native results and evidence, and must leave the route
-failure counter unchanged when a nonempty tuple is returned. Other failures
-continue through the caller's ordinary failure/quarantine policy.
+This optional scheduling classifier never changes judgments or missingness. Its caller must retain the native results and evidence, and must leave the route failure counter unchanged when a nonempty tuple is returned. Other failures continue through the caller's ordinary failure/quarantine policy.
 """
 from . import campaign_reader as reader
 
@@ -11,13 +8,7 @@ from . import campaign_reader as reader
 def citation_only_missing(result, evidence):
     """Return affected instruments only for the narrow completed-citation case.
 
-    ``evidence`` maps each instrument to its native ``attempt`` and ``receipt``
-    plus ``expected`` request/context/source and prompt/config/schema digests,
-    ``actual_request_sha256`` (native canonical digest) and
-    ``actual_response_sha256`` (whole raw-response bytes).
-    The expected values must come from the accepted input, not the receipt.
-    Evidence contradictions raise; an unrecognized failure returns ``()``.
-    No judgment, quote, raw response or parsed answer is inspected here.
+    ``evidence`` maps each instrument to its native ``attempt`` and ``receipt`` plus ``expected`` request/context/source and prompt/config/schema digests, ``actual_request_sha256`` (native canonical digest) and ``actual_response_sha256`` (whole raw-response bytes). The expected values must come from the accepted input, not the receipt. Evidence contradictions raise; an unrecognized failure returns ``()``. No judgment, quote, raw response or parsed answer is inspected here.
     """
     if result.get('integrity_failure'):
         return ()
