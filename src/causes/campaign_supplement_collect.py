@@ -233,7 +233,20 @@ def carry_forward(binding, prepared, roster, obligations, config, original_rows,
     return carried, unavailable, provenance
 
 
-def verify_final(job, terminal, *, root, family, model, contexts, config, runner, record):
+def verify_final(job, terminal, *, root, family, model, contexts, config, runner, record,
+                 prepare_request=None):
+    """Verify one saved final, optionally using an explicit derived-input adapter.
+
+    ``config`` remains the pinned original config. A custom ``prepare_request``
+    has the same four inputs as core.prepare_request and returns
+    ``(context, question, probe_config)``. It must verify the original and derived
+    input pins, transformation, instrument, seed and request hashes. Its source
+    and those extra pins belong in the caller's reviewed provenance.
+
+    The adapter changes only request preparation; saved input/capture identity,
+    actual request bytes, receipts and the frozen offline parser remain checked
+    here. This does not broaden collect()'s supplementary-instrument policy.
+    """
     destination = core.measurement_path(root, job, family=family, model=model)
     require(terminal['final']['path'] == str(destination / 'FINAL.json'), 'terminal_path_mismatch')
     final = json.loads(record(terminal['final'], read=True))
@@ -253,7 +266,11 @@ def verify_final(job, terminal, *, root, family, model, contexts, config, runner
         if isinstance(item, dict) and set(item) == {'path', 'bytes', 'sha256'}:
             record(item)
     record(job['context'])
-    context, question = core.prepare_request(job, contexts, config, runner)
+    if prepare_request is None:
+        context, question = core.prepare_request(job, contexts, config, runner)
+    else:
+        require(callable(prepare_request), 'request_preparer_required')
+        context, question, config = prepare_request(job, contexts, config, runner)
     capture = destination / 'capture'
     pins = {}
     for item in final['capture_files']:
