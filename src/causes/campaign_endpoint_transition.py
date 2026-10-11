@@ -68,7 +68,7 @@ def validate(pair):
              and qualification['config'] == transition['successor_config']
              and qualification['endpoint'] == new_endpoint and qualification['model'] == current['model']
              and type(qualification['qualified_max_full']) is int
-             and qualification['qualified_max_full'] in (1, 2),
+             and qualification['qualified_max_full'] in (1, 2, 3),
              'storage_endpoint_provider_qualification_changed')
     h.checked_bytes(transition['backend_provenance'])
     _require(type(qualification['evidence']) is list and qualification['evidence'],

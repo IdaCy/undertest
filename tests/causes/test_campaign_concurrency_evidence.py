@@ -23,6 +23,36 @@ def episode(rid, intervals):
 
 
 class ExposureTests(unittest.TestCase):
+    def test_three_distinct_runs_and_default_pairwise_behavior(self):
+        rows = [episode('a', [(0, 20), (30, 40)]), episode('b', [(10, 35)]), episode('c', [(15, 25)])]
+        result = actor_request_exposure(rows, maximum_clock_difference_seconds=.1, minimum_concurrent_runs=3)
+        self.assertEqual(result['cross_job_actor_overlap_seconds'], 5)
+        self.assertEqual(result['cross_job_actor_overlap_intervals'], [[
+            dt.datetime.fromisoformat(at(15)).timestamp(), dt.datetime.fromisoformat(at(20)).timestamp()]])
+        self.assertEqual(actor_request_exposure(rows, maximum_clock_difference_seconds=.1),
+                         actor_request_exposure(rows, maximum_clock_difference_seconds=.1, minimum_concurrent_runs=2))
+
+    def test_multiple_requests_from_two_runs_do_not_count_as_three(self):
+        rows = [episode('a', [(0, 10), (10, 20), (20, 30)]), episode('b', [(0, 30)])]
+        self.assertEqual(actor_request_exposure(rows, maximum_clock_difference_seconds=.1,
+            minimum_concurrent_runs=3)['cross_job_actor_overlap_seconds'], 0)
+
+    def test_touching_zero_length_intervals_and_changed_membership(self):
+        rows = [episode('a', [(0, 10)]), episode('b', [(0, 20)]),
+                episode('c', [(10, 20)]), episode('d', [(10, 10)])]
+        value = actor_request_exposure(rows, maximum_clock_difference_seconds=.1, minimum_concurrent_runs=3)
+        self.assertEqual(value['cross_job_actor_overlap_seconds'], 0)
+        rows[3] = episode('d', [(0, 20)])
+        value = actor_request_exposure(rows, maximum_clock_difference_seconds=.1, minimum_concurrent_runs=3)
+        self.assertEqual(value['cross_job_actor_overlap_seconds'], 20)
+        self.assertEqual(len(value['cross_job_actor_overlap_intervals']), 1)
+
+    def test_invalid_overlap_thresholds_refuse(self):
+        for value in (0, 1, True, 3.0):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'invalid_overlap_concurrency'):
+                actor_request_exposure([episode('a', [(0, 10)]), episode('b', [(0, 10)])],
+                    maximum_clock_difference_seconds=.1, minimum_concurrent_runs=value)
+
     def test_actor_spans_exclude_summary_and_overlap_is_union(self):
         value = actor_request_exposure([episode('a', [(0, 20), (30, 40)]),
                                         episode('b', [(10, 35)]), episode('c', [(15, 25)])],
