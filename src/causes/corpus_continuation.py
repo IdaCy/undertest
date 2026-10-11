@@ -121,15 +121,16 @@ class CorpusContinuation:
         self.block_hashes, self.job_hashes, self.job_blocks = {}, {}, {}
 
     @classmethod
-    def from_control(cls, control, prototypes, config):
+    def from_control(cls, control, prototypes, config, *, reader=None):
+        read = _pinned_json if reader is None else reader
         full_selection = control_full_selection(control)
-        if digest(_pinned_json(control['config'])) != digest(config):
+        if digest(read(control['config'])) != digest(config):
             raise ValueError('continuation_config_changed')
-        if digest(_pinned_json(control['prototypes'])) != digest(prototypes):
+        if digest(read(control['prototypes'])) != digest(prototypes):
             raise ValueError('continuation_prototypes_changed')
-        return cls(_pinned_json(control['catalog']), prototypes,
-                   _pinned_json(control['original_jobs']), config,
-                   _pinned_json(control['reservation']),
+        return cls(read(control['catalog']), prototypes,
+                   read(control['original_jobs']), config,
+                   read(control['reservation']),
                    **{k: control[k] for k in ('family', 'model_key', 'task_host', 'provider_host', 'repetition_start')},
                    config_sha256=control['config']['sha256'], full_selection=full_selection)
 
