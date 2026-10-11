@@ -369,9 +369,64 @@ def validate_input_succession(reference, expected_identity, output):
     return path, receipt
 
 
+def route_state(rows):
+    """Replay route disposition without treating inherited failures as new attempts."""
+    failures, quarantine = 0, None
+    for index, row in enumerate(rows):
+        event = row['event']
+        if event == 'reader_route_state_carried':
+            if (index != 0 or type(row.get('consecutive_failed_contexts')) is not int
+                    or not 0 <= row['consecutive_failed_contexts'] < 3
+                    or row.get('quarantine') is not None or not row.get('carry')):
+                raise ValueError('invalid_reader_route_carry_event')
+            failures = row['consecutive_failed_contexts']
+        elif event == 'reader_route_failure':
+            failures = row['consecutive_failed_contexts']
+        elif event == 'reader_route_success':
+            failures = 0
+        elif event == 'reader_route_quarantined':
+            quarantine = row
+        elif event == 'reader_route_requalified':
+            quarantine, failures = None, 0
+    return failures, quarantine
+
+
+def validate_route_state_carry(reference, expected_identity, output):
+    """Check a reviewed, closed predecessor disposition for a fresh reader."""
+    proof = json.loads(checked_pin(reference))
+    if (proof.get('schema') != 'causes.reader_route_state_carry.v1'
+            or proof.get('accepted_reader_route_state_carry') is not True
+            or proof.get('output') != str(output)
+            or reader.encoded(proof.get('new_identity')) != reader.encoded(expected_identity)
+            or type(proof.get('consecutive_failed_contexts')) is not int
+            or not 0 <= proof['consecutive_failed_contexts'] < 3
+            or proof.get('quarantine') is not None):
+        raise ValueError('reader_route_state_carry_not_accepted')
+    checked_pin(proof['predecessor_identity'])
+    journal_path = snapshot.canonical_path(proof['journal_baseline']['path'])
+    journal = checked_pin(proof['journal_baseline'])
+    if journal_path.is_relative_to(output) or not journal or not journal.endswith(b'\n'):
+        raise ValueError('reader_route_carry_external_closed_journal_required')
+    rows = [json.loads(line) for line in journal.splitlines()]
+    claimed = [row['key'] for row in rows if row['event'] == 'claimed']
+    finished = [row['key'] for row in rows if row['event'] in
+                ('finished', 'unresolved_prior_reader_attempt', 'existing_reader_output_not_replayed')]
+    if (len(claimed) != len(set(claimed)) or len(finished) != len(set(finished))
+            or set(claimed) != set(finished)):
+        raise ValueError('reader_route_carry_unfinished_or_duplicate_attempts')
+    if route_state(rows) != (proof['consecutive_failed_contexts'], None):
+        raise ValueError('reader_route_carry_state_changed')
+    if not proof.get('evidence'):
+        raise ValueError('reader_route_carry_evidence_required')
+    for evidence in proof['evidence']:
+        checked_pin(evidence)
+    return proof
+
+
 class Watcher:
     def __init__(self, selected, checker_config, prompts, pins, accepted, output, pause_file,
-                 client=None, context_runner=None, workers=4, poll_seconds=15, input_succession=None):
+                 client=None, context_runner=None, workers=4, poll_seconds=15, input_succession=None,
+                 route_state_carry=None):
         if not 1 <= workers <= 4:
             raise ValueError('reader_context_worker_limit')
         self.selected, self.config, self.prompts, self.pins = selected, checker_config, prompts, pins
@@ -380,7 +435,10 @@ class Watcher:
         self.pause_file = Path(pause_file)
         self.client, self.context_runner = client, context_runner or reader.run_context
         self.workers, self.poll = workers, min(30, max(0.005, poll_seconds))
+        if input_succession is not None and route_state_carry is not None:
+            raise ValueError('reader_succession_and_route_carry_are_distinct')
         self.input_succession = input_succession
+        self.route_state_carry = route_state_carry
         self.output.mkdir(parents=True, exist_ok=True)
         self.meta = self.output / '.watch'
         self.meta.mkdir(exist_ok=True)
@@ -466,6 +524,25 @@ class Watcher:
         try:
             identity = {'pins': self.pins, 'selected_sha256': reader.digest(self.selected),
                         'accepted_index': str(self.accepted), 'workers': self.workers}
+            carry = None
+            if self.route_state_carry is not None:
+                carry = validate_route_state_carry(self.route_state_carry, identity, self.output)
+                identity['route_state_carry'] = self.route_state_carry
+            rows = jsonlines(self.journal, strict=True)
+            carried = [row for row in rows if row['event'] == 'reader_route_state_carried']
+            carry_path = self.meta / 'ROUTE_STATE_CARRY.json'
+            if carry is not None:
+                expected = dict(carry=self.route_state_carry,
+                                consecutive_failed_contexts=carry['consecutive_failed_contexts'], quarantine=None)
+                if self.journal.exists() and not rows or carry_path.exists() and not rows:
+                    raise ValueError('reader_route_carry_journal_missing')
+                if carry_path.exists() and json.loads(carry_path.read_bytes()) != expected:
+                    raise ValueError('reader_route_carry_receipt_changed')
+                if rows and (len(carried) != 1 or rows[0] != carried[0]
+                             or any(carried[0].get(key) != value for key, value in expected.items())):
+                    raise ValueError('reader_route_carry_journal_changed')
+            elif carried or carry_path.exists():
+                raise ValueError('reader_route_carry_required')
             identity_path = self.meta / 'IDENTITY.json'
             if identity_path.exists():
                 if self.input_succession is not None:
@@ -478,20 +555,17 @@ class Watcher:
                 if self.input_succession is not None:
                     raise ValueError('reader_succession_original_identity_required')
                 save(identity_path, identity)
-            for row in jsonlines(self.journal, strict=True):
+            if carry is not None and not rows:
+                rows.append(self.event('reader_route_state_carried', **expected))
+            if carry is not None and not carry_path.exists():
+                save(carry_path, expected)
+            self.failures, self.quarantine = route_state(rows)
+            for row in rows:
                 if row['event'] == 'claimed':
                     self.handled.add(row['key'])
                 elif row['event'] in ('finished', 'unresolved_prior_reader_attempt', 'existing_reader_output_not_replayed'):
                     self.completed.add(row['key'])
                     self.handled.add(row['key'])
-                elif row['event'] == 'reader_route_failure':
-                    self.failures = row['consecutive_failed_contexts']
-                elif row['event'] == 'reader_route_success':
-                    self.failures = 0
-                elif row['event'] == 'reader_route_quarantined':
-                    self.quarantine = row
-                elif row['event'] == 'reader_route_requalified':
-                    self.quarantine, self.failures = None, 0
             for key in self.handled - self.completed:
                 self.receipt(key, 'unresolved_prior_reader_attempt', replayed=False, counted_semantic_negative=False)
             active = {}
