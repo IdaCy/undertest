@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from causes import campaign_reader as reader
+from causes import campaign_reader_freeze as freeze
 from causes import campaign_reader_watch as watch
 from causes.campaign_analysis import reader_label, self_label
 from causes.campaign_reader_evidence import verify_reader_capture
@@ -125,6 +127,130 @@ def _reader_json(reference, inputs):
     _require(type(reference['bytes']) is int and path.stat().st_size == reference['bytes'],
              'reader_artifact_size_mismatch')
     return watch.verified_json(path, reference['sha256'])
+
+
+def reader_inputs_from_freeze(complete_reference, *, jobs_by_model, reader_config, prompts,
+                              expected_reader_source_sha256, expected_freezer_source):
+    """Convert pinned freeze metadata into assignment inputs and bound receipts.
+
+    The caller accepts the freeze custody and adopts both source revisions.
+    This reads metadata and bindings, not response or judgment bodies; semantic
+    verification remains in assemble_trajectories. Explicit absences never
+    discover later files. Both returned mappings use (model, run_id) keys.
+    """
+    _require(isinstance(jobs_by_model, Mapping) and jobs_by_model, 'frozen_reader_jobs_required')
+    complete = json.loads(watch.checked_pin(complete_reference), object_pairs_hook=freeze.pairs)
+    _require(complete['schema'] == 'causes.reader_artifact_freeze_complete.v1', 'reader_freeze_schema')
+    _require(reader.encoded(complete['source']) == reader.encoded(expected_freezer_source),
+             'reader_freezer_source_mismatch')
+    directory = Path(complete_reference['path']).parent
+    _require(Path(complete['reader_artifacts']['path']) == directory / 'READER_ARTIFACTS.json',
+             'reader_freeze_artifacts_path_mismatch')
+    rows = json.loads(watch.checked_pin(complete['reader_artifacts']), object_pairs_hook=freeze.pairs)
+    _require(type(rows) is list, 'reader_freeze_artifact_list_required')
+    expected, jobs = {}, {}
+    for model, model_jobs in jobs_by_model.items():
+        _require(isinstance(model_jobs, Sequence) and not isinstance(model_jobs, (str, bytes)),
+                 'frozen_reader_job_sequence_required')
+        for slot in freeze.expected_slots(model_jobs, model):
+            expected[model, slot['run_id'], slot['stage']] = slot['frozen_job_sha256']
+        jobs.update(((model, job['allocation']['run_id']), job) for job in model_jobs)
+    _require(type(complete['slots']) is int and complete['slots'] == len(expected), 'reader_frozen_stage_cover')
+    output, artifacts, bindings = directory / 'reader', {}, {}
+    for item in rows:
+        key = item['model'], item['run_id'], item['stage']
+        _require(key in expected and key not in artifacts
+                 and item['frozen_job_sha256'] == expected[key], 'frozen_reader_stage_identity_changed')
+        assignment = key[:2]
+        base = output / key[0] / key[1]
+        for field, path in (('result', base / key[2] / 'RESULT.json'),
+                            ('technical_missing', base / key[2] / 'TECHNICAL_MISSING.json'),
+                            ('binding', base / 'BINDING.json')):
+            reference = item[field]
+            _require(reference is None or watch.confined(reference['path'], output) == path,
+                     'reader_artifact_identity_path_mismatch')
+        _require(item['result'] is None or item['technical_missing'] is None,
+                 'reader_result_and_missing_conflict')
+        _require(item['result'] is None and item['technical_missing'] is None or item['binding'] is not None,
+                 'published_reader_stage_without_binding')
+        _require(assignment not in bindings or reader.encoded(bindings[assignment]) == reader.encoded(item['binding']),
+                 'reader_binding_changed_between_stages')
+        bindings[assignment] = item['binding']
+        artifacts[key] = ReaderArtifacts(**{field: copy.deepcopy(item[field])
+                                            for field in ('result', 'technical_missing', 'binding')})
+    _require(set(artifacts) == set(expected), 'reader_frozen_stage_cover')
+    inputs, receipts = {}, {}
+    for key, reference in bindings.items():
+        current = ReaderInputs(copy.deepcopy(reader_config), Path(prompts), expected_reader_source_sha256,
+                               {}, output, artifacts)
+        binding = _reader_json(reference, current) if reference is not None else None
+        if binding is not None:
+            _require(binding['model'] == key[0] and binding['run_id'] == key[1]
+                     and binding['frozen_job_sha256'] == reader.digest(jobs[key]), 'frozen_reader_binding_changed')
+            _require(type(binding['reader_pins']) is dict and type(binding['snapshot_receipt']) is dict,
+                     'frozen_reader_binding_metadata_required')
+            current = ReaderInputs(current.config, current.prompts, current.expected_source_sha256,
+                                   copy.deepcopy(binding['reader_pins']), output, artifacts)
+        inputs[key] = current
+        receipts[key] = copy.deepcopy(binding['snapshot_receipt']) if binding is not None else None
+    return inputs, receipts
+
+
+def merge_trajectory_outputs(groups, *, assignment_order):
+    """Merge (assignments_by_model, native_output) pairs with exact coverage.
+
+    Each group declares its own roster. Group rosters must be disjoint and
+    cover assignment_order exactly. Records and issues keep native meanings;
+    coverage lists follow the supplied whole-roster order. No files are read.
+    """
+    def roster(value):
+        _require(isinstance(value, Mapping) and value, 'trajectory_group_roster_required')
+        result = {}
+        for model, ids in value.items():
+            _require(freeze.safe_name(model) and isinstance(ids, Sequence) and not isinstance(ids, (str, bytes))
+                     and all(freeze.safe_name(rid) for rid in ids) and len(ids) == len(set(ids)),
+                     'invalid_or_duplicate_trajectory_assignment')
+            result[model] = set(ids)
+        return result
+
+    whole = roster(assignment_order)
+    _require(isinstance(groups, Sequence) and not isinstance(groups, (str, bytes)), 'trajectory_groups_required')
+    records, issues = {model: {} for model in whole}, []
+    coverage = {model: {'unobserved': set(), 'quality_unavailable': set()} for model in whole}
+    seen = {model: set() for model in whole}
+    for assignments, value in groups:
+        declared = roster(assignments)
+        _require(set(declared) <= set(whole) and set(value) == {'records', 'issues', 'coverage'}
+                 and set(value['records']) == set(declared) and set(value['coverage']) == set(declared)
+                 and type(value['issues']) is list, 'native_trajectory_output_scope_mismatch')
+        for model, ids in declared.items():
+            _require(ids <= whole[model] and not ids.intersection(seen[model]), 'overlapping_or_unknown_trajectory_group')
+            rows, missing = value['records'][model], value['coverage'][model]
+            _require(isinstance(rows, Mapping) and set(missing) == {'unobserved', 'quality_unavailable'},
+                     'native_trajectory_coverage_shape')
+            for rid, record in rows.items():
+                _require(rid in ids and record['model'] == model and record['run_id'] == rid,
+                         'native_trajectory_record_identity')
+            parts = [set(rows)]
+            for kind, run_ids in missing.items():
+                _require(type(run_ids) is list and all(type(rid) is str for rid in run_ids)
+                         and len(run_ids) == len(set(run_ids)) and set(run_ids) <= ids,
+                         'duplicate_or_unknown_native_coverage')
+                parts.append(set(run_ids))
+            _require(sum(map(len, parts)) == len(ids) and set().union(*parts) == ids,
+                     'disjoint_complete_native_coverage_required')
+            records[model].update(copy.deepcopy(rows))
+            for kind, run_ids in missing.items():
+                coverage[model][kind].update(run_ids)
+            seen[model].update(ids)
+        issues.extend(copy.deepcopy(value['issues']))
+    _require(seen == whole, 'whole_trajectory_roster_cover_required')
+    return {'records': {model: {rid: records[model][rid] for rid in ids if rid in records[model]}
+                        for model, ids in assignment_order.items()},
+            'issues': issues,
+            'coverage': {model: {kind: [rid for rid in ids if rid in members]
+                                  for kind, members in coverage[model].items()}
+                         for model, ids in assignment_order.items()}}
 
 
 def _contexts(job, loaded, binding):
