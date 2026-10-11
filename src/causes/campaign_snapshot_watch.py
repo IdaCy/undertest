@@ -1,4 +1,4 @@
-"""Continuously copy a fixed selection with native snapshot admission per pass."""
+"""Watch completed snapshots with native admission and transfer per pass."""
 
 from dataclasses import asdict
 import datetime as dt
@@ -43,7 +43,8 @@ def _wait(stop, seconds):
         time.sleep(min(1, max(0, deadline - time.monotonic())))
 
 
-def watch_completed(config, authorize, directory, *, interval_seconds=60):
+def watch_completed(config, authorize, directory, *, interval_seconds=60,
+                    follow_new_runs=False):
     """Run until all selected runs are accepted, STOP exists, or a failure occurs.
 
     A full batch starts another native pass promptly. Otherwise wait for the
@@ -51,9 +52,19 @@ def watch_completed(config, authorize, directory, *, interval_seconds=60):
     the retained requirement fits, then requests a fresh guarded manifest.
     All other errors latch FAILED.json and exit, with no automatic restart.
     Use a new reviewed directory after reconciling any failed invocation.
+
+    Set follow_new_runs=True with selected_runs=None to keep copying newly
+    closed whole runs within the declared roots until STOP or failure. Reader
+    inputs still require a finite selection. Existing accepted receipts are
+    preserved and are not copied again.
     """
     config.validate()
-    if config.selected_runs is None:
+    if type(follow_new_runs) is not bool:
+        raise ValueError('invalid_snapshot_watch_follow_mode')
+    if follow_new_runs:
+        if config.selected_runs is not None or config.reader_inputs_only:
+            raise ValueError('snapshot_watch_follow_requires_unselected_whole_runs')
+    elif config.selected_runs is None:
         raise ValueError('snapshot_watch_requires_finite_selection')
     if type(interval_seconds) is not int or interval_seconds <= 0:
         raise ValueError('invalid_snapshot_watch_interval')
@@ -83,7 +94,8 @@ def watch_completed(config, authorize, directory, *, interval_seconds=60):
             _write(directory / 'START.json', {
                 'at': _now(), 'configuration': settings, 'authorization': authorization,
                 'interval_seconds': interval_seconds, 'sources': sources,
-                'stop': str(stop), 'automatic_retry': False})
+                'stop': str(stop), 'automatic_retry': False,
+                'follow_new_runs': follow_new_runs})
             while True:
                 if stop.exists():
                     result = {'at': _now(), 'reason': 'owned_stop', 'cycles': cycle}
@@ -94,7 +106,7 @@ def watch_completed(config, authorize, directory, *, interval_seconds=60):
                         raise ValueError('snapshot_watch_source_changed')
                 stable_authorize(config)
                 previous, accepted = _index(config, previous)
-                if set(config.selected_runs) <= accepted:
+                if not follow_new_runs and set(config.selected_runs) <= accepted:
                     result = {'at': _now(), 'reason': 'selection_complete', 'cycles': cycle,
                               'selected_runs': len(config.selected_runs),
                               'index_bytes': len(previous),
@@ -133,7 +145,7 @@ def watch_completed(config, authorize, directory, *, interval_seconds=60):
                        index_bytes=len(previous),
                        index_sha256=hashlib.sha256(previous).hexdigest()))
                 cycle += 1
-                if not full_batch and not set(config.selected_runs) <= accepted:
+                if not full_batch and (follow_new_runs or not set(config.selected_runs) <= accepted):
                     _wait(stop, interval_seconds)
         except BaseException as error:
             _write(directory / 'FAILED.json', {
