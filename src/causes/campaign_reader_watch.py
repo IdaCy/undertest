@@ -267,7 +267,36 @@ def checked_pin(reference):
     return raw
 
 
-def validate_input_succession(reference, expected_identity, output):
+def validate_endpoint_binding_correction(review, old_identity, expected_identity, selected):
+    """Allow corrected original-file references without changing frozen inputs."""
+    previous = json.loads(checked_pin(review['predecessor_selected']))
+    if (review.get('accepted_reader_endpoint_binding_correction') is not True
+            or not isinstance(previous, dict) or not previous or not isinstance(selected, dict)
+            or set(previous) != set(selected)
+            or reader.digest(previous) != old_identity['selected_sha256']
+            or reader.digest(selected) != expected_identity['selected_sha256']):
+        raise ValueError('reader_endpoint_correction_selection_changed')
+    for run_id, frozen in selected.items():
+        before = previous[run_id]
+        if reader.encoded({k: v for k, v in before.items() if k != 'endpoint_transitions'}) != reader.encoded(
+                {k: v for k, v in frozen.items() if k != 'endpoint_transitions'}):
+            raise ValueError('reader_endpoint_correction_frozen_inputs_changed')
+        old_pairs, new_pairs = before.get('endpoint_transitions'), frozen.get('endpoint_transitions')
+        if (not isinstance(old_pairs, dict) or not old_pairs or not isinstance(new_pairs, dict)
+                or set(old_pairs) != set(new_pairs)):
+            raise ValueError('reader_endpoint_correction_roots_changed')
+        for root, pair in new_pairs.items():
+            old_value = endpoint_transition.validate(old_pairs[root])
+            new_value = endpoint_transition.validate(pair)
+            restored = dict(new_value['transition'], original_config=old_value['transition']['original_config'])
+            if (reader.encoded(restored) != reader.encoded(old_value['transition'])
+                    or reader.encoded(old_value['original']) != reader.encoded(new_value['original'])):
+                raise ValueError('reader_endpoint_correction_transition_changed')
+            endpoint_transition.snapshot_config(pair, root=root, job=frozen['job'],
+                original_config=frozen['config'], original_file_sha256=frozen['model_file_sha256'])
+
+
+def validate_input_succession(reference, expected_identity, output, *, selected=None):
     """Validate one reviewed input-feed transition under the reader lock.
 
     The original identity and completed dispositions remain immutable. Further
@@ -282,10 +311,17 @@ def validate_input_succession(reference, expected_identity, output):
             or review['predecessor_identity']['path'] != str(meta / 'IDENTITY.json')):
         raise ValueError('reader_input_succession_not_accepted')
     old = json.loads(checked_pin(review['predecessor_identity']))
-    if (set(old) != set(expected_identity) or old['selected_sha256'] != expected_identity['selected_sha256']
+    kind = review.get('kind', 'input_feed_transition')
+    correction = kind == 'endpoint_binding_correction'
+    if kind not in ('input_feed_transition', 'endpoint_binding_correction'):
+        raise ValueError('reader_succession_kind_unknown')
+    if (set(old) != set(expected_identity)
+            or not correction and old['selected_sha256'] != expected_identity['selected_sha256']
             or type(old['workers']) is not int or type(expected_identity['workers']) is not int
             or old['workers'] != expected_identity['workers']):
         raise ValueError('reader_succession_selection_changed')
+    if correction:
+        validate_endpoint_binding_correction(review, old, expected_identity, selected)
     for key in ('old_watcher', 'new_watcher'):
         checked_pin(review[key])
     if review['new_watcher']['sha256'] != WATCH_SOURCE_SHA:
@@ -293,6 +329,11 @@ def validate_input_succession(reference, expected_identity, output):
     # Only operational source/plan pins may differ. Reader configuration,
     # prompts, protocols, frozen allocations and native reader pins stay exact.
     projected = json.loads(json.dumps(old['pins']))
+    if correction and 'selected_sha256' in projected:
+        if (projected['selected_sha256'] != old['selected_sha256']
+                or expected_identity['pins'].get('selected_sha256') != expected_identity['selected_sha256']):
+            raise ValueError('reader_endpoint_correction_pin_digest_changed')
+        projected['selected_sha256'] = expected_identity['selected_sha256']
     changed = set()
     for row in review['pin_replacements']:
         path = row['path']
@@ -323,8 +364,13 @@ def validate_input_succession(reference, expected_identity, output):
         raise ValueError('reader_succession_scientific_pins_changed')
     old_index = snapshot.canonical_path(old['accepted_index'])
     new_index = snapshot.canonical_path(expected_identity['accepted_index'])
-    if (old_index.name != 'accepted.jsonl' or new_index != old_index.with_name('reader_inputs.accepted.jsonl')
-            or review['accepted_baseline']['path'] != str(old_index)):
+    if correction:
+        baseline_path = snapshot.canonical_path(review['accepted_baseline']['path'])
+        if (old_index != new_index or old_index.name != 'reader_inputs.accepted.jsonl'
+                or baseline_path == old_index or baseline_path.is_relative_to(output)):
+            raise ValueError('reader_endpoint_correction_same_typed_index_required')
+    elif (old_index.name != 'accepted.jsonl' or new_index != old_index.with_name('reader_inputs.accepted.jsonl')
+          or review['accepted_baseline']['path'] != str(old_index)):
         raise ValueError('reader_succession_index_scope_changed')
     baseline = checked_pin(review['accepted_baseline'])
     if baseline and not baseline.endswith(b'\n'):
@@ -546,7 +592,8 @@ class Watcher:
             identity_path = self.meta / 'IDENTITY.json'
             if identity_path.exists():
                 if self.input_succession is not None:
-                    path, receipt = validate_input_succession(self.input_succession, identity, self.output)
+                    path, receipt = validate_input_succession(self.input_succession, identity, self.output,
+                                                            selected=self.selected)
                     if not path.exists():
                         save(path, receipt)
                 elif json.loads(identity_path.read_bytes()) != identity or list(self.meta.glob('INPUT_SUCCESSION.*.json')):
