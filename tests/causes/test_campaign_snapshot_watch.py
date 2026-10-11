@@ -39,9 +39,11 @@ class SnapshotWatchTests(unittest.TestCase):
         return run
 
     def authorize(self, config):
-        return dict(host=config.host, remote_base=config.remote_base,
-                    roots=list(config.roots), selected_runs=list(config.selected_runs),
-                    evidence={'registration': 'fixed'})
+        value = dict(host=config.host, remote_base=config.remote_base,
+                     roots=list(config.roots), evidence={'registration': 'fixed'})
+        if config.selected_runs is not None:
+            value['selected_runs'] = list(config.selected_runs)
+        return value
 
     def transport(self, argv, **kwargs):
         self.calls.append(argv[0])
@@ -60,10 +62,11 @@ class SnapshotWatchTests(unittest.TestCase):
                 shutil.copyfile(self.remote / relative, target)
         return subprocess.CompletedProcess(argv, 0)
 
-    def run_watch(self, wait=None, transport=None):
+    def run_watch(self, wait=None, transport=None, *, follow_new_runs=False):
         with patch.object(snapshot.subprocess, 'run', side_effect=transport or self.transport), \
              patch.object(watch, '_wait', side_effect=wait or AssertionError('unexpected wait')):
-            return watch.watch_completed(self.config, self.authorize, self.directory)
+            return watch.watch_completed(self.config, self.authorize, self.directory,
+                                         follow_new_runs=follow_new_runs)
 
     def test_full_batches_catch_up_without_sleep_and_preserve_prior_receipts(self):
         for name in ('a', 'b', 'c', 'd', 'unselected'):
@@ -211,6 +214,159 @@ class SnapshotWatchTests(unittest.TestCase):
             self.run_watch()
         self.assertFalse(self.directory.exists())
         self.assertEqual(self.calls, [])
+
+    def test_follow_requires_explicit_boolean_and_unselected_whole_runs(self):
+        for flag in (1, 0, 'true', None):
+            with self.subTest(flag=flag), self.assertRaisesRegex(ValueError, 'follow_mode'):
+                self.run_watch(follow_new_runs=flag)
+            self.assertFalse(self.directory.exists())
+        with self.assertRaisesRegex(ValueError, 'unselected_whole_runs'):
+            self.run_watch(follow_new_runs=True)
+        self.config = replace(self.config, reader_inputs_only=True)
+        with self.assertRaisesRegex(ValueError, 'unselected_whole_runs'):
+            self.run_watch(follow_new_runs=True)
+        self.config = replace(self.config, selected_runs=None)
+        with self.assertRaisesRegex(ValueError, 'reader_inputs_require_exact_run_selection'):
+            self.run_watch(follow_new_runs=True)
+        self.assertFalse(self.directory.exists())
+        self.assertFalse(self.config.destination.exists())
+        self.assertEqual(self.calls, [])
+
+    def test_follow_waits_for_new_closed_run_then_stops_without_selection_complete(self):
+        self.config = replace(self.config, selected_runs=None)
+        self.add('still-open', closed=False)
+        waits = []
+
+        def wait(stop, seconds):
+            waits.append(seconds)
+            if len(waits) == 1:
+                self.add('later')
+            else:
+                stop.write_text('owned stop')
+
+        result = self.run_watch(wait=wait, follow_new_runs=True)
+        self.assertEqual(result['reason'], 'owned_stop')
+        self.assertEqual(waits, [60, 60])
+        self.assertEqual(self.calls, ['ssh', 'ssh', 'rsync'])
+        rows = [json.loads(line) for line in (self.config.destination / 'accepted.jsonl').read_bytes().splitlines()]
+        self.assertEqual([row['run'] for row in rows], [self.root + '/later'])
+        self.assertFalse((self.directory / 'COMPLETE.json').exists())
+        self.assertTrue(json.loads((self.directory / 'START.json').read_text())['follow_new_runs'])
+
+    def test_follow_reuses_large_prior_index_and_catches_up_in_full_batches(self):
+        self.config = replace(self.config, selected_runs=None)
+        self.config.destination.mkdir()
+        index = self.config.destination / 'accepted.jsonl'
+        # Previously verified receipts are opaque input to the watcher. Its
+        # caller retains their custody; native snapshot admission skips them.
+        before = b''.join((json.dumps({'run': self.root + f'/prior-{i:04d}',
+                                      'preserved_receipt': i}) + '\n').encode()
+                          for i in range(2157))
+        index.write_bytes(before)
+        self.add('prior-0000')
+        for name in ('new-a', 'new-b', 'new-c'):
+            self.add(name)
+        waits = []
+
+        def wait(stop, seconds):
+            waits.append(seconds)
+            stop.write_text('owned stop')
+
+        self.run_watch(wait=wait, follow_new_runs=True)
+        after = index.read_bytes()
+        self.assertTrue(after.startswith(before))
+        self.assertEqual(len(after.splitlines()), 2160)
+        added = [json.loads(line) for line in after[len(before):].splitlines()]
+        self.assertEqual([row['run'] for row in added],
+                         [self.root + '/' + name for name in ('new-a', 'new-b', 'new-c')])
+        self.assertEqual(self.calls, ['ssh', 'rsync', 'ssh', 'rsync'])
+        self.assertEqual(waits, [60])
+        for number, expected in enumerate((2, 1)):
+            result = json.loads((self.directory / f'{number:08d}/RESULT.json').read_text())
+            self.assertEqual(result['native_result']['verified_runs'], expected)
+
+    def test_follow_space_hold_waits_locally_before_fresh_native_manifest(self):
+        self.config = replace(self.config, selected_runs=None)
+        self.add('a')
+        available, waits = [0], []
+
+        def wait(stop, seconds):
+            waits.append(seconds)
+            if len(waits) == 2:
+                available[0] = 10_000
+            elif len(waits) == 3:
+                stop.write_text('owned stop')
+
+        with patch.object(snapshot.shutil, 'disk_usage', side_effect=lambda _: SimpleNamespace(free=available[0])):
+            self.run_watch(wait=wait, follow_new_runs=True)
+        self.assertEqual(self.calls, ['ssh', 'ssh', 'rsync'])
+        held = json.loads((self.directory / '00000001/RESULT.json').read_text())
+        self.assertFalse(held['remote_call'])
+        self.assertEqual(held['kind'], 'storage_held')
+        self.assertEqual(len((self.config.destination / 'accepted.jsonl').read_bytes().splitlines()), 1)
+
+    def test_follow_transfer_failure_latches_without_retry(self):
+        self.config = replace(self.config, selected_runs=None)
+        self.add('a')
+
+        def fail(argv, **kwargs):
+            if argv[0] == 'rsync':
+                self.calls.append('rsync')
+                return subprocess.CompletedProcess(argv, 1)
+            return self.transport(argv, **kwargs)
+
+        with self.assertRaisesRegex(RuntimeError, 'rsync failed'):
+            self.run_watch(transport=fail, follow_new_runs=True)
+        self.assertEqual(self.calls, ['ssh', 'rsync'])
+        self.assertTrue((self.directory / 'FAILED.json').exists())
+        self.assertFalse((self.config.destination / 'accepted.jsonl').exists())
+        with self.assertRaises(FileExistsError):
+            self.run_watch(follow_new_runs=True)
+        self.assertEqual(self.calls, ['ssh', 'rsync'])
+
+    def test_follow_stop_finishes_current_native_batch(self):
+        self.config = replace(self.config, selected_runs=None, limit=1)
+        self.add('a')
+        self.add('b')
+
+        def transport(argv, **kwargs):
+            if argv[0] == 'rsync':
+                (self.directory / 'STOP').write_text('owned stop')
+            return self.transport(argv, **kwargs)
+
+        result = self.run_watch(transport=transport, follow_new_runs=True)
+        self.assertEqual(result['reason'], 'owned_stop')
+        self.assertEqual(self.calls, ['ssh', 'rsync'])
+        self.assertEqual(len((self.config.destination / 'accepted.jsonl').read_bytes().splitlines()), 1)
+
+    def test_follow_index_rewrite_latches_before_next_remote_read(self):
+        self.config = replace(self.config, selected_runs=None)
+        self.add('a')
+
+        def wait(stop, seconds):
+            (self.config.destination / 'accepted.jsonl').write_bytes(b'')
+
+        with self.assertRaisesRegex(ValueError, 'index_prefix_changed'):
+            self.run_watch(wait=wait, follow_new_runs=True)
+        self.assertEqual(self.calls, ['ssh', 'rsync'])
+        self.assertTrue((self.directory / 'FAILED.json').exists())
+
+    def test_follow_authorization_change_latches_before_next_remote_read(self):
+        self.config = replace(self.config, selected_runs=None)
+        self.add('a', closed=False)
+        authorize = self.authorize
+        changed = [False]
+
+        def changed_authorize(config):
+            result = authorize(config)
+            result['evidence']['registration'] = 'changed' if changed[0] else 'fixed'
+            return result
+
+        self.authorize = changed_authorize
+        with self.assertRaisesRegex(ValueError, 'authorization_changed'):
+            self.run_watch(wait=lambda *_: changed.__setitem__(0, True), follow_new_runs=True)
+        self.assertEqual(self.calls, ['ssh'])
+        self.assertTrue((self.directory / 'FAILED.json').exists())
 
 
 if __name__ == '__main__':
