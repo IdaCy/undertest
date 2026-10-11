@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import inspect
 import os
 from pathlib import Path
 
@@ -18,26 +19,62 @@ _OPTIONAL_OPTIONS = {'extension_prototypes', 'corpus_continuation', 'corpus_cont
                      'system_prompts_by_run_id', 'prefix_extension'}
 
 
+def _custom_dispatcher_binding(dispatcher_class, dispatcher_source):
+    if dispatcher_class is None:
+        s.require(dispatcher_source is None, 'dispatcher_source_requires_custom_class')
+        return None
+    s.require(isinstance(dispatcher_class, type) and issubclass(dispatcher_class, d.Dispatcher),
+              'custom_dispatcher_subclass_required')
+    s.require(type(dispatcher_source) is dict
+              and set(dispatcher_source) == {'path', 'bytes', 'sha256'},
+              'custom_dispatcher_source_required')
+    try:
+        source = inspect.getsourcefile(dispatcher_class)
+    except TypeError:
+        source = None
+    if source is None:
+        # A pinned caller may load a nested class without registering its module.
+        methods = [value.__func__ if isinstance(value, (staticmethod, classmethod)) else value
+                   for value in vars(dispatcher_class).values()]
+        sources = {inspect.getsourcefile(method) for method in methods
+                   if inspect.isfunction(method)
+                   and method.__qualname__.startswith(dispatcher_class.__qualname__ + '.')}
+        s.require(len(sources) == 1, 'custom_dispatcher_defining_source_required')
+        source = sources.pop()
+    s.require(source is not None and h.canonical_path(source)
+              == h.canonical_path(dispatcher_source['path']), 'custom_dispatcher_source_mismatch')
+    h.checked_bytes(dispatcher_source)
+    return {'source': copy.deepcopy(dispatcher_source),
+            'class_qualname': dispatcher_class.__qualname__}
+
+
 def launch_binding(jobs, config, output, storage_binding, record_directory,
-                   owned_barrier, options):
+                   owned_barrier, options, *, dispatcher_class=None, dispatcher_source=None):
     """Describe exact launch inputs for a separately reviewed authority record."""
-    return {'jobs_sha256': d.sha(jobs), 'config_sha256': d.sha(config),
+    binding = {'jobs_sha256': d.sha(jobs), 'config_sha256': d.sha(config),
             'output': str(h.canonical_path(output)), 'storage_binding': storage_binding,
             'record_directory': str(h.canonical_path(record_directory)),
             'owned_barrier': owned_barrier, 'dispatcher_options': options,
             'runtime_source_sha256': _SOURCE_SHA,
             'storage_source_sha256': s._SOURCE_SHA,
             'dispatcher_source_sha256': d._SOURCE_SHA}
+    custom = _custom_dispatcher_binding(dispatcher_class, dispatcher_source)
+    if custom is not None:
+        binding['custom_dispatcher'] = custom
+    return binding
 
 
 def run_recorded_dispatcher(*, jobs, config, output, storage_binding, record_directory,
-                            owned_barrier, options, authority: h.Authority):
+                            owned_barrier, options, authority: h.Authority,
+                            dispatcher_class=None, dispatcher_source=None):
     """Require exact authority and durable reporting; never release a barrier.
 
     The Authority policy callback must establish accepted scientific/custody
     membership, donor route/hold history, source adoption, control routing,
     resource qualification and registration policy. This primitive neither
     replaces those checks nor permits starting an old output a second time.
+    A custom Dispatcher's defining source and qualified class name are bound
+    explicitly; its captured policy still requires the Authority's validation.
     """
     s.require(isinstance(authority, h.Authority) and authority.action == START,
               'exact_storage_launch_authority_required')
@@ -65,10 +102,13 @@ def run_recorded_dispatcher(*, jobs, config, output, storage_binding, record_dir
               and pause_paths <= {str(path) for path in authority.pause_paths},
               'storage_launch_pause_scope_changed')
     binding = launch_binding(jobs, config, str(root), storage_binding,
-                             str(destination), owned_barrier, options)
+                             str(destination), owned_barrier, options,
+                             dispatcher_class=dispatcher_class, dispatcher_source=dispatcher_source)
     value = authority.check()
     s.require(value.get('storage_launch_binding_sha256') == d.sha(binding),
               'storage_launch_authority_binding_changed')
+    s.require(_custom_dispatcher_binding(dispatcher_class, dispatcher_source)
+              == binding.get('custom_dispatcher'), 'custom_dispatcher_changed_before_construction')
     directory = h.new_record_directory(destination)
     owner = {'pid': os.getpid(), 'process_starttime_ticks':
              Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19],
@@ -79,7 +119,8 @@ def run_recorded_dispatcher(*, jobs, config, output, storage_binding, record_dir
         h.save_new(directory, 'INTENT.json', {'at': h.now(), 'authority': authority.reference,
                                              'process': owner, 'binding': binding})
         reporter = s.GuardJournal(directory / 'guard', storage_binding, owner)
-        dispatcher, guard = s.guarded_dispatcher(d.Dispatcher, storage_binding=storage_binding,
+        dispatcher, guard = s.guarded_dispatcher(
+            d.Dispatcher if dispatcher_class is None else dispatcher_class, storage_binding=storage_binding,
             jobs=jobs, config=config, output=str(root), guard_reporter=reporter, **options)
         owner_receipt = h.save_new(directory, 'OWNER.json', {'at': h.now(), 'process': owner,
             'controller_id': dispatcher.controller_id, 'authority': authority.reference,
@@ -90,6 +131,8 @@ def run_recorded_dispatcher(*, jobs, config, output, storage_binding, record_dir
         value = authority.check()
         s.require(value.get('storage_launch_binding_sha256') == d.sha(binding),
                   'storage_launch_authority_binding_changed')
+        s.require(_custom_dispatcher_binding(dispatcher_class, dispatcher_source)
+                  == binding.get('custom_dispatcher'), 'custom_dispatcher_changed_before_run')
         h.verify_owned_barrier(owned_barrier, barrier)
         s.require(not list(root.iterdir()), 'storage_output_changed_before_start')
         s.require(guard.check() >= storage_binding['floor_bytes'], 'storage_launch_floor_not_met')
