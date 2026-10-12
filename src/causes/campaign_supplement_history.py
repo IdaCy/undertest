@@ -216,8 +216,15 @@ def replay_native_history(raw: bytes) -> dict:
             _require(policy['prepared'] == prepared and policy['output_root'] == str(root),
                      'native_invocation_binding_changed')
             _require(_integer(policy['initial_failures']) and policy['initial_failures'] < 3
-                     and type(policy['max_clients']) is int and policy['max_clients'] in (1, 2)
+                     and type(policy['max_clients']) is int and policy['max_clients'] in (1, 2, 4, 8, 12, 16)
                      and policy['phase'] in ('pilot', 'continue'), 'native_invocation_scope')
+            if policy['max_clients'] > 2:
+                _pin(policy['capacity_limit'])
+                _require(policy['phase'] == 'continue' and _integer(policy['max_new_requests'], 1),
+                         'native_capacity_invocation_scope')
+            if 'queue_prefix_count' in policy:
+                _require(policy['phase'] == 'continue' and _integer(policy['queue_prefix_count'], 2)
+                         and policy['queue_prefix_count'] <= len(order), 'native_queue_prefix_scope')
             _require(policy['pilot_measurement_ids'] == order[:2], 'native_pilot_order_changed')
             _pin(policy['launcher_source'])
             if policy['launcher_source'] != identity['launcher']:
@@ -244,7 +251,19 @@ def replay_native_history(raw: bytes) -> dict:
                     # An interrupted controller is retained as a blocker, never a failure.
                     unresolved += 1
                 policy = invocations[line]; used_invocations.add(line)
-                scope = order[:2] if policy['phase'] == 'pilot' else order
+                if policy['max_clients'] > 2:
+                    _require(type(row.get('max_clients')) is int
+                             and row.get('max_clients') == policy['max_clients']
+                             and row.get('capacity_limit') == policy['capacity_limit']
+                             and type(row.get('max_new_requests')) is int
+                             and row.get('max_new_requests') == policy['max_new_requests'],
+                             'native_capacity_adoption_changed')
+                scope = order[:2] if policy['phase'] == 'pilot' else order[:policy.get('queue_prefix_count', len(order))]
+                if 'queue_prefix_count' in policy:
+                    _require(set(claims) <= set(scope), 'native_queue_prefix_regressed')
+                if policy['max_clients'] > 2:
+                    _require(type(row.get('queue_prefix_count')) is int and row['queue_prefix_count'] == len(scope),
+                             'native_capacity_queue_prefix_changed')
                 existing = sum(mid in terminals for mid in scope)
                 pending = sum(mid not in claims for mid in scope)
                 inherited = row['inherited_failures']
@@ -254,7 +273,7 @@ def replay_native_history(raw: bytes) -> dict:
                          and row['existing_finals'] == existing and type(row['pending']) is int
                          and row['pending'] == pending, 'native_start_counts_changed')
                 residual = inherited
-                controller = {'policy': policy, 'scope': scope, 'existing': existing,
+                controller = {'policy': policy, 'scope': scope, 'existing': existing, 'new_claims': 0,
                               'completed': [], 'held': False}
             elif event == 'claimed':
                 _require(controller is not None and not controller['held'] and not quarantines,
@@ -266,6 +285,10 @@ def replay_native_history(raw: bytes) -> dict:
                          and row['phase'] == controller['policy']['phase'], 'native_claim_order_or_input_changed')
                 _require(len(set(claims) - set(terminals)) < controller['policy']['max_clients'],
                          'native_client_cap_exceeded')
+                controller['new_claims'] += 1
+                if controller['policy']['max_clients'] > 2:
+                    _require(controller['new_claims'] <= controller['policy']['max_new_requests'],
+                             'native_capacity_request_budget')
                 claims[mid] = line
             elif event in ('route_success', 'route_failure'):
                 mid = row['measurement_id']

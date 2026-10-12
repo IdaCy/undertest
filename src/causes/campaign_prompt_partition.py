@@ -125,3 +125,73 @@ def partition_unclaimed_prompt_queue(jobs, system_prompts, host_by_pair, claimed
                                    if run_id in remaining}
         shard['pair_ids'] = [pair_id for pair_id in shard['pair_ids'] if pair_id in pairs]
     return partitions
+
+
+def partition_unclaimed_job_groups(jobs, system_prompts, groups, host_by_group,
+                                   claimed_run_ids, *, previous_host):
+    """Filter frozen groups, keeping every started group on its previous host.
+
+    Group membership and placement are explicit caller-reviewed inputs. The
+    caller must establish a complete admission-closed claim set, including failed
+    attempts. This pure projection validates no host capacity and authorizes no
+    execution.
+    """
+    if not isinstance(jobs, list) or not jobs:
+        raise ValueError('jobs_required')
+    if (not isinstance(system_prompts, dict) or not isinstance(groups, dict)
+            or not groups or not isinstance(host_by_group, dict)):
+        raise ValueError('group_mappings_required')
+    if (not isinstance(previous_host, str) or not previous_host
+            or not isinstance(claimed_run_ids, (list, tuple))
+            or any(not isinstance(run, str) or not run for run in claimed_run_ids)
+            or len(set(claimed_run_ids)) != len(claimed_run_ids)):
+        raise ValueError('invalid_prior_claims')
+    ordered, seen = [], set()
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get('allocation'), dict):
+            raise ValueError('invalid_job')
+        run = job['allocation'].get('run_id')
+        if not isinstance(run, str) or not run or run in seen:
+            raise ValueError('duplicate_or_invalid_run')
+        if not isinstance(system_prompts.get(run), str) or not system_prompts[run]:
+            raise ValueError('missing_or_invalid_system_prompt')
+        ordered.append(run)
+        seen.add(run)
+    if set(system_prompts) != seen:
+        raise ValueError('system_prompt_membership_mismatch')
+    if set(host_by_group) != set(groups):
+        raise ValueError('group_host_membership_mismatch')
+    membership = {}
+    for group, members in groups.items():
+        host = host_by_group[group]
+        if (not isinstance(group, str) or not group
+                or not isinstance(host, str) or not host
+                or not isinstance(members, (list, tuple)) or not members
+                or any(not isinstance(run, str) or not run for run in members)
+                or len(set(members)) != len(members)):
+            raise ValueError('invalid_group_membership')
+        member_set = set(members)
+        if not member_set <= seen or member_set & set(membership):
+            raise ValueError('foreign_or_overlapping_group')
+        if list(members) != [run for run in ordered if run in member_set]:
+            raise ValueError('group_order_changed')
+        membership.update({run: group for run in members})
+    if set(membership) != seen:
+        raise ValueError('incomplete_group_partition')
+    claimed = set(claimed_run_ids)
+    if not claimed <= seen:
+        raise ValueError('unknown_claimed_run')
+    if any(host_by_group[membership[run]] != previous_host for run in claimed):
+        raise ValueError('started_group_host_changed')
+    partitions = {}
+    for job, run in zip(jobs, ordered):
+        group = membership[run]
+        shard = partitions.setdefault(host_by_group[group],
+                                      {'jobs': [], 'system_prompts': {}, 'group_ids': []})
+        if run in claimed:
+            continue
+        shard['jobs'].append(copy.deepcopy(job))
+        shard['system_prompts'][run] = system_prompts[run]
+        if group not in shard['group_ids']:
+            shard['group_ids'].append(group)
+    return partitions
