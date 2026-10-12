@@ -67,7 +67,7 @@ def feed(descriptor, profile, logical_role, execution_host):
         index = native['index']; plan_ref = native['plan']; count = native['index_rows']
         observed = native['observed_at']
     else:
-        flags = (startup_flag, 'accepted_individual_variant_reader_feed_index_cut') if profile == 'reader' else (startup_flag,)
+        flags = (startup_flag, 'accepted_individual_variant_reader_feed_index_cut') if profile == 'reader' else (startup_flag, 'accepted_individual_variant_self_probe_feed_index_cut')
         require(any(peer.get(flag) is True for flag in flags), 'feed_cut_not_accepted')
         native = actual; index = actual['index']['saved']; plan_ref = actual['plan']; count = actual['accepted']
         observed = actual.get('observed_at', actual.get('at', actual.get('finished_at')))
