@@ -332,7 +332,68 @@ def storage_observation(binding):
             'root_free_bytes': shutil.disk_usage(paths['root_volume']).free}
 
 
+def finite_prefix_control_observation(binding):
+    """Retain owned predecessor markers without classifying them as storage transitions."""
+    require(set(binding) == {'schema', 'role', 'operational_bindings'}
+            and binding['schema'] == 'causes.finite_prefix_admission_controls.v1'
+            and binding['role'] == 'mi', 'finite_prefix_admission_control_schema')
+    refs = binding['operational_bindings']
+    value, review, adoption = [h.checked(refs[key]) for key in ('evidence', 'review', 'adoption')]
+    require(value['schema'] == 'causes.capacity_operational_binding_addendum.v1'
+            and review.get('accepted_capacity_operational_binding_addendum') is True
+            and review['addendum'] == refs['evidence']
+            and adoption.get('root_adopted_capacity_operational_binding_addendum') is True
+            and adoption['addendum'] == refs['evidence']
+            and adoption['independent_review'] == refs['review'],
+            'finite_prefix_operational_binding_unaccepted')
+    require(all(row[key] == value[key] for row in (review, adoption)
+                for key in ('criteria', 'criteria_adoption')),
+            'finite_prefix_operational_criteria_changed')
+    candidate = value['candidate']
+    controls = candidate['admission_controls']
+    require(set(controls) == {'predecessor', 'retained_markers', 'operator_hold_paths',
+                              'global_pause_file'}, 'finite_prefix_control_fields_changed')
+    pair = controls['predecessor']
+    closed, peer = h.checked(pair['evidence']), h.checked(pair['review'])
+    require(closed['schema'] == 'causes.finite_prefix_predecessor_closure.v1'
+            and peer.get('accepted_finite_prefix_predecessor_closure') is True
+            and peer['actual'] == pair['evidence'] and peer['journal'] == closed['journal']
+            and all(closed[key] is True for key in ('remote_owner_retired',
+                    'local_transport_retired', 'all_claims_accounted', 'route_history_preserved'))
+            and closed['errors'] == [], 'finite_prefix_control_predecessor_not_closed')
+    remote = h.checked(closed['remote_closure'])
+    marker = remote['owned_marker']
+    markers = controls['retained_markers']
+    require(type(markers) is list and 1 <= len(markers) <= 32
+            and all(set(row) == {'pin', 'stat'} for row in markers)
+            and {'pin': marker['pin'], 'stat': marker['stat']} in markers,
+            'finite_prefix_closed_owner_marker_missing')
+    holds = controls['operator_hold_paths']
+    require(type(holds) is list and 2 <= len(holds) <= 32
+            and candidate['sole_hold_path'] in holds
+            and controls['global_pause_file'] in holds
+            and candidate['sole_hold_path'] != controls['global_pause_file'],
+            'finite_prefix_operator_hold_scope_changed')
+    paths = [*holds, candidate['startup_barrier'], *[row['pin']['path'] for row in markers]]
+    require(len(set(paths)) == len(paths), 'finite_prefix_controls_overlap')
+    for path in [candidate['output_namespace'], *paths]:
+        absolute(path)
+    for row in markers:
+        h.checked_bytes(row['pin'])
+        require(h.stat_identity(row['pin']['path']) == row['stat'],
+                'finite_prefix_retained_marker_changed')
+    present = {path: os.path.lexists(path) for path in holds}
+    require(not any(present.values()), 'finite_prefix_operator_hold_blocks_admission')
+    return {'schema': binding['schema'], 'operational_bindings': refs,
+            'predecessor': pair, 'retained_markers': markers, 'controls_present': present,
+            'output_root': candidate['output_namespace'], 'pause_file': candidate['sole_hold_path'],
+            'global_pause_file': controls['global_pause_file'],
+            'startup_barrier': candidate['startup_barrier']}
+
+
 def storage_control_observation(binding):
+    if binding.get('schema') == 'causes.finite_prefix_admission_controls.v1':
+        return finite_prefix_control_observation(binding)
     require(binding['schema'] == 'causes.storage_admission_controls.v1',
             'storage_admission_control_schema')
     routing = h.checked(binding['pause_routing'])
@@ -391,6 +452,9 @@ class StorageGuard:
         observation = copy.deepcopy(self.observe(b))
         if 'admission_control' in b:
             observation['admission_control'] = storage_control_observation(b['admission_control'])
+            if b['admission_control']['schema'] == 'causes.finite_prefix_admission_controls.v1':
+                require(observation['admission_control']['output_root'] == b['output'],
+                        'finite_prefix_control_output_changed')
         require(observation['mount'] == b['mount_identity'], 'storage_mount_identity_changed')
         paths = observation['paths']
         require(paths['backing'] == paths['mount_target'] ==

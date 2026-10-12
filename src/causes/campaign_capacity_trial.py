@@ -13,6 +13,7 @@ import time
 from causes import campaign_capacity_guard as guard
 from causes import campaign_capacity_sample as sample_api
 from causes import campaign_handoff as h
+from causes import campaign_storage as storage
 
 
 _SOURCE_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -349,6 +350,39 @@ def validate_operational_bindings(plan, policy, binding, owned):
             'candidate_operational_control_or_capacity_changed')
 
 
+def validate_trial_controls(plan, policy, binding, owned):
+    declaration = plan['sampling']
+    controls = declaration['guard']['binding']['admission_control']
+    if controls.get('schema') == 'causes.finite_prefix_admission_controls.v1':
+        require(plan.get('profile') == 'finite_prefix'
+                and controls['operational_bindings'] == plan['operational_bindings'],
+                'finite_prefix_control_profile_or_binding_changed')
+        observed = storage.finite_prefix_control_observation(controls)
+        assignment = h.checked(plan['assignment']['evidence'])
+        require(observed['predecessor'] in assignment['predecessors']
+                and policy['launch']['storage_binding'] == declaration['guard']['binding']
+                and policy['launch']['owned_barrier'] == binding['owned_startup_barrier']
+                and observed['output_root'] == binding['output_root']
+                and policy['launch']['options']['pause_file'] == binding['pause_file']
+                == observed['pause_file']
+                and observed['global_pause_file'] == policy['launch']['options']['global_pause_file']
+                and observed['startup_barrier'] == owned['marker']['path']
+                and set(declaration['controls_absent']) == set(observed['controls_present'])
+                and len(declaration['controls_absent']) == len(observed['controls_present']),
+                'finite_prefix_candidate_control_scope_changed')
+        return
+    routing = h.checked(controls['pause_routing'])
+    require(policy['launch']['storage_binding'] == declaration['guard']['binding']
+            and policy['launch']['owned_barrier'] == binding['owned_startup_barrier']
+            and policy['launch']['options']['pause_file'] == binding['pause_file']
+            and controls['role'] == 'mi'
+            and routing['successor_local_pauses']['mi'] == binding['pause_file']
+            and routing['successor_global_pause'] == policy['launch']['options']['global_pause_file']
+            and set(declaration['controls_absent']) == {
+                routing['successor_global_pause'], routing['successor_local_pauses']['mi']}
+            and owned['marker']['path'] not in declaration['controls_absent'], 'candidate_control_scope_changed')
+
+
 def load_trial(plan_ref):
     plan = h.checked(plan_ref)
     require(plan['schema'] == 'causes.capacity_trial_runner.v1'
@@ -378,17 +412,7 @@ def load_trial(plan_ref):
     owned = h.checked(binding['owned_startup_barrier'])
     policy = h.checked(declaration['owner']['policy'])
     validate_operational_bindings(plan, policy, binding, owned)
-    controls = declaration['guard']['binding']['admission_control']
-    routing = h.checked(controls['pause_routing'])
-    require(policy['launch']['storage_binding'] == declaration['guard']['binding']
-            and policy['launch']['owned_barrier'] == binding['owned_startup_barrier']
-            and policy['launch']['options']['pause_file'] == binding['pause_file']
-            and controls['role'] == 'mi'
-            and routing['successor_local_pauses']['mi'] == binding['pause_file']
-            and routing['successor_global_pause'] == policy['launch']['options']['global_pause_file']
-            and set(declaration['controls_absent']) == {
-                routing['successor_global_pause'], routing['successor_local_pauses']['mi']}
-            and owned['marker']['path'] not in declaration['controls_absent'], 'candidate_control_scope_changed')
+    validate_trial_controls(plan, policy, binding, owned)
     require(plan['release_wait_seconds'] == 600 and type(plan['release_wait_seconds']) is int,
             'bounded_candidate_release_wait_required')
     require(plan['provisional_continuation_authorized'] is (profile == 'mixed'),
