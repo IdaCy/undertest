@@ -119,6 +119,7 @@ class DispatcherTests(unittest.TestCase):
 
     def test_runner_exception_preserves_cause_without_replaying_attempt(self):
         assignment = job('initialization_failure')
+        jobs = [assignment, job('after_failure')]
 
         def runner(*args):
             self.pause.touch()
@@ -127,7 +128,7 @@ class DispatcherTests(unittest.TestCase):
             except FileNotFoundError as error:
                 raise ValueError('sandbox initialization failed') from error
 
-        self.run_bounded(self.dispatcher([assignment], runner, workers=1, max_full=1))
+        self.run_bounded(self.dispatcher(jobs, runner, workers=1, max_full=1))
         failed = [e for e in self.events() if e['event'] == 'unresolved_current_attempt']
         self.assertEqual(len(failed), 1)
         receipt = failed[0]
@@ -140,9 +141,17 @@ class DispatcherTests(unittest.TestCase):
         self.assertIsNone(receipt['summary_sha256'])
         self.assertFalse((self.output / 'initialization_failure/summary.json').exists())
 
-        self.run_bounded(self.dispatcher([assignment], lambda *args: self.fail('failed attempt replayed'),
-                                        workers=1, max_full=1))
-        self.assertEqual(len([e for e in self.events() if e['event'] == 'claimed']), 1)
+        self.pause.unlink()
+
+        def healthy_runner(spec, variant, config, allocation, output):
+            self.assertEqual(allocation['run_id'], 'after_failure', 'failed attempt replayed')
+            result = finish(spec, variant, config, allocation, output)
+            self.pause.touch()
+            return result
+
+        self.run_bounded(self.dispatcher(jobs, healthy_runner, workers=1, max_full=1))
+        claimed = [e['run_id'] for e in self.events() if e['event'] == 'claimed']
+        self.assertEqual(claimed, ['initialization_failure', 'after_failure'])
         self.assertEqual([e for e in self.events() if e['event'] == 'unresolved_current_attempt'], failed)
 
     def test_extensions_keep_forming_balanced_blocks_until_operator_pause(self):
