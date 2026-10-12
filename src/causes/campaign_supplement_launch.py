@@ -231,7 +231,7 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
     adoption = json.loads(core.pinned(adoption_reference))
     require(adoption.get('authorized_supplement_invocation') is True
             and adoption['policy'] == policy_reference, 'explicit_supplement_adoption_required')
-    require(policy['phase'] in ('pilot', 'continue') and policy['max_clients'] in (1, 2, 4, 8)
+    require(policy['phase'] in ('pilot', 'continue') and policy['max_clients'] in (1, 2, 4, 8, 12, 16)
             and type(policy['max_clients']) is int, 'supported_client_scope')
     require(adoption['phase'] == policy['phase'] and type(adoption['max_clients']) is int
             and adoption['max_clients'] == policy['max_clients'],

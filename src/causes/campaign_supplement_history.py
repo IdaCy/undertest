@@ -216,7 +216,7 @@ def replay_native_history(raw: bytes) -> dict:
             _require(policy['prepared'] == prepared and policy['output_root'] == str(root),
                      'native_invocation_binding_changed')
             _require(_integer(policy['initial_failures']) and policy['initial_failures'] < 3
-                     and type(policy['max_clients']) is int and policy['max_clients'] in (1, 2, 4, 8)
+                     and type(policy['max_clients']) is int and policy['max_clients'] in (1, 2, 4, 8, 12, 16)
                      and policy['phase'] in ('pilot', 'continue'), 'native_invocation_scope')
             if policy['max_clients'] > 2:
                 _pin(policy['capacity_limit'])

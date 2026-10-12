@@ -4,7 +4,7 @@ The caller owns authorization, an exclusive family lock, immutable input/source 
 
 Each output directory and its .control journal belong to exactly one immutable family/model binding. The journal is not multiplexed: a different model or family needs a separate output and control journal, with any applicable prior histories qualified explicitly by the caller.
 
-The queue defaults to two clients and an 80 GiB local-storage floor. Four or eight clients require a fresh, pinned provider-capacity adoption with a finite new-request budget. Callers still own host-specific qualification and exclusion. Importing this module performs no I/O.
+The queue defaults to two clients and an 80 GiB local-storage floor. Larger pools of four, eight, twelve or sixteen clients require a fresh, pinned provider-capacity adoption with a finite new-request budget. Callers still own host-specific qualification and exclusion. Importing this module performs no I/O.
 """
 import concurrent.futures
 import copy
@@ -290,7 +290,7 @@ def validate_capacity_limit(reference, max_clients, output, jobs, *, family, mod
     provider has already demonstrated that capacity. Live resource checks remain
     the caller's responsibility before every claim.
     """
-    if type(max_clients) is not int or max_clients not in (1, 2, 4, 8):
+    if type(max_clients) is not int or max_clients not in (1, 2, 4, 8, 12, 16):
         raise IntegrityError('client_cap')
     if max_clients <= 2:
         return None
@@ -327,7 +327,7 @@ def validate_capacity_limit(reference, max_clients, output, jobs, *, family, mod
 
 def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, *, family, model, initial_failures=0, phase='pilot', max_clients=2, local_free_space_floor_bytes=DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES, capacity_limit=None):
     """Caller holds the unique family lock and binds this output/journal to one family/model. A partial attempt is never replayed."""
-    if type(max_clients) is not int or max_clients not in (1, 2, 4, 8):
+    if type(max_clients) is not int or max_clients not in (1, 2, 4, 8, 12, 16):
         raise IntegrityError('client_cap')
     if type(initial_failures) is not int or initial_failures < 0:
         raise IntegrityError('initial_failure_count')
