@@ -90,6 +90,8 @@ def watch_completed(config, authorize, directory, *, interval_seconds=60,
 
             Path(config.destination).mkdir(parents=True, exist_ok=True)
             settings = asdict(config)
+            if settings.get('evidence_profile') is None:
+                settings.pop('evidence_profile', None)
             settings['destination'] = str(settings['destination'])
             _write(directory / 'START.json', {
                 'at': _now(), 'configuration': settings, 'authorization': authorization,

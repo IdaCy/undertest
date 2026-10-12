@@ -165,7 +165,40 @@ def audit_captured_self_probe_traffic(directory, job, config):
     return _audit_self_probe_traffic(directory, job, config, captured_stages_only=True)
 
 
-def _audit_self_probe_traffic(directory, job, config, *, captured_stages_only):
+def audit_prefix_self_probe_traffic(directory, job, config):
+    """Verify original early self probes from a closed prefix snapshot.
+
+    The caller establishes immutable snapshot and runner-source custody. Actor failures remain explicit; this audit verifies probes, not actor quality. No end-stage measurement is assigned or inferred for a prefix run.
+    """
+    return _audit_self_probe_traffic(directory, job, config,
+                                    captured_stages_only=False, prefix_only=True)
+
+
+def _prefix_stages(root, summary, allocation):
+    _require(allocation.get('continue_to_end') is False, 'prefix_episode_required')
+    _require(summary.get('run_id') == allocation['run_id'], 'self_probe_identity_changed')
+    _time(summary['finished_at'])
+    status = summary.get('early_status')
+    _require(status in ('missing', 'earlier_natural_completion',
+                        'completed_batch_at_least_three_results'), 'early_status_changed')
+    probes = root / 'probes'
+    _require(not probes.is_symlink(), 'prefix_probe_directory_is_symlink')
+    if probes.exists():
+        _require(probes.is_dir() and {p.name for p in probes.iterdir()} <= {'early'},
+                 'prefix_has_unassigned_probe_stage')
+    if status == 'missing':
+        paths = [root / 'early_context.json', root / 'probes' / 'early']
+        _require('early_context_sha256' not in summary
+                 and not any(p.exists() or p.is_symlink() for p in paths),
+                 'missing_early_has_evidence')
+        return []
+    context = _read(root, 'early_context.json')
+    _require(isinstance(context, list) and runner.sha(context) == summary.get('early_context_sha256'),
+             'early_context_changed')
+    return ['early']
+
+
+def _audit_self_probe_traffic(directory, job, config, *, captured_stages_only, prefix_only=False):
     root = canonical_path(directory)
     allocation = job['allocation']
     _require(_read(root, 'allocation.json') == allocation and _read(root, 'model.json') == config,
@@ -174,8 +207,9 @@ def _audit_self_probe_traffic(directory, job, config, *, captured_stages_only):
     probes = summary.get('probes', [])
     selected = [q for q in config['questions'] if q['id'] in allocation['instruments']]
     _require(len(selected) == len(set(allocation['instruments'])), 'self_question_roster_changed')
-    stages = _closed_stages(root, summary, allocation) if captured_stages_only else ['early', 'end']
-    if captured_stages_only:
+    stages = (_prefix_stages(root, summary, allocation) if prefix_only else
+              _closed_stages(root, summary, allocation) if captured_stages_only else ['early', 'end'])
+    if captured_stages_only or prefix_only:
         _require(summary['run_id'] == allocation['run_id'], 'self_probe_identity_changed')
         for stage in stages:
             path = root / 'probes' / stage
@@ -244,4 +278,13 @@ def _audit_self_probe_traffic(directory, job, config, *, captured_stages_only):
         result.update(captured_stages=stages, uncaptured_stages=absent,
                       unattempted_probes=[{'stage': stage, 'instrument': q['id'], 'reason': 'context_not_captured'}
                                           for stage in absent for q in selected])
+    if prefix_only:
+        result.update(captured_stages=stages, unassigned_stages=['end'],
+                      uncaptured_stages=[] if stages else ['early'],
+                      unattempted_probes=[] if stages else [
+                          {'stage': 'early', 'instrument': q['id'], 'reason': 'context_not_captured'}
+                          for q in selected],
+                      actor_disposition={key: copy.deepcopy(summary.get(key)) for key in
+                                         ('early_status', 'end_status', 'actor_error',
+                                          'sandbox_close_error', 'sandbox_closure')})
     return result

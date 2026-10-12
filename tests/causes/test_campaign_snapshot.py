@@ -388,5 +388,106 @@ class SnapshotTests(unittest.TestCase):
                 validate_manifest(manifest, self.config, set())
 
 
+class SelfProbeProfileTests(unittest.TestCase):
+    setUp = SnapshotTests.setUp
+    add_run = SnapshotTests.add_run
+    transport = SnapshotTests.transport
+
+    def fixture(self):
+        from causes.campaign_snapshot import EARLY_SELF_PROBE_FILES
+        run = self.add_run()
+        for name in EARLY_SELF_PROBE_FILES:
+            path = run / name
+            if path.exists():
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'opaque evidence')
+        (run / 'checkpoint.tar').write_bytes(b'excluded archive')
+        return run, replace(self.config, selected_runs=(str(run.relative_to(self.remote)),),
+                            evidence_profile='early_self_probes')
+
+    def authorize(self, config):
+        value = SnapshotTests.authorize(self, config)
+        value['custody_kind'] = 'actor_self_probe_evidence'
+        return value
+
+    def test_exact_artifacts_copied_once_with_distinct_index_and_receipts(self):
+        from causes.campaign_snapshot import EARLY_SELF_PROBE_FILES
+        run, config = self.fixture()
+        with patch('causes.campaign_snapshot.subprocess.run', side_effect=self.transport):
+            first = synchronize_completed(config, self.authorize)
+            index = config.destination / 'self_probes.accepted.jsonl'
+            before = index.read_bytes()
+            second = synchronize_completed(config, self.authorize)
+        self.assertEqual((first['verified_runs'], second['verified_runs']), (1, 0))
+        self.assertEqual(index.read_bytes(), before)
+        row = json.loads(before)
+        self.assertEqual(row['custody_kind'], 'actor_self_probe_evidence')
+        manifest = json.loads(Path(row['manifest']).read_bytes())
+        self.assertEqual({x['path'] for x in manifest['runs'][0]['files']}, set(EARLY_SELF_PROBE_FILES))
+        self.assertFalse((Path(row['path']) / 'checkpoint.tar').exists())
+        self.assertFalse((config.destination / 'accepted.jsonl').exists())
+        self.assertEqual(Path(row['path'], 'probes/early/evaluation_presence/response.raw').read_bytes(), b'opaque evidence')
+
+    def test_missing_original_response_and_result_are_explicit(self):
+        run, config = self.fixture()
+        absent = ['probes/early/evaluation_presence/response.raw',
+                  'probes/early/evaluation_presence/result.json']
+        for name in absent:
+            (run / name).unlink()
+        with patch('causes.campaign_snapshot.subprocess.run', side_effect=self.transport):
+            result = synchronize_completed(config, self.authorize)
+        manifest = json.loads(Path(result['attempt'], 'MANIFEST.json').read_bytes())
+        self.assertEqual(manifest['runs'][0]['omitted'], [
+            {'path': name, 'reason': 'named_self_probe_evidence_absent'} for name in absent])
+        validate_manifest(manifest, config, set())
+        manifest['runs'][0]['omitted'] = []
+        with self.assertRaisesRegex(ValueError, 'manifest_scope'):
+            validate_manifest(manifest, config, set())
+
+    def test_unknown_profile_or_missing_authority_refuses_before_transport(self):
+        _, config = self.fixture()
+        with patch('causes.campaign_snapshot.subprocess.run') as transport:
+            for changed in [replace(config, evidence_profile='arbitrary'),
+                            replace(config, selected_runs=None),
+                            replace(config, reader_inputs_only=True)]:
+                with self.assertRaises(ValueError):
+                    synchronize_completed(changed, self.authorize)
+            with self.assertRaisesRegex(ValueError, 'self_probe_authorization'):
+                synchronize_completed(config, lambda c: SnapshotTests.authorize(self, c))
+            transport.assert_not_called()
+
+    def test_unexpected_probe_artifact_refuses_without_copy(self):
+        run, config = self.fixture()
+        (run / 'probes/early/evaluation_presence/extra.bin').write_bytes(b'extra')
+        with patch('causes.campaign_snapshot.subprocess.run', side_effect=self.transport), \
+             self.assertRaisesRegex(RuntimeError, 'remote manifest failed'):
+            synchronize_completed(config, self.authorize)
+        self.assertEqual(self.transport_calls, ['ssh'])
+        self.assertFalse((config.destination / config.index_name).exists())
+
+    def test_symlink_probe_ancestor_refuses_without_following(self):
+        run, config = self.fixture()
+        original = run / 'probes'
+        moved = run / 'original_probes'
+        original.rename(moved)
+        original.symlink_to(moved, target_is_directory=True)
+        with patch('causes.campaign_snapshot.subprocess.run', side_effect=self.transport), \
+             self.assertRaisesRegex(RuntimeError, 'remote manifest failed'):
+            synchronize_completed(config, self.authorize)
+        self.assertEqual(self.transport_calls, ['ssh'])
+
+    def test_oversized_original_probe_is_retained_but_not_copied(self):
+        run, config = self.fixture()
+        request = run / 'probes/early/evaluation_presence/request.json'
+        with request.open('wb') as stream:
+            stream.truncate(64 * 1024**2 + 1)
+        with patch('causes.campaign_snapshot.subprocess.run', side_effect=self.transport), \
+             self.assertRaisesRegex(RuntimeError, 'remote manifest failed'):
+            synchronize_completed(config, self.authorize)
+        self.assertEqual(request.stat().st_size, 64 * 1024**2 + 1)
+        self.assertEqual(self.transport_calls, ['ssh'])
+
+
 if __name__ == '__main__':
     unittest.main()
