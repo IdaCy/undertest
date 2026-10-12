@@ -16,6 +16,7 @@ FIELDS = {
     'metadata_preparation', 'metadata_review', 'closed_actual', 'closed_review',
     'previous_plan', 'previous_preparation', 'previous_review', 'interpreter',
 }
+OPTIONAL_FIELDS = {'source_binding'}
 
 def require(ok, reason):
     if not ok:
@@ -46,9 +47,54 @@ def module(ref, name):
     require(pin(value.__file__) == ref, 'native_module_changed')
     return value
 
+def invocation_binding(settings, execution, intent, native_argv, native_source):
+    """Distinguish a real wrapper invocation from optional offline reconstruction."""
+    reference = settings.get('source_binding')
+    wrapped = execution.get('source_binding') is not None
+    if reference is None:
+        require(not wrapped and intent.get('source_binding') is None
+                and execution['argv'] == native_argv, 'exact_native_invocation')
+        return None
+    descriptor = ck(reference)
+    entry_peer = ck(descriptor['entrypoint_review'])
+    require(entry_peer.get('accepted_pinned_native_source_entrypoint') is True
+            and not entry_peer.get('findings')
+            and entry_peer['source'] == descriptor['entrypoint']
+            and entry_peer['loader_source'] == descriptor['loader_source'], 'accepted_source_entrypoint')
+    entry = module(descriptor['entrypoint'], 'saved_input_source_entrypoint')
+    descriptor, loader, binding = entry.configuration(reference)
+    require(descriptor['source'] == native_source and descriptor['native_argv'] == native_argv
+            and descriptor['strategy'] == 'saved_parent', 'exact_input_constructor_binding')
+    if wrapped:
+        require(execution['source_binding'] == intent.get('source_binding') == reference
+                and execution.get('native_argv') == intent.get('native_argv') == native_argv
+                and execution['argv'] == entry.process_argv(reference, descriptor),
+                'exact_bound_native_invocation')
+    else:
+        require(intent.get('source_binding') is None and execution['argv'] == native_argv,
+                'original_direct_invocation_preserved')
+    return descriptor, loader, binding
+
+def review_metadata_template(settings):
+    metadata_review = ck(settings['metadata_review'])
+    require(metadata_review.get('accepted_fresh_reader_next_batch_metadata_preparation') is True
+            and not metadata_review.get('findings')
+            and metadata_review.get('preparation') == settings['metadata_preparation'],
+            'accepted_next_batch_metadata')
+    metadata = ck(settings['metadata_preparation'])
+    templates = metadata.get('templates')
+    require(isinstance(templates, dict)
+            and templates.get('materialization') == settings['pending_request'],
+            'accepted_next_batch_metadata')
+    if 'templates' in metadata_review:
+        require(metadata_review['templates'] == templates, 'metadata_template_copy_mismatch')
+    raw(settings['pending_request'])
+    return metadata_review
+
+
 def review_saved_inputs(settings):
     """Audit saved input construction with the original pinned native helpers."""
-    require(type(settings) is dict and set(settings) == FIELDS
+    require(type(settings) is dict and set(settings) in (FIELDS, FIELDS | OPTIONAL_FIELDS)
             and settings['schema'] == SCHEMA, 'exact_descriptor_required')
     for key in FIELDS - {'schema', 'interpreter'}:
         raw(settings[key])
@@ -75,10 +121,7 @@ def review_saved_inputs(settings):
     inverse['feeds'] = inverse['feeds'][:len(pending['feeds'])]
     require(inverse == pending and request['root_authorized'] is True, 'only_late_cut_authority_and_reviewed_appended_feed_fills')
     metadata_review_ref = settings['metadata_review']
-    metadata_review = ck(metadata_review_ref)
-    require(metadata_review['accepted_fresh_reader_next_batch_metadata_preparation'] is True
-            and metadata_review['preparation'] == settings['metadata_preparation']
-            and metadata_review['templates']['materialization'] == settings['pending_request'], 'accepted_next_batch_metadata')
+    metadata_review = review_metadata_template(settings)
     # Each descriptor is independently checked by native feed_rows below, including
     # exact plan/source/registration/index peer joins. There is no role-only lookup.
     expected_copied = 0
@@ -101,9 +144,10 @@ def review_saved_inputs(settings):
     require(authority['request'] == request_ref and authority['source'] == prep['source'] and authority['output'] == str(O), 'native_authority_exact_scope')
     require(authority['root_authorized'] is True and authority['action'] == 'prepare_fresh_candidate_reader_inputs' and authority['automatic_retry'] is False, 'genuine_root_materialization_authority')
     require(execution['returncode'] == 0 and raw(execution['stderr']) == b'' and ck(execution['stdout']) == prep_ref, 'successful_native_materialization_result')
-    require(execution['argv'] == [settings['interpreter'], '-B', prep['source']['path'], '--request', request_ref['path'], '--authority', authority_ref['path']], 'exact_native_invocation')
+    native_argv = [settings['interpreter'], '-B', prep['source']['path'], '--request', request_ref['path'], '--authority', authority_ref['path']]
     root_intent_ref = pin(Path(execution_ref['path']).with_name('INTENT.v1.json'))
     root_intent = ck(root_intent_ref)
+    source_binding = invocation_binding(settings, execution, root_intent, native_argv, prep['source'])
     require(root_intent['request'] == execution['request'] == request_ref and root_intent['authority'] == execution['authority'] == authority_ref and root_intent['argv'] == execution['argv'], 'root_intent_execution_join')
     require(root_intent['maximum_invocations'] == 1 and root_intent['automatic_retry'] is False and root_intent['metadata_review'] == metadata_review_ref, 'single_root_invocation')
     require(execution['host_calls'] == execution['model_calls'] == execution['reader_launches'] == 0, 'input_only_execution')
@@ -126,7 +170,13 @@ def review_saved_inputs(settings):
     known = ck(prep['known'])
     require(known == fresh.known() and fresh.KNOWN_REFERENCE == prep['known'], 'frozen_known')
     native = fresh.parent()
-    modules = native.native()
+    if source_binding is None:
+        modules = native.native()
+    else:
+        _, loader, binding = source_binding
+        require(known['input_parent'] == binding['materializer'], 'exact_input_parent_binding')
+        with loader.bind_constructor(native, binding['materializer'], binding):
+            modules = native.native()
     reader, watch = modules['campaign_reader'], modules['campaign_reader_watch']
     require(pin(reader.__file__) == known['reader_source'] == prep['reader_source'], 'native_reader_source')
     require(pin(watch.__file__) == native.KNOWN['modules']['campaign_reader_watch'], 'native_snapshot_binder')
@@ -260,6 +310,10 @@ def review_saved_inputs(settings):
                   findings=[], runtime_authorized=False, model_calls=0, host_calls=0, materializer_invocations=0, response_or_label_reads=0,
                   at=datetime.datetime.now(datetime.timezone.utc).isoformat(), review_source=pin(__file__))
 
+    if source_binding is not None:
+        review['source_binding'] = settings['source_binding']
+        review['native_invocation_used_source_binding'] = execution.get('source_binding') is not None
+        review['original_native_source'] = prep['source']
     return review
 
 
