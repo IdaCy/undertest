@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from causes import campaign_runner as runner
-from causes.campaign_concurrency_evidence import actor_request_exposure, aggregate_generation_windows, audit_self_probe_traffic
+from causes.campaign_concurrency_evidence import (actor_request_exposure, aggregate_generation_windows,
+                                                audit_self_probe_traffic, audit_prefix_self_probe_traffic)
 
 
 def at(seconds):
@@ -118,8 +119,10 @@ class WindowTests(unittest.TestCase):
 
 
 class SelfTrafficTests(unittest.TestCase):
-    def fixture(self, root, mode):
+    def fixture(self, root, mode, *, prefix=False):
         job = {'allocation': {'run_id': 'control', 'seed': 19, 'instruments': ['question']}}
+        if prefix:
+            job['allocation']['continue_to_end'] = False
         config = {'endpoint': 'http://unused.invalid/v1/chat/completions', 'model': 'fixture', 'tools': [],
                   'sampling': {}, 'answer_categories': ['yes', 'no', 'unknown'], 'request_timeout_seconds': 600,
                   'questions': [{'id': 'question', 'text': 'A question.', 'awareness_type': 'example', 'threshold': 'presence'}]}
@@ -131,7 +134,7 @@ class SelfTrafficTests(unittest.TestCase):
         save(root / 'allocation.json', job['allocation'])
         save(root / 'model.json', config)
         rows = []
-        for stage in ('early', 'end'):
+        for stage in (('early',) if prefix else ('early', 'end')):
             context = [{'role': 'user', 'content': 'Original ' + stage}]
             save(root / (stage + '_context.json'), context)
             if mode == 'failure':
@@ -156,7 +159,12 @@ class SelfTrafficTests(unittest.TestCase):
             native = types.FunctionType(runner.probe.__code__, {**runner.probe.__globals__, 'exchange': exchange, 'save': save})
             value = native(config, context, config['questions'][0], runner.seed_for(19, ['probe', stage, 'question']), root / 'probes' / stage / 'question')
             rows.append({'stage': stage, **value})
-        save(root / 'summary.json', {'probes': rows})
+        summary = {'probes': rows}
+        if prefix:
+            summary.update(run_id='control', finished_at=at(2), early_status='completed_batch_at_least_three_results',
+                           early_context_sha256=runner.sha(context), end_status='not_selected',
+                           sandbox_closure={'state': 'closed', 'overlay_mounted': False, 'closure_errors': []})
+        save(root / 'summary.json', summary)
         return job, config
 
     def test_complete_and_unusable_measurements_are_not_transport_faults(self):
@@ -200,6 +208,105 @@ class SelfTrafficTests(unittest.TestCase):
                     (target / 'receipt.json').write_bytes(runner.encoded(receipt))
                 with self.assertRaises((ValueError, RuntimeError)):
                     audit_self_probe_traffic(root, job, config)
+
+
+class PrefixSelfTrafficTests(unittest.TestCase):
+    def fixture(self, root, mode='complete'):
+        return SelfTrafficTests().fixture(root, mode, prefix=True)
+
+    def test_original_prefix_without_end_capture_is_verified_read_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            job, config = self.fixture(root)
+            before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+            with patch.object(runner, 'exchange', side_effect=AssertionError('network forbidden')), \
+                    patch.object(runner, 'save', side_effect=AssertionError('write forbidden')):
+                result = audit_prefix_self_probe_traffic(root, job, config)
+            self.assertEqual(result['completed_http_requests'], 1)
+            self.assertEqual(result['captured_stages'], ['early'])
+            self.assertEqual(result['unassigned_stages'], ['end'])
+            self.assertEqual(result['unattempted_probes'], [])
+            self.assertEqual(before, {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()})
+
+    def test_invalid_truncated_and_failed_calls_keep_distinct_statuses(self):
+        for mode, expected in [('invalid', 'invalid_answer_schema'), ('truncated', 'truncated'), ('failure', 'failure')]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                job, config = self.fixture(root, mode)
+                result = audit_prefix_self_probe_traffic(root, job, config)
+                self.assertEqual(result['probes'][0]['technical_status'], expected)
+                self.assertEqual(result['capacity_faults'], int(mode == 'failure'))
+
+    def test_absent_context_has_explicit_unattempted_slots(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            job = {'allocation': {'run_id': 'missing', 'continue_to_end': False, 'instruments': ['question']}}
+            config = {'questions': [{'id': 'question'}]}
+            summary = {'run_id': 'missing', 'finished_at': at(2), 'early_status': 'missing',
+                       'end_status': 'technical_failure', 'actor_error': 'retained failure', 'probes': []}
+            for name, value in [('allocation', job['allocation']), ('model', config), ('summary', summary)]:
+                (root / (name + '.json')).write_bytes(runner.encoded(value))
+            result = audit_prefix_self_probe_traffic(root, job, config)
+            self.assertEqual(result['completed_http_requests'], 0)
+            self.assertEqual(result['unattempted_probes'], [
+                {'stage': 'early', 'instrument': 'question', 'reason': 'context_not_captured'}])
+            self.assertEqual(result['actor_disposition']['actor_error'], 'retained failure')
+            (root / 'early_context.json').write_text('[]')
+            with self.assertRaisesRegex(ValueError, 'missing_early_has_evidence'):
+                audit_prefix_self_probe_traffic(root, job, config)
+
+    def test_full_assignment_unfinished_summary_and_extra_evidence_refuse(self):
+        for mutation in ('full', 'unfinished', 'end_probes', 'foreign_stage', 'foreign_instrument', 'wrong_run'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                job, config = self.fixture(root)
+                summary = json.loads((root / 'summary.json').read_bytes())
+                if mutation == 'full':
+                    job['allocation']['continue_to_end'] = True
+                    (root / 'allocation.json').write_bytes(runner.encoded(job['allocation']))
+                elif mutation == 'unfinished':
+                    del summary['finished_at']
+                elif mutation == 'end_probes':
+                    (root / 'probes/end').mkdir()
+                elif mutation == 'foreign_stage':
+                    (root / 'probes/unassigned_stage').mkdir()
+                elif mutation == 'foreign_instrument':
+                    (root / 'probes/early/unassigned').mkdir()
+                else:
+                    summary['run_id'] = 'other'
+                (root / 'summary.json').write_bytes(runner.encoded(summary))
+                with self.assertRaises((ValueError, KeyError)):
+                    audit_prefix_self_probe_traffic(root, job, config)
+
+    def test_context_and_rehashed_seed_tampering_refuse(self):
+        for mutation in ('context', 'seed'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                job, config = self.fixture(root)
+                if mutation == 'context':
+                    (root / 'early_context.json').write_text('[]')
+                else:
+                    folder = root / 'probes/early/question'
+                    request = json.loads((folder / 'request.json').read_bytes())
+                    request['seed'] += 1
+                    (folder / 'request.json').write_bytes(runner.encoded(request))
+                    for name in ('attempt', 'receipt'):
+                        value = json.loads((folder / (name + '.json')).read_bytes())
+                        value['request_sha256'] = runner.sha(request)
+                        (folder / (name + '.json')).write_bytes(runner.encoded(value))
+                with self.assertRaises(ValueError):
+                    audit_prefix_self_probe_traffic(root, job, config)
+
+    def test_actor_failure_after_capture_is_retained_without_discarding_probe(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            job, config = self.fixture(root)
+            summary = json.loads((root / 'summary.json').read_bytes())
+            summary.update(actor_error='checkpoint failed', end_status='technical_failure')
+            (root / 'summary.json').write_bytes(runner.encoded(summary))
+            result = audit_prefix_self_probe_traffic(root, job, config)
+            self.assertEqual(result['completed_http_requests'], 1)
+            self.assertEqual(result['actor_disposition']['actor_error'], 'checkpoint failed')
 
 
 if __name__ == '__main__':
