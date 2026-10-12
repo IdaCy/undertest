@@ -111,29 +111,62 @@ def measurement_keys(rows, *, epochs, readout_names, require_epoch=False):
     return keys
 
 
+class MeasurementGroupSelector:
+    """Select an ordered stream using one snapshot of assignments and occupied slots.
+
+    Construct once per pass, then call ``admit`` before enumerating each group's
+    payloads. Observed and missing base slots are equally occupied. Duplicate
+    groups refuse even when fully occupied; any ValueError aborts the pass.
+    """
+
+    def __init__(self, base_keys, *, epochs, readout_names):
+        _require(type(base_keys) is set, 'measurement_groups_required')
+        _require(isinstance(epochs, Mapping), 'frozen_measurement_epochs_required')
+        epochs = dict(epochs)
+        _require(epochs and all(isinstance(k, str) and k
+                                and isinstance(v, str) and v for k, v in epochs.items()),
+                 'frozen_measurement_epochs_required')
+        _require(isinstance(readout_names, Sequence)
+                 and not isinstance(readout_names, (str, bytes)),
+                 'frozen_measurement_readouts_required')
+        readout_names = tuple(readout_names)
+        _require(readout_names and all(isinstance(x, str) and x for x in readout_names)
+                 and len(set(readout_names)) == len(readout_names),
+                 'frozen_measurement_readouts_required')
+        self._runs = frozenset(epochs)
+        self._readouts = frozenset(readout_names)
+        self._base = frozenset(base_keys)
+        _require(all(self._assigned(key) for key in self._base),
+                 'base_measurement_keys_outside_assignment')
+        self._seen = set()
+
+    def _assigned(self, key):
+        return (type(key) is tuple and len(key) == 2
+                and all(isinstance(x, str) for x in key)
+                and key[0] in self._runs and key[1] in self._readouts)
+
+    def admit(self, declared):
+        """Return whether all declared slots are new; refuse invalid or mixed groups."""
+        _require(type(declared) in (list, tuple) and declared,
+                 'explicit_measurement_group_keys_required')
+        _require(all(self._assigned(key) for key in declared),
+                 'measurement_group_outside_assignment')
+        keys = set(declared)
+        _require(len(keys) == len(declared) and not keys.intersection(self._seen),
+                 'duplicate_measurement_group')
+        self._seen.update(keys)
+        overlap = keys.intersection(self._base)
+        _require(not overlap or overlap == keys, 'partial_measurement_group_overlap')
+        return not overlap
+
+
 def select_new_measurement_groups(groups, base_keys, *, group_keys, epochs, readout_names):
     """Filter metadata groups before payload enumeration; partial overlaps always refuse."""
     _require(type(groups) is list and type(base_keys) is set, 'measurement_groups_required')
-    _require(all(type(key) is tuple and len(key) == 2
-                 and all(isinstance(x, str) for x in key)
-                 and key[0] in epochs and key[1] in readout_names for key in base_keys),
-             'base_measurement_keys_outside_assignment')
-    selected, seen = [], set()
+    selector = MeasurementGroupSelector(base_keys, epochs=epochs, readout_names=readout_names)
+    selected = []
     for group in groups:
-        declared = group_keys(group)
-        _require(type(declared) in (list, tuple) and declared,
-                 'explicit_measurement_group_keys_required')
-        _require(all(type(key) is tuple and len(key) == 2
-                     and all(isinstance(x, str) for x in key)
-                     and key[0] in epochs and key[1] in readout_names for key in declared),
-                 'measurement_group_outside_assignment')
-        keys = set(declared)
-        _require(len(keys) == len(declared) and not keys.intersection(seen),
-                 'duplicate_measurement_group')
-        seen.update(keys)
-        overlap = keys.intersection(base_keys)
-        _require(not overlap or overlap == keys, 'partial_measurement_group_overlap')
-        if not overlap:
+        if selector.admit(group_keys(group)):
             selected.append(group)
     return selected
 
