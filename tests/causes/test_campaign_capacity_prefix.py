@@ -166,6 +166,44 @@ class PrefixCapacityTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 p.validate_trial(q, pol, criteria(), ref)
 
+    def test_provider_identity_without_role_joins_native_sampling_plan(self):
+        assignment = self.assignment()
+        config = self.save({'model': 'frozen-model'})
+        provider = {'pid': 10, 'process_starttime_ticks': '20', 'argv': ['provider']}
+        sampling = make_plan(self.root)
+        sampling['profile'] = 'finite_prefix'
+        sampling['groups'] = [sampling['owner']['group']]
+        sampling['owner']['max_full'] = sampling['eligibility']['active_full'] = 0
+        sampling['processes'].append(dict(provider, role='provider'))
+        timing = h.pin(Path(p.evidence.__file__).resolve())
+        plan = {'assignment': self.accepted_assignment(assignment), 'provider': provider,
+                'timing_source': timing, 'capacity_guard': {'required_sources': [timing]},
+                'sampling': sampling}
+        policy = {'workers': 8, 'max_full': 0, 'launch': {'jobs': assignment['jobs'], 'config': config,
+                  'options': {'workers': 8, 'max_full': 0}}}
+        reference = {'profile': 'finite_prefix_reference', 'workers': 4, 'max_full': 2,
+                     'observed_full_claims': 0, 'config': config, 'provider': provider,
+                     'completed_per_hour': 200}
+        before = copy.deepcopy((plan, reference))
+        sampler.validate_plan(sampling)
+        p.validate_trial(plan, policy, criteria(), reference)
+        self.assertEqual((plan, reference), before)
+        for change in ('missing', 'duplicate', 'wrong_role', 'pid', 'process_starttime_ticks',
+                       'argv', 'reference', 'conflicting_reference_role'):
+            q, ref = copy.deepcopy(plan), copy.deepcopy(reference)
+            rows = q['sampling']['processes']
+            if change == 'missing': rows.pop()
+            if change == 'duplicate': rows.append(copy.deepcopy(rows[-1]))
+            if change == 'wrong_role': rows[-1]['role'] = 'unrelated'
+            if change == 'pid': rows[-1]['pid'] += 1
+            if change == 'process_starttime_ticks': rows[-1]['process_starttime_ticks'] = '21'
+            if change == 'argv': rows[-1]['argv'].append('--changed')
+            if change == 'reference': ref['provider']['pid'] += 1
+            if change == 'conflicting_reference_role':
+                q['provider']['role'] = ref['provider']['role'] = 'unrelated'
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'reference_changed'):
+                p.validate_trial(q, policy, criteria(), ref)
+
     def test_replayed_or_modified_job_is_refused(self):
         a = self.assignment()
         for change in ('replay', 'seed', 'order', 'full', 'instrument'):

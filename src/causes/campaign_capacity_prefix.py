@@ -124,13 +124,16 @@ def validate_trial(plan, policy, criteria, reference):
             'finite_prefix_policy_or_extensions_changed')
     require(plan['sampling']['groups'] == [plan['sampling']['owner']['group']],
             'finite_prefix_sampling_group_changed')
+    providers = [process for process in plan['sampling']['processes']
+                 if process.get('role') == 'provider']
     require(reference['profile'] == 'finite_prefix_reference'
             and reference['workers'] == 4
             and type(reference['max_full']) is int and 0 <= reference['max_full'] <= reference['workers']
             and type(reference['observed_full_claims']) is int and reference['observed_full_claims'] == 0
             and reference['config'] == policy['launch']['config']
             and reference['provider'] == plan['provider']
-            and plan['provider'] in plan['sampling']['processes']
+            and plan['provider'].get('role', 'provider') == 'provider'
+            and providers == [dict(plan['provider'], role='provider')]
             and criteria['minimum_completed_per_hour'] <=
                 positive(reference['completed_per_hour'], 'prefix_reference_rate_invalid'),
             'finite_prefix_reference_changed')
