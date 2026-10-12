@@ -14,6 +14,7 @@ import random
 import re
 import shutil
 import time
+import traceback
 import uuid
 
 
@@ -409,10 +410,12 @@ class Dispatcher:
 
     def complete(self, future, job):
         run_id = job['allocation']['run_id']
+        failure_details = {}
         try:
             result = future.result()
         except BaseException as error:
             result = {'end_status': 'technical_failure', 'controller_error_type': type(error).__name__}
+            failure_details['controller_traceback'] = traceback.format_exc()
         if not isinstance(result, dict):
             result = {'end_status': 'technical_failure', 'controller_error_type': 'invalid_runner_return'}
         summary = self.output / run_id / 'summary.json'
@@ -444,7 +447,8 @@ class Dispatcher:
         self.receipt(run_id, status, job_sha256=sha(job), technical_failure=failed,
                      summary_sha256=hashlib.sha256(summary.read_bytes()).hexdigest() if summary.is_file() else None,
                      early_status=result.get('early_status'), end_status=result.get('end_status'),
-                     controller_error_type=result.get('controller_error_type'), route_faults=route_faults, replayed=False)
+                     controller_error_type=result.get('controller_error_type'), route_faults=route_faults,
+                     replayed=False, **failure_details)
         for route, fault in route_faults.items():
             self.failures[route] = self.failures.get(route, 0) + 1
             self.event('route_failure', route=route, run_id=run_id, consecutive_failures=self.failures[route], **fault)
