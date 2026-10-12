@@ -231,7 +231,7 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
     adoption = json.loads(core.pinned(adoption_reference))
     require(adoption.get('authorized_supplement_invocation') is True
             and adoption['policy'] == policy_reference, 'explicit_supplement_adoption_required')
-    require(policy['phase'] in ('pilot', 'continue') and policy['max_clients'] in (1, 2)
+    require(policy['phase'] in ('pilot', 'continue') and policy['max_clients'] in (1, 2, 4, 8)
             and type(policy['max_clients']) is int, 'supported_client_scope')
     require(adoption['phase'] == policy['phase'] and type(adoption['max_clients']) is int
             and adoption['max_clients'] == policy['max_clients'],
@@ -258,6 +258,20 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
             'original_pilot_order_changed')
     for job in jobs:
         core.measurement_path(output, job, family=family, model=model)
+    if 'queue_prefix_count' in policy:
+        count = policy['queue_prefix_count']
+        require(policy['phase'] == 'continue' and type(count) is int and 2 <= count <= len(jobs)
+                and adoption.get('queue_prefix_count') == count, 'explicit_queue_prefix_required')
+        jobs = jobs[:count]
+    if policy['max_clients'] > 2:
+        require(policy['phase'] == 'continue' and adoption.get('capacity_limit') == policy.get('capacity_limit')
+                and policy.get('capacity_limit') is not None, 'explicit_capacity_continuation_required')
+        capacity = core.validate_capacity_limit(policy['capacity_limit'], policy['max_clients'], output, jobs,
+                                                family=family, model=model)
+        require(capacity['provider_identity'] == policy['runtime_identity']
+                and capacity['max_new_requests'] == policy.get('max_new_requests')
+                and policy['capacity_limit'] in policy['required_pins']
+                and capacity['capacity_review'] in policy['required_pins'], 'capacity_policy_binding_changed')
     require(policy['local_pause_paths'] == [str(output / 'PAUSE')], 'dedicated_local_pause_required')
     contexts = {(row['run_id'], row['stage']): row for row in prepared['contexts']}
     require(len(contexts) == len(prepared['contexts']), 'duplicate_context')
@@ -344,7 +358,7 @@ def launch(policy_reference, adoption_reference, *, runner, observation, replay,
                 lambda job, destination: core.probe_measurement(job, destination, request_check, transport, runner),
                 admit, request_check, policy['local_pause_paths'], family=family, model=model,
                 initial_failures=policy['initial_failures'], phase=policy['phase'], max_clients=policy['max_clients'],
-                local_free_space_floor_bytes=local_floor)
+                local_free_space_floor_bytes=local_floor, capacity_limit=policy.get('capacity_limit'))
             core.save(invocation / 'RESULT.json', result)
             return result
         except BaseException as error:

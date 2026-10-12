@@ -4,7 +4,7 @@ The caller owns authorization, an exclusive family lock, immutable input/source 
 
 Each output directory and its .control journal belong to exactly one immutable family/model binding. The journal is not multiplexed: a different model or family needs a separate output and control journal, with any applicable prior histories qualified explicitly by the caller.
 
-The queue retains the two-client ceiling and defaults to an 80 GiB local-storage floor. Callers may select a reviewed positive floor or a stricter single-client bound; any host-specific resource or scientific scope must be qualified separately. Importing this module performs no I/O.
+The queue defaults to two clients and an 80 GiB local-storage floor. Four or eight clients require a fresh, pinned provider-capacity adoption with a finite new-request budget. Callers still own host-specific qualification and exclusion. Importing this module performs no I/O.
 """
 import concurrent.futures
 import copy
@@ -283,9 +283,51 @@ def prepare_request(job, contexts, config, runner):
     return context, question
 
 
-def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, *, family, model, initial_failures=0, phase='pilot', max_clients=2, local_free_space_floor_bytes=DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES):
+def validate_capacity_limit(reference, max_clients, output, jobs, *, family, model):
+    """Bind a larger pool to one reviewed provider, exact input slice and budget.
+
+    A qualification adoption authorizes a bounded trial, not a claim that the
+    provider has already demonstrated that capacity. Live resource checks remain
+    the caller's responsibility before every claim.
+    """
+    if type(max_clients) is not int or max_clients not in (1, 2, 4, 8):
+        raise IntegrityError('client_cap')
+    if max_clients <= 2:
+        return None
+    if reference is None:
+        raise IntegrityError('provider_capacity_adoption_required')
+    value = json.loads(pinned(reference))
+    if (value.get('schema') != 'causes.supplement_client_capacity_adoption.v1'
+            or value.get('root_authorized') is not True
+            or value.get('no_user_revocation') is not True
+            or type(value.get('max_clients')) is not int or value['max_clients'] != max_clients
+            or value.get('family') != family or value.get('model') != model
+            or value.get('output_root') != str(output)
+            or value.get('jobs_sha256') != digest(jobs)
+            or type(value.get('max_new_requests')) is not int or value['max_new_requests'] <= 0
+            or not isinstance(value.get('provider_identity'), dict) or not value['provider_identity']):
+        raise IntegrityError('provider_capacity_scope_changed')
+    observed = dt.datetime.fromisoformat(value['at'])
+    if observed.tzinfo is None or not 0 <= (dt.datetime.now(dt.timezone.utc) - observed).total_seconds() <= 180:
+        raise AdmissionHold('provider_capacity_adoption_stale')
+    flag = {'qualification': 'accepted_supplement_capacity_qualification',
+            'qualified': 'accepted_supplement_provider_capacity'}.get(value.get('mode'))
+    review = json.loads(pinned(value['capacity_review']))
+    if (flag is None or review.get(flag) is not True
+            or type(review.get('max_clients')) is not int or review['max_clients'] != max_clients
+            or review.get('provider_identity') != value['provider_identity']
+            or type(review.get('max_new_requests')) is not int
+            or review['max_new_requests'] < value['max_new_requests']
+            or not isinstance(review.get('evidence'), list) or not review['evidence']):
+        raise IntegrityError('provider_capacity_review_required')
+    for evidence in review['evidence']:
+        pinned(evidence)
+    return value
+
+
+def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, *, family, model, initial_failures=0, phase='pilot', max_clients=2, local_free_space_floor_bytes=DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES, capacity_limit=None):
     """Caller holds the unique family lock and binds this output/journal to one family/model. A partial attempt is never replayed."""
-    if type(max_clients) is not int or max_clients not in (1, 2):
+    if type(max_clients) is not int or max_clients not in (1, 2, 4, 8):
         raise IntegrityError('client_cap')
     if type(initial_failures) is not int or initial_failures < 0:
         raise IntegrityError('initial_failure_count')
@@ -295,8 +337,9 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
     namespace_component(model)
     for job in jobs:
         measurement_path(output, job, family=family, model=model)
+    capacity = validate_capacity_limit(capacity_limit, max_clients, output, jobs, family=family, model=model)
     pause_paths = [canonical(path) for path in pause_paths]
-    control = mkdir(output / '.control')
+    control = canonical(output / '.control')
     log = control / 'journal.jsonl'
     history = read_history(log)
     if any(row['event'] in ('route_quarantined', 'unresolved_prior_attempt', 'unresolved_current_attempt') for row in history):
@@ -311,10 +354,16 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
     if failures >= 3:
         raise AdmissionHold('inherited_donor_failure_threshold')
     pending, existing, ambiguous = reconcile(output, jobs, history, family=family, model=model)
+    if capacity is not None and len(pending) > capacity['max_new_requests']:
+        raise IntegrityError('provider_capacity_request_budget')
+    mkdir(control)
     if ambiguous:
         journal(log, {'event': 'unresolved_prior_attempt', 'measurement_ids': ambiguous})
         raise AdmissionHold('partial_attempt_requires_manual_reconciliation')
-    journal(log, {'event': 'controller_started', 'phase': phase, 'existing_finals': len(existing), 'pending': len(pending), 'inherited_failures': failures, 'local_free_space_floor_bytes': local_free_space_floor_bytes})
+    capacity_record = ({} if capacity is None else {'max_clients': max_clients,
+                       'capacity_limit': capacity_limit, 'max_new_requests': capacity['max_new_requests'],
+                       'queue_prefix_count': len(jobs)})
+    journal(log, {'event': 'controller_started', 'phase': phase, 'existing_finals': len(existing), 'pending': len(pending), 'inherited_failures': failures, 'local_free_space_floor_bytes': local_free_space_floor_bytes, **capacity_record})
     stopped = threading.Event()
     lock = threading.Lock()
     stop_reason = None
@@ -376,6 +425,10 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
                                   else 'local_disk_below_floor:' + str(local_free_space_floor_bytes))
                         raise AdmissionHold(reason)
                     observation = admission_check()
+                    if capacity is not None:
+                        pinned(capacity_limit); pinned(capacity['capacity_review'])
+                        if observation.get('identity') != capacity['provider_identity']:
+                            raise IntegrityError('provider_capacity_identity_changed')
                     job = pending[0]
                     source_check(job)
                     if any(future.done() for future in active):
