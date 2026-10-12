@@ -344,7 +344,8 @@ def validate_operational_bindings(plan, policy, binding, owned):
             and candidate['sole_hold_path'] == binding['pause_file']
             and candidate['startup_barrier'] == owned['marker']['path']
             and type(candidate['workers']) is int and candidate['workers'] == 8
-            and type(candidate['max_full']) is int and candidate['max_full'] == 4,
+            and type(candidate['max_full']) is int
+            and candidate['max_full'] == (0 if plan.get('profile') == 'finite_prefix' else 4),
             'candidate_operational_control_or_capacity_changed')
 
 
@@ -362,7 +363,11 @@ def load_trial(plan_ref):
             'capacity_trial_evidence_changed')
     declaration = plan['sampling']
     sample_api.validate_plan(declaration)
-    require(declaration['owner']['workers'] == 8 and declaration['owner']['max_full'] == 4
+    profile = plan.get('profile', 'mixed')
+    require(profile in ('mixed', 'finite_prefix')
+            and declaration.get('profile', 'mixed') == profile, 'capacity_profile_changed')
+    require(declaration['owner']['workers'] == 8
+            and declaration['owner']['max_full'] == (0 if profile == 'finite_prefix' else 4)
             and declaration['eligibility']['max_wait_seconds'] == 600,
             'candidate_capacity_or_prelude_changed')
     require(declaration['guard']['binding']['capacity_guard'] == binding,
@@ -386,11 +391,12 @@ def load_trial(plan_ref):
             and owned['marker']['path'] not in declaration['controls_absent'], 'candidate_control_scope_changed')
     require(plan['release_wait_seconds'] == 600 and type(plan['release_wait_seconds']) is int,
             'bounded_candidate_release_wait_required')
-    require(plan['provisional_continuation_authorized'] is True,
+    require(plan['provisional_continuation_authorized'] is (profile == 'mixed'),
             'explicit_guarded_pending_review_continuation_required')
     for ref in sample_api.identity_pins(declaration):
         sample_api.checked(ref)
-    evaluator = importlib.import_module('causes.campaign_capacity_summary')
+    evaluator = importlib.import_module('causes.campaign_capacity_prefix' if profile == 'finite_prefix'
+                                       else 'causes.campaign_capacity_summary')
     wait_adapter = importlib.import_module('causes.campaign_capacity_wait')
     require(h.pin(Path(evaluator.__file__)) == plan['evaluator_source'], 'candidate_evaluator_source_changed')
     require(h.pin(Path(wait_adapter.__file__)) == plan['wait_adapter_source'], 'candidate_wait_adapter_source_changed')
@@ -404,12 +410,16 @@ def load_trial(plan_ref):
     reference = reference_report['evaluation']
     require(reference['supported'] is True and reference['decision'] == 'eligible_reference',
             'candidate_reference_not_qualified')
+    if profile == 'finite_prefix':
+        evaluator.validate_trial(plan, policy, criteria, reference)
     return plan, evaluator, criteria, reference
 
 
 def run_trial(plan_ref):
     """One same-host supervisor; endpoint collection never stops scheduled telemetry."""
     plan, evaluator, criteria, reference = load_trial(plan_ref)
+    if plan.get('profile') == 'finite_prefix':
+        return evaluator.run_trial(plan_ref, plan, criteria, reference)
     declaration, binding = plan['sampling'], plan['capacity_guard']
     out = h.new_record_directory(plan['output'])
     h.save_new(out, 'RECEIPT.json', {'at': h.now(), 'plan': plan_ref, 'process': guard.self_process(),

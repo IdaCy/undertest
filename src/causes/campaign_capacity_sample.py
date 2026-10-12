@@ -146,8 +146,12 @@ def validate_plan(plan):
             and url.username is None and url.password is None, 'loopback_metrics_only')
     owner = plan['owner']
     require(owner['group'] in plan['groups'] and owner['controller_id'], 'current_owner_required')
+    profile = plan.get('profile', 'mixed')
+    require(profile in ('mixed', 'finite_prefix'), 'unknown_capacity_profile')
     require(type(owner['workers']) is int and type(owner['max_full']) is int
-            and 0 < owner['max_full'] <= owner['workers'], 'valid_capacity_required')
+            and (0 < owner['max_full'] <= owner['workers'] if profile == 'mixed'
+                 else owner['workers'] == 8 and owner['max_full'] == 0),
+            'valid_capacity_required')
     require(len({p['role'] for p in plan['processes']}) == len(plan['processes'])
             and owner['role'] in {p['role'] for p in plan['processes']}, 'unique_process_roles_required')
     for process in plan['processes']:
