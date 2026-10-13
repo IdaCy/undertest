@@ -21,7 +21,7 @@ import urllib.request
 
 from causes import campaign_handoff as h
 from causes.campaign_census import identity
-from causes.campaign_monitor import history_blockers, listener_owned, replay_history, validate_registration
+from causes.campaign_monitor import history_blockers, history_relevance, listener_owned, replay_history, validate_registration
 from causes.corpus_continuation import CorpusContinuation
 
 
@@ -410,7 +410,7 @@ def _native_reservation_foreign_blocks_proof(original, current, allocation, grow
     return _reservation_equal(expected, current)
 
 
-def donor_cuts_clear(history_policy, baseline, current):
+def donor_cuts_clear(history_policy, baseline, current, fault_applicability=None):
     keys=('host','output_root','mode','recorder_relevant')
     require([{k:r[k] for k in keys} for r in baseline]==history_policy['donor_scopes']
             ==[{k:r[k] for k in keys} for r in current], 'donor_history_scope_changed')
@@ -425,8 +425,10 @@ def donor_cuts_clear(history_policy, baseline, current):
         else:require(row['mode']=='live_prefix', 'unknown_donor_mode')
         recent(row['at'])
         replay=replay_history(raw)
-        require(not (row['recorder_relevant'] and replay['unresolved_events']) and not history_blockers(replay,history_policy['model_aliases'],
-                history_policy['task_routes'],row['recorder_relevant']), 'donor_history_requires_reconciliation')
+        relevance = history_relevance(replay, history_policy['model_aliases'], history_policy['task_routes'],
+                                      row['recorder_relevant'], bound, fault_applicability or [])
+        require(not (row['recorder_relevant'] and replay['unresolved_events']) and not relevance['blocked_routes'],
+                'donor_history_requires_reconciliation')
     return True
 
 
@@ -542,11 +544,14 @@ def observe_waiting(policy_reference, launch_reference):
             'waiting_launch_scope_changed')
     h.verify_owned_barrier(launch['owned_barrier'],policy['barrier'])
     for path in policy['pause_paths']:require(not os.path.lexists(h.canonical_path(path)), 'waiting_pause_present')
-    for previous in policy['predecessors']:
+    from causes.campaign_corpus_succession import native_stack_transition, native_local_owners, native_owner_locks
+    transition = native_stack_transition(policy)
+    for previous in native_local_owners(policy, transition) if transition else policy['predecessors']:
         state=h.retirement_state(previous['process'])
         require((state['absent'] or state.get('state') in ('Z','X','x'))
-                and h.lock_free(Path(previous['output_root'])/'.dispatcher.lock'), 'prior_owner_not_retired')
-        if policy.get('schema') == 'causes.native_corpus_admission_policy.v2' and 'closure' in previous:
+                and all(h.lock_free(Path(path)) for path in
+                        (native_owner_locks(previous) if transition else [previous['output_root'] + '/.dispatcher.lock'])), 'prior_owner_not_retired')
+        if policy.get('schema') == 'causes.native_corpus_admission_policy.v2' and 'closure' in previous and previous.get('kind') not in ('actor', 'self'):
             from causes.campaign_corpus_succession import live_closed_predecessor
             live_closed_predecessor(previous)
     value=waiting_identity(policy,launch['process'])
@@ -746,6 +751,12 @@ class ContinuousAdmission:
         old=p['predecessors'][-1];complete=h.checked(self.inputs['prior_custody']['evidence']);previous=h.checked(old['launch'])
         return h.retire_exact_idle_owner(previous['process'],old['output_root'],complete['roots'][old['output_root']]['journal'],attempt/'retirement',authority)
 
+    def local_owner_projection(self):
+        if self.policy.get('stack_transition') is not None:
+            from causes.campaign_corpus_succession import native_local_owners
+            return native_local_owners(self.policy)
+        return [{k: row[k] for k in ('output_root', 'process', 'launch')} for row in self.policy['predecessors']]
+
     def start(self, execute=False):
         p=self.policy;authority=self.authority(self.start_action);authority.check()
         require(not any(os.path.lexists(p[key]) for key in ('output_root','attempt_root','barrier')), 'start_namespace_exists_no_retry')
@@ -790,12 +801,13 @@ class ContinuousAdmission:
                     'process_receipt':h.pin(attempt/'PROCESS.json'),'intent':intent,'output_root':p['output_root'],'pythonpath':p['pythonpath'],
                     'workers':p['workers'],'max_full':p['max_full'],'initial_jobs':p['initial_jobs'],'continuation':p['continuation'],
                     'source_pins':p['runtime_source_pins'],'input_pins':p['runtime_input_pins'],'owned_barrier':self.owned_barrier,
-                    'retirement':self.retirement,'prior_local_owners':[{k:r[k] for k in ('output_root','process','launch')} for r in p['predecessors']],
+                    'retirement':self.retirement,'prior_local_owners':self.local_owner_projection(),
                     'controller_templates':p['controller_template'],'controller_jobs':p['initial_jobs'],
                     'controller_config':p['normalized_template']['config'],'capacity_qualification':{
                         'evidence':self.inputs['capacity_inheritance']['evidence'],'independent_review':self.inputs['capacity_inheritance']['review']},
                     'donor_histories':p['donor_histories'],
-                    'host_transfer':p['host_transfer'],**wait}
+                    'host_transfer':p['host_transfer'],
+                    **({'stack_transition':p['stack_transition']} if p.get('stack_transition') is not None else {}), **wait}
                 return h.save_new(attempt,'LAUNCH.json',launch)
             except BaseException as error:
                 h.save_new(attempt,'FAILED.json',{'at':h.now(),'error_type':type(error).__name__,'error':str(error)[:500],
@@ -960,24 +972,35 @@ class NativeAdmission(ContinuousAdmission):
         require(config['model'] == p['model'] and allocation['config'] == p['resident_config'], 'native_resident_model_changed')
         base = accepted(x['predecessor_monitor'], 'accepted_native_predecessor_monitor', 'policy')
         require(x['predecessor_monitor'] == p['predecessor_monitor'], 'native_predecessor_monitor_changed')
+        transition = s.native_stack_transition(p)
+        binding = transition['stack']['bindings'] if transition else base
+        custody_reader = s.native_custody_reader(transition)
         for key in ('provider', 'model', 'model_key', 'controller_host', 'provider_port', 'max_model_len', 'host_transfer', 'holds'):
-            require(p[key] == base[key], 'native_base_runtime_changed:' + key)
+            require(p[key] == binding[key], 'native_base_runtime_changed:' + key)
         require([{k: row[k] for k in ('output_root', 'process')} for row in p['predecessors']]
                 == [{k: row[k] for k in ('output_root', 'process')} for row in base['phases']], 'native_prior_owner_order_changed')
         require(p['predecessors'] and 'closure' in p['predecessors'][-1], 'native_immediate_closure_required')
         require(p['family'] not in [phase['runtime_cohort'] for phase in base['phases']]
                 and p['output_root'] not in [phase['output_root'] for phase in base['phases']], 'native_namespace_reused')
-        s.closed_predecessor(p['predecessors'][-1])
-        require(p['resident_config'] == base['phases'][-1]['controller_config'], 'native_resident_config_changed')
+        s.closed_predecessor(p['predecessors'][-1], custody_reader)
+        require(p['resident_config'] == (transition['value']['current_config'] if transition else base['phases'][-1]['controller_config']), 'native_resident_config_changed')
         projected = [{k: row[k] for k in ('host', 'output_root', 'mode', 'recorder_relevant')} for row in p['donor_histories']]
         require(projected == p['history']['donor_scopes'], 'native_donor_history_binding_changed')
         for old in p['predecessors']:
             if 'closure' in old:
-                closed = s.closed_predecessor(old)
-                matches = [row for row in p['donor_histories'] if row['host'] == p['controller_host'] and row['output_root'] == old['output_root']]
+                closed = s.closed_predecessor(old, custody_reader)
+                host = s.native_predecessor_host(p, old, transition)
+                matches = [row for row in p['donor_histories'] if row['host'] == host and row['output_root'] == old['output_root']]
                 require(len(matches) == 1 and matches[0]['journal'] == closed['journal'], 'native_closed_journal_binding_changed')
         local = [row for row in p['history']['donor_scopes'] if row['host'] == p['controller_host']]
-        require([row['output_root'] for row in local] == [row['output_root'] for row in p['predecessors']]
+        expected_local = (transition['exclusion']['donor_histories'] + p['predecessors'][len(transition['base']['phases']):]
+                          if transition else p['predecessors'])
+        if transition is not None:
+            require([row for row in p['donor_histories'] if row['host'] == transition['value']['source_host']]
+                    == transition['archive']['donor_histories'], 'native_archived_donors_changed')
+            require([row for row in p['donor_histories'] if row['host'] == p['controller_host']][:len(transition['exclusion']['donor_histories'])]
+                    == transition['exclusion']['donor_histories'], 'native_current_donors_changed')
+        require([row['output_root'] for row in local] == [row['output_root'] for row in expected_local]
                 and all(row['mode'] == 'sealed' and row['recorder_relevant'] is True for row in local),
                 'native_full_local_history_required')
         require(p['history']['donor_scopes'][:len(base['history']['donor_scopes'])] == base['history']['donor_scopes'],
@@ -1047,10 +1070,16 @@ class NativeAdmission(ContinuousAdmission):
         for key in ('provider', 'host_transfer', 'legacy_owners'):
             require(foundation[key] == p[key], 'native_foundation_changed:' + key)
         require(foundation['predecessors'] == p['predecessors'], 'native_foundation_predecessors_changed')
-        for key in ('legacy_owners_healthy', 'provider_tunnels_healthy', 'original_transfer_present',
-                    'donor_histories_clear', 'native_no_active_owned_work', 'all_predecessors_absent_and_unlocked'):
+        from causes.campaign_corpus_succession import native_transition_foundation
+        transition = native_transition_foundation(p, foundation)
+        flags = ('legacy_owners_healthy', 'provider_tunnels_healthy', 'original_transfer_present',
+                 'donor_histories_clear', 'native_no_active_owned_work')
+        if transition is None:
+            flags += ('all_predecessors_absent_and_unlocked',)
+        for key in flags:
             require(foundation[key] is True, 'native_foundation_not_clear:' + key)
-        donor_cuts_clear(p['history'], p['donor_histories'], foundation['donor_cuts'])
+        donor_cuts_clear(p['history'], p['donor_histories'], foundation['donor_cuts'],
+                         transition['fault_applicability'] if transition else None)
         for ref in foundation['evidence_pins']: h.checked_bytes(ref)
         if action == self.release_action:
             ready = accepted(x['startup'], 'accepted_native_startup_consumers', 'readiness'); recent(ready['at'])
@@ -1071,16 +1100,9 @@ class NativeAdmission(ContinuousAdmission):
         return foundation
 
     def live(self, action):
-        from causes.campaign_corpus_succession import live_closed_predecessor
+        from causes.campaign_corpus_succession import recheck_native_owners
         p = self.policy; _, jobs = self.static(); foundation = self.evidence(action)
-        for old in p['predecessors']:
-            require(h.checked(old['launch'])['process'] == old['process'], 'native_prior_launch_changed')
-            if 'closure' in old:
-                live_closed_predecessor(old)
-            else:
-                state = h.retirement_state(old['process'])
-                require((state['absent'] or state.get('state') in ('Z', 'X', 'x'))
-                        and h.lock_free(Path(old['output_root'])/'.dispatcher.lock'), 'native_old_owner_live')
+        recheck_native_owners(p)
         provider = p['provider']; h.process_identity(provider['process'])
         for ref in provider['source_pins'] + [provider['ready_receipt'], provider['serving_plan']]: h.checked_bytes(ref)
         require((Path('/proc')/str(provider['process']['pid'])/'cgroup').read_text() == provider['process']['cgroup'],
@@ -1096,9 +1118,10 @@ class NativeAdmission(ContinuousAdmission):
                 'fresh_reservation': self.inputs['fresh_reservation']['evidence']}
 
     def retire_predecessor(self, attempt, authority):
-        from causes.campaign_corpus_succession import live_closed_predecessor
+        from causes.campaign_corpus_succession import recheck_native_owners, native_custody_reader, closed_predecessor
         authority.check()
-        value = live_closed_predecessor(self.policy['predecessors'][-1])
+        transition = recheck_native_owners(self.policy)
+        value = closed_predecessor(self.policy['predecessors'][-1], native_custody_reader(transition))
         return h.save_new(attempt, 'PREDECESSOR_CLOSURE.json',
                           {'at': h.now(), 'closure': self.policy['predecessors'][-1]['closure'],
                            'owner_absent': value['owner_absent'], 'no_signal_or_restart': True})

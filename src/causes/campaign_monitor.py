@@ -82,6 +82,23 @@ def history_blockers(journal, model_aliases, task_routes, recorder_relevant):
                   or (recorder_relevant and route.startswith('recorder:')))
 
 
+def history_relevance(journal, model_aliases, task_routes, recorder_relevant, donor, applicability):
+    original = history_blockers(journal, model_aliases, task_routes, recorder_relevant)
+    matches = [row for row in applicability if row['donor'] == donor]
+    if len(matches) > 1:
+        raise ValueError('duplicate_archived_route_applicability')
+    excluded = []
+    if matches:
+        routes = matches[0]['model_routes']
+        if donor['mode'] != 'sealed' or routes != sorted(set(routes)) or any(
+                not isinstance(route, str) or not route.startswith('model:') for route in routes):
+            raise ValueError('invalid_archived_model_route_applicability')
+        excluded = sorted(set(original) & set(routes))
+    return {'blocked_routes': [route for route in original if route not in excluded],
+            'original_blocked_routes': original, 'nonapplicable_archived_model_routes': excluded,
+            'applicability': matches[0]['applicability'] if matches else None}
+
+
 def continuous_progress(identity, continuation, initial_jobs, events, persisted_blocks, barrier_present):
     if initial_jobs != [] or identity['jobs_sha256'] != hashlib.sha256(json.dumps([],sort_keys=True,ensure_ascii=False).encode()).hexdigest():
         raise ValueError('continuous_initial_queue_must_be_empty')
@@ -274,7 +291,13 @@ def validate_policy(policy):
     base_count = policy['native_successions']['base_phase_count'] if native else len(phases)
     require(type(base_count) is int and 0 < base_count <= len(phases)
             and (not native or base_count < len(phases)), 'native_base_phase_count')
-    base_phases = phases[:base_count]
+    transfer_count = base_count
+    if policy.get('stack_transition') is not None:
+        from causes.campaign_corpus_succession import native_stack_transition
+        archived = native_stack_transition(policy)['base']
+        if archived['schema'] == 'causes.campaign_monitor_policy.v2':
+            transfer_count = archived['native_successions']['base_phase_count']
+    base_phases = phases[:transfer_count]
     require(transferred and [p['output_root'] for p in base_phases if p['mode'] == 'finite'] == transferred,
             'transfer_scope_changed')
     continuous = [p for p in base_phases if p['mode'] == 'continuous']
@@ -324,10 +347,15 @@ def validate_registration(reg, policy, reader=checked_json):
             and type(controller['workers']) is int
             and controller['workers'] == phase['workers'], 'controller_scope_changed')
     require(phase['process'] is not None and controller['process'] == phase['process'], 'exact_owner_required')
-    require([r['output_root'] for r in reg['prior_local_owners']] == [p['output_root'] for p in phases[:index]],
+    from causes.campaign_corpus_succession import native_stack_transition, native_local_owners
+    transition = native_stack_transition(policy, reader)
+    prior = native_local_owners(policy, transition, reader) if transition else phases[:index]
+    require([r['output_root'] for r in reg['prior_local_owners']] == [p['output_root'] for p in prior],
             'prior_owner_root_order_changed')
-    require([r['process'] for r in reg['prior_local_owners']] == [p['process'] for p in phases[:index]],
+    require([r['process'] for r in reg['prior_local_owners']] == [p['process'] for p in prior],
             'prior_owner_identity_changed')
+    if transition is not None:
+        require(reg['prior_local_owners'] == prior, 'native_current_owner_projection_changed')
     for key in ('controller_templates', 'controller_jobs', 'controller_config'):
         require(reg[key] == phase[key], 'controller_input_policy_changed')
     require(reg['runtime_cohort'] == phase['runtime_cohort'], 'runtime_cohort_changed')
@@ -355,7 +383,7 @@ def validate_registration(reg, policy, reader=checked_json):
     require(manifest['mi_reservation'] == transfer['mi_reservation']
             and manifest['jobs'] == transfer['original_phase02_jobs']
             and manifest['target_output_roots'] == transfer['target_output_roots']
-            and manifest['target_host'] == policy['controller_host']
+            and manifest['target_host'] == (transition['value']['source_host'] if transition else policy['controller_host'])
             and manifest.get('all_target_ids_unissued_on_both_hosts') is True
             and manifest.get('prior_phase01_retired') is True, 'transfer_manifest_changed')
     templates = reader(reg['controller_templates'])
@@ -421,11 +449,14 @@ def validate_registration(reg, policy, reader=checked_json):
             require(any(Path(ref['path']).name == name and ref['sha256'] == sha for ref in expected_sources), 'allocator_source_changed')
         require(reg['donor_histories'] == phase['donor_histories'] and reg['donor_histories'], 'donor_history_binding_required')
         require([row['output_root'] for row in reg['donor_histories'] if row['host'] == policy['controller_host']]
-                == [p['output_root'] for p in phases[:index]], 'prior_local_history_missing')
+                == ([p['output_root'] for p in phases[:index]] if transition is None else
+                    [p['output_root'] for p in transition['exclusion']['donor_histories']] +
+                    [p['output_root'] for p in phases[len(transition['base']['phases']):index]]), 'prior_local_history_missing')
         history = policy['history']
         projected = [{k:row[k] for k in ('host','output_root','mode','recorder_relevant')} for row in reg['donor_histories']]
         require(projected == history['donor_scopes'], 'required_donor_scope_changed')
-        require(all(row['host'] in (policy['transfer_host'],policy['controller_host']) and row['mode'] in ('sealed','live_prefix')
+        require(all(row['host'] in (policy['transfer_host'], policy['controller_host'],
+                                                  transition['value']['source_host'] if transition else policy['controller_host']) and row['mode'] in ('sealed','live_prefix')
                     and type(row['recorder_relevant']) is bool for row in projected), 'invalid_donor_scope')
         models = [reader(ref) for ref in history['model_configs']]
         require(models and all(cfg['model'] == policy['model'] for cfg in models), 'same_provider_alias_model_changed')
@@ -612,7 +643,11 @@ def models(port, policy, *, timeout_seconds=4):
 def remote(side, registration, policy):
     budget = remote_validation_budget(policy, side)
     host = policy['transfer_host'] if side == 'mi' else policy['controller_host']
-    raw = encoded({'side':side,'registration':registration,'policy':policy})
+    request = {'side': side, 'registration': registration, 'policy': policy}
+    if policy.get('stack_transition') is not None:
+        from causes.campaign_corpus_succession import native_remote_transition
+        request['native_transition'] = native_remote_transition(policy, registration)
+    raw = encoded(request)
     command = ['ssh','-o','BatchMode=yes','-o','ConnectTimeout=8',host]
     if budget is not None:
         command += ['timeout','--signal=TERM','--kill-after=5s',str(budget['remote_seconds'])+'s']
@@ -782,12 +817,28 @@ def native_tail_output():
             and allocation['family'] == phase['runtime_cohort'] == x['runtime_cohort']
             and allocation['jobs'] == phase['controller_jobs'] == x['controller_jobs']
             and allocation['config'] == phase['controller_config'] == x['controller_config'])
+def history_relevance(journal, model_aliases, task_routes, recorder_relevant, donor, applicability):
+    original = history_blockers(journal, model_aliases, task_routes, recorder_relevant)
+    matches = [row for row in applicability if row['donor'] == donor]
+    if len(matches) > 1:
+        raise ValueError('duplicate_archived_route_applicability')
+    excluded = []
+    if matches:
+        routes = matches[0]['model_routes']
+        if donor['mode'] != 'sealed' or routes != sorted(set(routes)) or any(
+                not isinstance(route, str) or not route.startswith('model:') for route in routes):
+            raise ValueError('invalid_archived_model_route_applicability')
+        excluded = sorted(set(original) & set(routes))
+    return {'blocked_routes': [route for route in original if route not in excluded],
+            'original_blocked_routes': original, 'nonapplicable_archived_model_routes': excluded,
+            'applicability': matches[0]['applicability'] if matches else None}
+
 if side == 'mi':
     out['reverse_listener_process'] = proc(x['reverse_listener_process'])
     out['reverse_listener'] = listener(x['reverse_listener_process']['pid'], policy['relay_port'])
     tr = x['host_transfer']
     reservation = json.loads(pincheck(tr['mi_reservation']))
-    assert reservation['target_host'] == policy['controller_host'] and reservation['target_output_roots'] == x['host_transfer']['target_output_roots'] and (x['controller']['output_root'] in reservation['target_output_roots'] or any((p['phase'] == x['phase'] and p['mode'] == 'continuous' and (p['output_root'] == x['controller']['output_root']) for p in policy['phases'])) or native_tail_output()) and (reservation['jobs'] == x['host_transfer']['original_phase02_jobs'])
+    assert reservation['target_host'] == (req['native_transition']['source_host'] if policy.get('stack_transition') is not None else policy['controller_host']) and reservation['target_output_roots'] == x['host_transfer']['target_output_roots'] and (x['controller']['output_root'] in reservation['target_output_roots'] or any((p['phase'] == x['phase'] and p['mode'] == 'continuous' and (p['output_root'] == x['controller']['output_root']) for p in policy['phases'])) or native_tail_output()) and (reservation['jobs'] == x['host_transfer']['original_phase02_jobs'])
     assert not os.path.lexists(tr['mi_unused_output_root'])
     out['host_transfer_reservation'] = tr['mi_reservation']
     out['unused_MI_output_absent'] = True
@@ -841,6 +892,17 @@ elif side == 'jp':
                 owners.append(int(r[4]))
     assert owners == [e['process']['pid']], 'controller must own output lock'
     out['lock_owner'] = owners
+    transition = req.get('native_transition')
+    if policy.get('stack_transition') is not None:
+        assert transition and transition['pair'] == policy['stack_transition'] == x['stack_transition']
+        pincheck(transition['pair']['evidence']); pincheck(transition['pair']['review'])
+        for item in transition['files']:
+            assert all(item['original'][key] == item['copy'][key] for key in ('bytes', 'sha256'))
+            pincheck(item['copy'])
+        for ref in transition['external_self_custody_pins']:
+            pincheck(ref)
+    else:
+        assert transition is None
     for old in x['prior_local_owners']:
         q = Path('/proc') / str(old['process']['pid'])
         try:
@@ -848,11 +910,15 @@ elif side == 'jp':
         except FileNotFoundError:
             state = None
         assert state is None or (state[19] == old['process']['process_starttime_ticks'] and state[0] in ['Z', 'X', 'x'])
-        with (Path(old['output_root']) / '.dispatcher.lock').open('rb') as f:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        paths = old.get('lock_paths', [old['output_root'] + '/.dispatcher.lock']) if transition else [old['output_root'] + '/.dispatcher.lock']
+        for path in paths:
+            with Path(path).open('rb') as f:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if policy['schema'] == 'causes.campaign_monitor_policy.v2':
         for link in policy['native_successions']['links']:
             old = link['predecessor']
+            if transition and any(all(old[key] == phase[key] for key in ('output_root', 'process')) for phase in transition['archived_phases']):
+                continue  # Original-host custody was pin-checked; do not query that PID/inode on this host.
             assert not (Path('/proc') / str(old['process']['pid'])).exists(), 'native predecessor not absent'
             closure = json.loads(pincheck(old['closure']['evidence']))
             for key in ('journal', 'never_claimed', 'owned_pause', 'pause_ownership'):
@@ -887,15 +953,26 @@ elif side == 'jp':
         assert allocator.check_history(prefix) == []
         out['continuation'] = {'control':continuation['control'], 'binding':allocator.binding, 'progress':progress, 'first_published_block':first_block, 'verified_journal_sha256':hashlib.sha256(prefix).hexdigest()}
 
+
+
+
 else:
     raise ValueError('unknown_registered_host')
 histories = []
 current_host = policy['transfer_host'] if side == 'mi' else policy['controller_host']
 for donor in x.get('donor_histories', []):
-    if donor['host'] != current_host:
+    archived = (side == 'jp' and req.get('native_transition') is not None
+                and donor in req['native_transition']['archived_donors'])
+    if donor['host'] != current_host and not archived:
         continue
     assert donor['journal']['path'] == donor['output_root'] + '/.dispatcher/journal.jsonl'
-    path = Path(donor['journal']['path'])
+    ref = donor['journal']
+    if archived:
+        matches = [item['copy'] for item in req['native_transition']['files'] if item['original'] == ref]
+        assert len(matches) == 1
+        path = Path(matches[0]['path'])
+    else:
+        path = Path(ref['path'])
     assert path.resolve() == path and not any(part.is_symlink() for part in (path,*path.parents))
     raw = path.read_bytes(); ref = donor['journal']
     assert len(raw) >= ref['bytes'] and hashlib.sha256(raw[:ref['bytes']]).hexdigest() == ref['sha256']
@@ -903,8 +980,12 @@ for donor in x.get('donor_histories', []):
     if donor['mode'] == 'sealed':assert len(raw) == ref['bytes']
     elif donor['mode'] != 'live_prefix':raise ValueError('unknown_history_mode')
     summary = replay_history(raw)
-    blocked = history_blockers(summary,policy['history']['model_aliases'],policy['history']['task_routes'],donor['recorder_relevant'])
-    histories.append({'root':donor['output_root'], 'journal':summary, 'blocked_routes':blocked, 'recorder_relevant':donor['recorder_relevant']})
+    relevance = history_relevance(summary,policy['history']['model_aliases'],policy['history']['task_routes'],donor['recorder_relevant'],donor,
+                                  (req.get('native_transition') or {}).get('fault_applicability', []))
+    item = {'root':donor['output_root'], 'journal':summary, 'blocked_routes':relevance['blocked_routes'], 'recorder_relevant':donor['recorder_relevant']}
+    if (req.get('native_transition') or {}).get('fault_applicability'):
+        item['route_applicability'] = relevance
+    histories.append(item)
 if side == 'jp':
     histories.append({'root':x['controller']['output_root'], 'journal':out['journal'], 'blocked_routes':sorted(set(out['journal']['quarantines']) | set(out['journal']['nonzero_failures']))})
 out['history'] = {'roots':histories, 'quarantines':[], 'nonzero_failures':[], 'unresolved_events':0}
