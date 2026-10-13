@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 from causes import campaign_handoff as handoff
@@ -57,6 +58,32 @@ def audit_closed_episode(directory, job, config, *, original_directory):
     return _audit_episode(directory, job, config, original_directory=original_directory, allow_censored=True)
 
 
+def audit_prefix_episode(directory, job, config, *, original_directory):
+    """Audit a nontechnical native prefix without extending its termination rule."""
+    return _audit_episode(directory, job, config, original_directory=original_directory,
+                          allow_censored=False, prefix=True)
+
+
+def _prefix_stages(root, summary, allocation):
+    require(allocation.get('continue_to_end') is False, 'prefix_episode_required')
+    require(summary.get('end_status') in ('not_selected', 'natural_completion')
+            and not summary.get('actor_error') and not summary.get('sandbox_close_error')
+            and summary['sandbox_closure']['state'] == 'closed'
+            and summary['sandbox_closure']['overlay_mounted'] is False
+            and summary['sandbox_closure']['closure_errors'] == [], 'nontechnical_closed_prefix_required')
+    require(summary.get('early_status') in ('earlier_natural_completion',
+                                          'completed_batch_at_least_three_results'), 'prefix_capture_required')
+    require(not any(key in summary for key in ('end_workspace_status', 'end_workspace_checkpoint',
+                                               'end_workspace_error')), 'prefix_end_checkpoint_metadata')
+    require(not any((root / name).exists() or (root / name).is_symlink()
+                    for name in ('checkpoints/end', 'sandbox/sandbox/checkpoints/end', 'probes/end')),
+            'prefix_has_unassigned_end_evidence')
+    if summary['end_status'] != 'natural_completion':
+        require(not (root / 'end_context.json').exists() and not (root / 'end_context.json').is_symlink(),
+                'prefix_has_unassigned_end_context')
+    return ['early']
+
+
 def _closed_stages(root, summary, allocation):
     require(allocation.get('continue_to_end') is True, 'full_episode_required')
     require(summary.get('end_status') in ('natural_completion', 'administratively_censored_turns',
@@ -91,7 +118,7 @@ def _closed_stages(root, summary, allocation):
     return captured
 
 
-def _audit_episode(directory, job, config, *, original_directory, allow_censored):
+def _audit_episode(directory, job, config, *, original_directory, allow_censored, prefix=False):
     root = handoff.canonical_path(directory)
     original = Path(original_directory)
     require(original.is_absolute() and '..' not in original.parts, 'invalid_original_directory')
@@ -102,15 +129,16 @@ def _audit_episode(directory, job, config, *, original_directory, allow_censored
     actor_summary = _read(root, 'actor_summary.json')
     require(all(summary.get(key) == value for key, value in actor_summary.items() if key != 'probes'),
             'actor_summary_changed')
-    captured = _closed_stages(root, summary, allocation) if allow_censored else ['early', 'end']
+    captured = (_prefix_stages(root, summary, allocation) if prefix else
+                _closed_stages(root, summary, allocation) if allow_censored else ['early', 'end'])
     natural_ending = summary['end_status'] == 'natural_completion'
     require(summary['run_id'] == allocation['run_id'] and summary['task_id'] == spec['task_id']
             and summary['variant_id'] == variant['id']
-            and (natural_ending or allow_censored) and not summary.get('actor_error')
+            and (natural_ending or allow_censored or prefix) and not summary.get('actor_error')
             and summary['sandbox_closure']['state'] == 'closed'
             and summary['sandbox_closure']['overlay_mounted'] is False
             and summary['sandbox_closure']['closure_errors'] == [], 'natural_closed_actor_required')
-    require(allocation['continue_to_end'] is True, 'full_episode_required')
+    require(allocation['continue_to_end'] is (not prefix), 'prefix_episode_required' if prefix else 'full_episode_required')
     count = summary['calls']
     maximum = config.get('max_actor_turns', 128)
     require(type(maximum) is int and maximum > 0 and type(count) is int
@@ -139,7 +167,7 @@ def _audit_episode(directory, job, config, *, original_directory, allow_censored
                 == ['attempt.json', 'receipt.json', 'request.json', 'response.raw'], 'actor_request_file_roster_changed')
         request = _read(root, f'actor/{name}/request.json')
         expected = runner.request(config, messages, runner.seed_for(allocation['seed'], ['actor', turn]), config['tools'])
-        require(request == expected, 'actor_request_changed:' + name)
+        require(runner.encoded(request) == runner.encoded(expected), 'actor_request_changed:' + name)
         attempt = _read(root, f'actor/{name}/attempt.json')
         receipt = _read(root, f'actor/{name}/receipt.json')
         response_path = handoff.canonical_path(actor / 'response.raw')
@@ -183,6 +211,8 @@ def _audit_episode(directory, job, config, *, original_directory, allow_censored
             early = copy.deepcopy(messages)
             status = 'earlier_natural_completion' if natural else 'completed_batch_at_least_three_results'
             require(summary['early_status'] == status, 'early_status_changed')
+        if prefix and early is not None:
+            require(turn == count - 1, 'prefix_continued_after_native_capture')
         usage = response.get('usage') or {}
         rows.append({'turn': turn, 'request_sha256': runner.sha(request),
                      'response_sha256': receipt['response_sha256'], 'started_at': receipt['started_at'],
@@ -233,4 +263,101 @@ def _audit_episode(directory, job, config, *, original_directory, allow_censored
     if allow_censored:
         result.update(end_status=summary['end_status'], captured_stages=captured,
                       uncaptured_stages=[phase for phase in ('early', 'end') if phase not in captured])
+    if prefix:
+        result.update(prefix_only=True, end_status=summary['end_status'], captured_stages=captured)
+    return result
+
+
+def _native_tool_command(call):
+    try:
+        function = call['function']
+        arguments = json.loads(function['arguments'])
+        if call.get('type') != 'function':
+            return None
+        if function['name'] == 'read' and set(arguments) == {'path'} and isinstance(arguments['path'], str):
+            return ['cat', '--', arguments['path']]
+        if function['name'] == 'bash' and set(arguments) == {'command'} and isinstance(arguments['command'], str):
+            return ['bash', '-lc', arguments['command']]
+    except (KeyError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _saved_tool_execution(root, original, state, saved, command):
+    result = saved['result']
+    stdout = Path(result['stdout_path'])
+    command_root = original / 'sandbox/sandbox/commands'
+    require(stdout.parent == command_root and re.fullmatch(r'\d{5,}_tool\.stdout', stdout.name)
+            and result['stderr_path'] == str(stdout.with_suffix('.stderr')), 'tool_execution_path_changed')
+    relative = stdout.relative_to(original)
+    raw = _read(root, str(relative.with_suffix('.json')))
+    expected = dict(raw, timeout=raw['timeout'] or raw['returncode'] in (124, 137))
+    argv = ['docker', 'exec', state['container'], 'timeout', '-s', 'TERM', '-k', '2', '90', *command]
+    require(all(isinstance(value, str) and '\0' not in value for value in argv),
+            'tool_execution_invalid_argv')
+    require(result == expected and raw['argv'] == argv,
+            'tool_execution_command_changed')
+    require(type(raw['returncode']) is int and type(raw['timeout']) is bool
+            and type(raw['elapsed_seconds']) in (int, float)
+            and math.isfinite(raw['elapsed_seconds']) and raw['elapsed_seconds'] >= 0,
+            'tool_execution_status_changed')
+    metadata = {key: value for key, value in raw.items() if key not in ('stdout', 'stderr')}
+    require(state['operations'].count(metadata) == 1, 'tool_execution_missing_from_sandbox_state')
+    streams = {}
+    for label in ('stdout', 'stderr'):
+        path = handoff.canonical_path(root / relative.with_suffix('.' + label))
+        require(path.is_relative_to(root), 'tool_execution_stream_outside_run')
+        actual = _file_hash(path)
+        with path.open('rb') as stream:
+            text = stream.read(1048576).decode('utf-8', errors='replace')
+        require(type(raw[label + '_bytes']) is int and raw[label + '_bytes'] == actual['bytes']
+                and raw[label] == text and raw[label + '_truncated'] is (actual['bytes'] > 1048576),
+                'tool_execution_stream_changed:' + label)
+        streams[label] = actual
+    return {'command_record': str(relative.with_suffix('.json')), 'streams': streams,
+            'returncode': raw['returncode'], 'timeout': expected['timeout']}
+
+
+def audit_prefix_tool_exchanges(directory, job, config, *, original_directory):
+    """Join prefix requests to retained sandbox execution; never run a tool.
+
+    Zero qualifying exchanges is an explicit result, not actor qualification.
+    Closed snapshot custody and the exact native runner/sandbox version must be
+    established separately. Nonzero command exits can be valid tool exchanges.
+    """
+    result = audit_prefix_episode(directory, job, config, original_directory=original_directory)
+    root, original = handoff.canonical_path(directory), Path(original_directory)
+    state = _read(root, 'sandbox/sandbox/STATE.json')
+    summary = _read(root, 'summary.json')
+    require(state['schema'] == 'caus.sandbox.v1' and state['run_id'] == job['allocation']['run_id']
+            and isinstance(state['container'], str) and bool(state['container'])
+            and isinstance(state['operations'], list)
+            and all(state.get(key) == value for key, value in summary['sandbox_closure'].items()),
+            'tool_sandbox_identity_or_closure_changed')
+    coverage = {name: {'observed_calls': 0, 'verified_executions': 0, 'complete_exchanges': 0}
+                for name in ('read', 'bash')}
+    exchanges, invalid, used_commands = [], [], set()
+    for turn in range(result['successful_requests']):
+        response = _read(root, f'actor/{turn:04d}/response.raw')
+        calls = response['choices'][0]['message'].get('tool_calls') or []
+        for index, call in enumerate(calls):
+            tool_file = f'tools/{turn:04d}_{index:03d}.json'
+            name = call.get('function', {}).get('name')
+            if name in coverage:
+                coverage[name]['observed_calls'] += 1
+            command = _native_tool_command(call)
+            if command is None:
+                invalid.append({'turn': turn, 'index': index, 'tool_call_id': call['id']})
+                continue
+            execution = _saved_tool_execution(root, original, state, _read(root, tool_file), command)
+            require(execution['command_record'] not in used_commands, 'tool_execution_reused_for_multiple_calls')
+            used_commands.add(execution['command_record'])
+            complete = turn + 1 < result['successful_requests']
+            coverage[name]['verified_executions'] += 1
+            coverage[name]['complete_exchanges'] += int(complete)
+            exchanges.append({'turn': turn, 'index': index, 'tool_name': name, 'tool_call_id': call['id'],
+                              'subsequent_request_verified': complete, **execution})
+    result.update(native_tool_executions=exchanges, invalid_or_unsupported_tool_calls=invalid,
+                  tool_coverage=coverage,
+                  complete_native_tool_exchanges=sum(row['subsequent_request_verified'] for row in exchanges))
     return result
