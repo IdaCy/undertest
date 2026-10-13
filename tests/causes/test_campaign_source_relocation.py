@@ -1,4 +1,6 @@
 import hashlib
+import copy
+import importlib.util
 from pathlib import Path
 import tempfile
 from types import ModuleType, SimpleNamespace
@@ -186,6 +188,183 @@ class ConstructorBindingTests(SourceFixtures):
         with self.assertRaisesRegex(ValueError, 'native_core_reference_changed'):
             with relocation.bind_constructor(self.binder, self.binder_ref, self.binding):
                 self.fail('changed original core reference accepted')
+
+
+class ConstructorDependencyTests(SourceFixtures):
+    constructor = ConstructorBindingTests.constructor
+
+    def setUp(self):
+        super().setUp()
+        self.binder, self.binder_ref = self.constructor('binder.py')
+        self.root_module, self.root_ref = self.constructor('entry.py')
+        self.binder.KNOWN = {'core': self.original}
+        self.physical_module = SimpleNamespace(__file__=self.physical['path'])
+        self.binder.targets[self.physical['path']] = self.physical_module
+        self.binding = dict(materializer=self.binder_ref, relocation=self.declaration)
+        self.reader, self.reader_ref = self.constructor('reader.py')
+        self.second, self.second_ref = self.constructor('second.py')
+        self.actor = self.file('actor.py', b'VALUE = 5\n')
+        self.actor_copy = self.file('actor_copy.py', b'VALUE = 5\n')
+        self.actor_module = SimpleNamespace(__file__=self.actor_copy['path'])
+        self.actor_relocation = dict(original=self.actor, physical=self.actor_copy)
+        self.root_module.targets[self.reader_ref['path']] = self.reader
+        self.root_module.targets[self.second_ref['path']] = self.second
+        for module in (self.reader, self.second):
+            module.targets[self.actor_copy['path']] = self.actor_module
+            module.targets[self.binder_ref['path']] = self.binder
+        self.binding.update(schema='causes.native_constructor_source_binding.v2',
+                            constructors=[self.root_ref, self.binder_ref, self.reader_ref, self.second_ref],
+                            dependency_relocations=[dict(constructor=ref, relocation=self.actor_relocation)
+                                                    for ref in (self.reader_ref, self.second_ref)])
+
+    def bound_reader(self):
+        return self.root_module.module(self.reader_ref, 'reader_name')
+
+    def test_nested_two_constructor_copies_and_native_core_keep_logical_pins(self):
+        before = copy.deepcopy(self.binding)
+        originals = [module.module for module in (self.root_module, self.reader, self.second, self.binder)]
+        Path(self.actor['path']).unlink()
+        Path(self.original['path']).write_bytes(b'CHANGED = True\n')
+        with relocation.bind_constructor(self.root_module, self.root_ref, self.binding) as resolved:
+            reader = self.bound_reader()
+            self.assertIs(reader.module(self.actor, 'actor_name'), self.actor_module)
+            second = self.root_module.module(self.second_ref, 'second_name')
+            self.assertIs(second.module(self.actor, 'second_actor_name'), self.actor_module)
+            binder = reader.module(self.binder_ref, 'binder_name')
+            self.assertIs(binder.module(self.original, 'core_name'), self.physical_module)
+        self.assertEqual(self.binding, before)
+        self.assertEqual(resolved, [dict(constructor=self.reader_ref, **self.actor_relocation),
+                                    dict(constructor=self.second_ref, **self.actor_relocation), self.declaration])
+        self.assertEqual(self.reader.calls[0], (self.actor_copy, 'actor_name'))
+        self.assertFalse(Path(self.actor['path']).exists())
+        for module, original in zip((self.root_module, self.reader, self.second, self.binder), originals):
+            self.assertIs(module.module, original)
+
+    def test_unlisted_constructor_and_unrelated_reference_use_original_loader(self):
+        sentinel = object()
+        self.root_module.targets[self.actor['path']] = sentinel
+        other = self.file('other.py', b'VALUE = 5\n')
+        self.reader.targets[other['path']] = sentinel
+        with relocation.bind_constructor(self.root_module, self.root_ref, self.binding) as resolved:
+            self.assertIs(self.root_module.module(self.actor, 'not_relocated'), sentinel)
+            self.assertIs(self.bound_reader().module(other, 'unrelated'), sentinel)
+        self.assertEqual(resolved, [])
+        self.assertEqual(self.root_module.calls[0], (self.actor, 'not_relocated'))
+
+    def test_changed_declared_dependency_pin_refuses_before_native_load(self):
+        with relocation.bind_constructor(self.root_module, self.root_ref, self.binding):
+            reader = self.bound_reader()
+            with self.assertRaisesRegex(ValueError, 'dependency_original_mismatch'):
+                reader.module(dict(self.actor, sha256='0' * 64), 'changed')
+            with self.assertRaisesRegex(ValueError, 'dependency_original_mismatch'):
+                reader.module(dict(self.actor, bytes=float(self.actor['bytes'])), 'float_bytes')
+            self.assertEqual(reader.calls, [])
+
+    def test_mutating_declaration_does_not_redirect_selected_copy(self):
+        other_copy = self.file('unselected_actor_copy.py', b'VALUE = 5\n')
+        with relocation.bind_constructor(self.root_module, self.root_ref, self.binding) as resolved:
+            self.binding['dependency_relocations'][0]['relocation']['physical'] = other_copy
+            self.assertIs(self.bound_reader().module(self.actor, 'actor'), self.actor_module)
+        self.assertEqual(resolved[0]['physical'], self.actor_copy)
+
+    def test_bad_schema_scope_or_duplicate_rows_refuse_without_wrapping(self):
+        original = self.root_module.module
+        mutations = [
+            ('extra', lambda b: b.update(ambient=True)),
+            ('empty', lambda b: b.update(dependency_relocations=[])),
+            ('row_extra', lambda b: b['dependency_relocations'][0].update(ambient=True)),
+            ('wrong_constructor', lambda b: b['dependency_relocations'][0]['constructor'].update(sha256='0' * 64)),
+            ('undeclared_constructor', lambda b: b['dependency_relocations'][0].update(constructor=self.actor)),
+            ('duplicate', lambda b: b['dependency_relocations'].append(copy.deepcopy(b['dependency_relocations'][0]))),
+            ('constructor_dependency', lambda b: b['dependency_relocations'][0].update(relocation=dict(original=self.reader_ref, physical=self.file('reader_copy.py', Path(self.reader_ref['path']).read_bytes())))),
+            ('core_overlap', lambda b: b['dependency_relocations'][0].update(constructor=self.binder_ref, relocation=self.declaration)),
+            ('wrong_bytes', lambda b: b['dependency_relocations'][0]['relocation']['physical'].update(sha256='0' * 64)),
+            ('float_bytes', lambda b: b['dependency_relocations'][0]['relocation']['physical'].update(bytes=float(self.actor_copy['bytes']))),
+        ]
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                binding = copy.deepcopy(self.binding)
+                mutate(binding)
+                with self.assertRaises(ValueError):
+                    with relocation.bind_constructor(self.root_module, self.root_ref, binding):
+                        self.fail('invalid declaration accepted')
+                self.assertIs(self.root_module.module, original)
+                self.assertEqual(self.root_module.calls, [])
+
+    def test_v1_does_not_accept_or_apply_v2_rows(self):
+        binding = copy.deepcopy(self.binding)
+        binding['schema'] = 'causes.native_constructor_source_binding.v1'
+        with self.assertRaisesRegex(ValueError, 'constructor_binding_fields'):
+            with relocation.bind_constructor(self.root_module, self.root_ref, binding):
+                self.fail('v2 rows accepted as v1')
+        del binding['dependency_relocations']
+        sentinel = object()
+        self.reader.targets[self.actor['path']] = sentinel
+        with relocation.bind_constructor(self.root_module, self.root_ref, binding) as resolved:
+            self.assertIs(self.bound_reader().module(self.actor, 'legacy'), sentinel)
+        self.assertEqual(resolved, [])
+
+    def test_copy_changed_during_context_refuses_and_restores_all_loaders(self):
+        originals = self.root_module.module, self.reader.module
+        with self.assertRaisesRegex(ValueError, 'pin_changed'):
+            with relocation.bind_constructor(self.root_module, self.root_ref, self.binding):
+                reader = self.bound_reader()
+                Path(self.actor_copy['path']).write_bytes(b'VALUE = 6\n')
+                reader.module(self.actor, 'actor')
+        self.assertIs(self.root_module.module, originals[0])
+        self.assertIs(self.reader.module, originals[1])
+        self.assertEqual(self.reader.calls, [])
+
+    def test_native_failure_and_tampering_restore_all_nested_loaders(self):
+        originals = self.root_module.module, self.reader.module
+        for tamper in (False, True):
+            with self.subTest(tamper=tamper):
+                error, message = (ValueError, 'constructor_binding_changed') if tamper else (RuntimeError, 'native_failure')
+                with self.assertRaisesRegex(error, message):
+                    with relocation.bind_constructor(self.root_module, self.root_ref, self.binding):
+                        reader = self.bound_reader()
+                        reader.module(self.actor, 'actor')
+                        if tamper:
+                            reader.module = lambda *_: None
+                        else:
+                            raise RuntimeError('native_failure')
+                self.assertIs(self.root_module.module, originals[0])
+                self.assertIs(self.reader.module, originals[1])
+
+    def test_false_physical_module_path_refuses_and_restores(self):
+        original = self.reader.module
+        self.reader.targets[self.actor_copy['path']] = SimpleNamespace(__file__=self.actor['path'])
+        with self.assertRaisesRegex(ValueError, 'physical_module_identity'):
+            with relocation.bind_constructor(self.root_module, self.root_ref, self.binding):
+                self.bound_reader().module(self.actor, 'actor')
+        self.assertIs(self.reader.module, original)
+
+    def test_real_native_factory_reads_archive_with_absent_original(self):
+        code = '''import hashlib, importlib.util
+from pathlib import Path
+def module(ref, name):
+    data = Path(ref['path']).read_bytes()
+    if len(data) != ref['bytes'] or hashlib.sha256(data).hexdigest() != ref['sha256']:
+        raise ValueError('native_pin_changed')
+    spec = importlib.util.spec_from_file_location(name, ref['path'])
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+'''
+        reader_ref = self.file('native_reader.py', code.encode())
+        spec = importlib.util.spec_from_file_location('real_reader', reader_ref['path'])
+        reader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reader)
+        binding = dict(self.binding, constructors=[reader_ref, self.binder_ref],
+                       dependency_relocations=[dict(constructor=reader_ref, relocation=self.actor_relocation)])
+        original = reader.module
+        Path(self.actor['path']).unlink()
+        with relocation.bind_constructor(reader, reader_ref, binding):
+            actor = reader.module(self.actor, 'exact_native_actor_name')
+            self.assertEqual(actor.VALUE, 5)
+            self.assertEqual(actor.__name__, 'exact_native_actor_name')
+            self.assertEqual(actor.__file__, self.actor_copy['path'])
+        self.assertIs(reader.module, original)
 
 
 if __name__ == '__main__':
