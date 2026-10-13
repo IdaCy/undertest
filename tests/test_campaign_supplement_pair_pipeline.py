@@ -62,7 +62,250 @@ def fixture():
     return data, documents, lambda ref: copy.deepcopy(documents[ref['path']])
 
 
+class ContinuationTests(unittest.TestCase):
+    def fixture(self):
+        documents = {}
+        def put(name, value):
+            raw = pipeline.encoded(value)
+            ref = dict(path='/saved/' + name, bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+            documents[ref['path']] = copy.deepcopy(value)
+            return ref
+        get = lambda ref: copy.deepcopy(documents[ref['path']])
+        assignments = put('assignments.json', {'epochs': {'old': 'frozen', 'new': 'frozen'}})
+        collector = put('collector.py', {})
+        questions = ('evaluation_strongly_favors', 'evaluation_leans_towards_or_favors')
+        members, verified, slots, evidence = [], [], [], {}
+        for run in ('old', 'new'):
+            for question in questions:
+                mid = run + '/' + question
+                final = put(mid + '/FINAL.json', {'status': 'saved'})
+                value = dict(measurement_id=mid, final=final, capture_files=[],
+                             request_body_sha256='request-' + mid, technical_status='complete')
+                verified.append(value)
+                members.append(dict(measurement_id=mid, run_id=run, readout='self_' + question))
+                ev = dict(measurement_id=mid, final=final, request_sha256=value['request_body_sha256'],
+                          native_collector=collector, verified_index=len(verified) - 1,
+                          custody={'closed_run_id': run, 'terminal': True})
+                evidence[mid] = ev
+                missing = run == 'old' and question == questions[0]
+                slots.append(dict(run_id=run, readout='self_' + question, status='missing' if missing else 'observed',
+                    label=None if missing else {'evaluation': True}, reason='invalid_response' if missing else None,
+                    evidence=copy.deepcopy(ev), epoch='frozen'))
+        current_ref = put('cumulative_native.json', verified)
+        for ev in evidence.values():
+            ev['verified_finals'] = current_ref
+        for slot in slots:
+            slot['evidence']['verified_finals'] = current_ref
+        original_ref = put('old_native_reversed.json', list(reversed(verified[:2])))
+        originals = copy.deepcopy(slots[:2])
+        for index, slot in enumerate(originals):
+            slot['evidence']['verified_finals'] = original_ref
+            slot['evidence']['verified_index'] = 1 - index
+            slot['evidence']['custody']['older_cut'] = True
+        slots_ref = put('old_slots.json', originals)
+        result = put('old_result.json', dict(schema='causes.supplement_pair_pipeline_result.v1',
+            mode='project', slots=slots_ref, assignments=assignments, occupied=2))
+        peer = put('old_peer.json', dict(accepted_supplement_pair_verified_slots=True,
+            actual=result, slots=slots_ref, assignments=assignments, findings=[]))
+        entries = [dict(result=result, review=peer)]
+        manifest = dict(segments=[dict(payload=slots_ref, physical_measurements=2)])
+        presence = [dict(run_id=run, readout='self_evaluation_presence', status='observed',
+                         label={'evaluation': False}, reason=None, epoch='frozen') for run in ('old', 'new')]
+        occupied = copy.deepcopy(presence + originals)
+        projection = dict(slots=slots, terminal_run_ids=['old', 'new'], existing_presence=presence,
+            pending_incomplete_membership=[dict(measurement_id='pending/strong', run_id='pending')],
+            counts=dict(contexts=2, occupied=4, observed=3, missing=1))
+        args = dict(entries=entries, manifest=manifest, assignments=assignments, members=members,
+                    verified=verified, occupied=occupied, get=get)
+        return args, documents, projection, evidence
+
+    def test_retains_exact_old_pair_and_missingness_with_changed_cumulative_indices(self):
+        args, documents, projection, evidence = self.fixture()
+        before = copy.deepcopy((args['occupied'], documents, projection, evidence))
+        retained = pipeline.retained_pair_ledger(**args)
+        result, mappings = pipeline.remove_verified_retained_pairs(projection, retained, evidence)
+        self.assertEqual(result['terminal_run_ids'], ['new'])
+        self.assertEqual(result['counts'], dict(contexts=1, occupied=2, observed=2, missing=0))
+        self.assertEqual(result['pending_incomplete_membership'], projection['pending_incomplete_membership'])
+        self.assertEqual([row['run_id'] for row in result['existing_presence']], ['new'])
+        self.assertEqual(len(mappings), 2)
+        self.assertNotEqual(mappings[0]['original_evidence']['verified_index'],
+                            mappings[0]['cumulative_evidence']['verified_index'])
+        self.assertEqual((args['occupied'], documents, projection, evidence), before)
+
+    def test_old_pair_missing_or_unknown_ledger_is_rejected(self):
+        for mutate in ('no_ledger', 'missing_manifest', 'removed_member', 'partial_occupied',
+                       'changed_prior_slot', 'wrong_peer', 'duplicate_result'):
+            with self.subTest(mutate=mutate):
+                args, docs, _, _ = self.fixture()
+                if mutate == 'no_ledger': args['entries'] = []
+                elif mutate == 'missing_manifest': args['manifest']['segments'] = []
+                elif mutate == 'removed_member': args['members'] = args['members'][1:]
+                elif mutate == 'partial_occupied': args['occupied'].pop()
+                elif mutate == 'changed_prior_slot': args['occupied'][-1]['reason'] = 'different'
+                elif mutate == 'wrong_peer': docs[args['entries'][0]['review']['path']]['actual'] = {}
+                else: args['entries'].append(copy.deepcopy(args['entries'][0]))
+                with self.assertRaises(ValueError): pipeline.retained_pair_ledger(**args)
+
+    def test_native_identity_or_captured_answer_change_is_rejected(self):
+        for field in ('request_body_sha256', 'final', 'technical_status', 'capture_files'):
+            with self.subTest(field=field):
+                args, _, _, _ = self.fixture()
+                args['verified'][0][field] = 'changed'
+                with self.assertRaisesRegex(ValueError, 'prior_native_row_changed'):
+                    pipeline.retained_pair_ledger(**args)
+
+    def test_retained_labels_reasons_epochs_and_collector_must_match(self):
+        for field in ('status', 'label', 'reason', 'epoch', 'native_collector'):
+            with self.subTest(field=field):
+                args, _, projection, evidence = self.fixture()
+                retained = pipeline.retained_pair_ledger(**args)
+                if field == 'native_collector': evidence[args['members'][0]['measurement_id']][field] = {}
+                else: projection['slots'][0][field] = 'changed'
+                with self.assertRaises(ValueError):
+                    pipeline.remove_verified_retained_pairs(projection, retained, evidence)
+
+    def test_incomplete_previously_imported_pair_is_rejected(self):
+        args, _, projection, evidence = self.fixture()
+        retained = pipeline.retained_pair_ledger(**args)
+        projection['slots'] = projection['slots'][1:]
+        with self.assertRaisesRegex(ValueError, 'retained_pair_not_complete'):
+            pipeline.remove_verified_retained_pairs(projection, retained, evidence)
+
+    def test_occupied_reader_preserves_full_supplement_only_when_requested(self):
+        args, _, _, _ = self.fixture()
+        rows = args['occupied']
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'slots.json'
+            path.write_text(json.dumps(rows))
+            manifest = dict(segments=[dict(payload=pipeline.pin(path), physical_measurements=len(rows))],
+                            physical_measurements=len(rows))
+            default = pipeline.occupied_rows(dict(terminal_slots=len(rows)), manifest, {'old', 'new'}, lambda ref: None)
+            kept = pipeline.occupied_rows(dict(terminal_slots=len(rows)), manifest, {'old', 'new'}, lambda ref: None,
+                                          retain_supplements=True)
+            self.assertEqual(kept, rows)
+            self.assertEqual(default[-1], dict(run_id=rows[-1]['run_id'], readout=rows[-1]['readout']))
+
+
 class SavedPairPipelineTests(unittest.TestCase):
+    def lineage_fixture(self):
+        data, documents, get, membership, actual, review = self.closed_fixture()
+        def put(name, value):
+            raw = pipeline.encoded(value)
+            ref = dict(path='/saved/' + name, bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+            documents[ref['path']] = copy.deepcopy(value)
+            return ref
+        top = documents[actual['path']]
+        template = get(top['roles']['route'])
+        all_rows = get(template['verified_finals'])
+        template.update(schema='causes.finite_supplement_tranche_closed.v1', identity=put('identity.json', {}))
+        base = dict(template, verified_finals=put('base-rows.json', all_rows[:1]), terminal=1,
+                    complete_ids=[all_rows[0]['measurement_id']], new_finals_verified=1)
+        base_ref = put('base.json', base)
+        base_peer = put('base-peer.json', dict(accepted_bounded_finite_tranche_closed=True,
+                                              actual=base_ref, findings=[]))
+        zero = dict(base, schema='causes.finite_zero_claim_closed_extension.v1',
+                    previous=base_ref, previous_review=base_peer, new_claims=0, new_finals_verified=0)
+        zero_ref = put('zero.json', zero)
+        zero_peer = put('zero-peer.json', dict(accepted_bounded_finite_tranche_closed=True,
+                                              actual=zero_ref, findings=[]))
+        delta = dict(template, verified_finals=put('delta-rows.json', all_rows[1:]),
+                     new_finals_verified=1, prior_closed=zero_ref, prior_closed_review=zero_peer,
+                     prior_verified_finals=zero['verified_finals'])
+        delta_ref = put('delta.json', delta)
+        delta_peer = put('delta-peer.json', dict(accepted_bounded_finite_tranche_closed=True,
+                                               actual=delta_ref, findings=[]))
+        final = dict(template, verified_finals=put('empty-rows.json', []), new_finals_verified=0,
+                     prior_closed=delta_ref, prior_closed_review=delta_peer,
+                     prior_verified_finals=delta['verified_finals'])
+        final_ref = put('final.json', final)
+        top['roles']['route'] = final_ref
+        return data, documents, get, membership, actual, review, dict(
+            base=base_ref, zero=zero_ref, delta=delta_ref, final=final_ref)
+
+    def test_cumulative_delta_zero_and_empty_suffix_keep_original_native_indices(self):
+        data, docs, get, membership, actual, review, refs = self.lineage_fixture()
+        before = copy.deepcopy(docs)
+        values, origins = pipeline.combine_verified(data, membership, get, actual, review,
+            'accepted_closed', allow_closed_lineage=True)
+        self.assertEqual([v['measurement_id'] for v in values], membership['measurement_ids'])
+        self.assertEqual([o['actual'] for o in origins], [refs['delta'], refs['base']])
+        self.assertEqual([o['verified_index'] for o in origins], [0, 0])
+        self.assertEqual([len(o['closure_lineage']) for o in origins], [1, 3])
+        for row, origin in zip(values, origins):
+            self.assertEqual(row, get(origin['verified_finals'])[origin['verified_index']])
+            self.assertEqual(row['technical_status'], 'request_failure')
+        self.assertEqual(before, docs)
+
+    def test_delta_closure_requires_explicit_continuation(self):
+        data, _, get, membership, actual, review, _ = self.lineage_fixture()
+        with self.assertRaisesRegex(ValueError, 'role_verification_partition'):
+            pipeline.combine_verified(data, membership, get, actual, review, 'accepted_closed')
+
+    def test_lineage_missing_reordered_duplicated_and_changed_rows_refuse(self):
+        for mode in ('missing', 'duplicate', 'prefix', 'wrong_prior', 'extra_old', 'unqualified'):
+            with self.subTest(mode=mode):
+                data, docs, get, membership, actual, review, refs = self.lineage_fixture()
+                delta, base = docs[refs['delta']['path']], docs[refs['base']['path']]
+                if mode == 'missing': docs[delta['verified_finals']['path']] = []
+                elif mode == 'duplicate':
+                    docs[delta['verified_finals']['path']] = get(base['verified_finals'])
+                elif mode == 'prefix': delta['complete_ids'].reverse()
+                elif mode == 'wrong_prior': delta['prior_verified_finals'] = delta['verified_finals']
+                elif mode == 'extra_old': docs[delta['verified_finals']['path']] += get(base['verified_finals'])
+                else: docs[base['verified_finals']['path']][0]['qualification_error'] = 'kept'
+                with self.assertRaises(ValueError):
+                    pipeline.combine_verified(data, membership, get, actual, review,
+                        'accepted_closed', allow_closed_lineage=True)
+
+    def test_lineage_identity_status_and_accepted_peer_mutations_refuse(self):
+        for scope, field, value in [('base', 'identity', {}), ('base', 'native_collector', {}),
+                ('base', 'native_runner', {}), ('base', 'adapter', {}), ('base', 'role', 'other'),
+                ('base', 'output', '/different'), ('base', 'active', True),
+                ('base', 'terminal', True), ('base', 'full_tranche_qualified', False),
+                ('base', 'qualification_findings', ['bad']), ('base', 'schema', 'unknown'),
+                ('delta', 'new_finals_verified', True), ('zero', 'new_claims', 1),
+                ('zero', 'new_finals_verified', True)]:
+            with self.subTest(scope=scope, field=field):
+                data, docs, get, membership, actual, review, refs = self.lineage_fixture()
+                docs[refs[scope]['path']][field] = value
+                with self.assertRaises(ValueError):
+                    pipeline.combine_verified(data, membership, get, actual, review,
+                        'accepted_closed', allow_closed_lineage=True)
+        data, docs, get, membership, actual, review, refs = self.lineage_fixture()
+        peer = docs[docs[refs['delta']['path']]['prior_closed_review']['path']]
+        peer['accepted_bounded_finite_tranche_closed'] = False
+        with self.assertRaises(ValueError):
+            pipeline.combine_verified(data, membership, get, actual, review,
+                'accepted_closed', allow_closed_lineage=True)
+
+    def test_zero_claim_artifact_and_lineage_plan_identity_cannot_change(self):
+        for mode in ('artifact', 'jobs', 'endpoint', 'output'):
+            with self.subTest(mode=mode):
+                data, docs, get, membership, actual, review, refs = self.lineage_fixture()
+                if mode == 'artifact':
+                    docs[refs['zero']['path']]['verified_finals'] = docs[refs['delta']['path']]['verified_finals']
+                else:
+                    plan = docs[docs[refs['base']['path']]['plan']['path']]
+                    plan[{'jobs':'jobs','endpoint':'endpoint','output':'output_root'}[mode]] = 'changed'
+                with self.assertRaises(ValueError):
+                    pipeline.combine_verified(data, membership, get, actual, review,
+                        'accepted_closed', allow_closed_lineage=True)
+
+    def test_cyclic_ambiguous_or_absent_lineage_predecessors_refuse(self):
+        for mode in ('cycle', 'ambiguous', 'absent'):
+            with self.subTest(mode=mode):
+                data, docs, get, membership, actual, review, refs = self.lineage_fixture()
+                zero = docs[refs['zero']['path']]
+                if mode == 'cycle':
+                    zero['previous'] = refs['zero']
+                    docs[zero['previous_review']['path']]['actual'] = refs['zero']
+                elif mode == 'ambiguous': zero['prior_closed'] = refs['base']
+                else: del zero['previous']
+                with self.assertRaises(ValueError):
+                    pipeline.combine_verified(data, membership, get, actual, review,
+                        'accepted_closed', allow_closed_lineage=True)
+
     def test_complete_metadata_and_custom_acceptance_flags(self):
         data, documents, get = fixture()
         before = copy.deepcopy((data, documents))

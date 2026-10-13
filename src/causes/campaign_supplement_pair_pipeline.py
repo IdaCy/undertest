@@ -145,7 +145,71 @@ def validate_membership(data, get):
     return jobs, membership, assignments, parts
 
 
-def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_flag):
+def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
+    """Expand accepted saved closure deltas without repeating native verification."""
+    seen = set() if seen is None else seen
+    require(role_ref['path'] not in seen and len(seen) < 128, 'closure_lineage_cycle_or_depth')
+    seen.add(role_ref['path'])
+    saved = get(role_ref)
+    schema = saved['schema']
+    require(schema in ('causes.finite_supplement_tranche_closed.v1',
+                       'causes.finite_zero_claim_closed_extension.v1'), 'closure_lineage_schema')
+    require(saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == []
+            and saved['role'] == part['role'] and saved['output'] == part['output_root']
+            and same(saved['identity'], identity) and type(saved['active']) is int
+            and saved['active'] == 0 and same(saved['native_collector'], sources['collector'])
+            and same(saved['native_runner'], sources['runner'])
+            and same(saved['adapter'], sources['adapter']), 'closure_lineage_identity')
+    plan = get(saved['plan'])
+    require(same(plan['jobs'], part['jobs']) and plan['endpoint'] == part['endpoint']
+            and plan['output_root'] == part['output_root'], 'closure_lineage_plan_identity')
+    ids = saved['complete_ids']
+    require(type(ids) is list and all(type(mid) is str and mid for mid in ids)
+            and len(set(ids)) == len(ids) and type(saved['terminal']) is int
+            and saved['terminal'] == len(ids), 'closure_lineage_terminal_ids')
+    reference = saved['verified_finals']
+    rows = get(reference)
+    require(type(rows) is list, 'closure_lineage_rows')
+    previous_rows, origins = [], []
+    zero = schema == 'causes.finite_zero_claim_closed_extension.v1'
+    prior_key = 'previous' if zero else 'prior_closed'
+    review_key = 'previous_review' if zero else 'prior_closed_review'
+    require(not (zero and any(key in saved for key in ('prior_closed', 'prior_closed_review',
+                                                       'prior_verified_finals')))
+            and not (not zero and any(key in saved for key in ('previous', 'previous_review'))),
+            'closure_lineage_ambiguous_predecessor')
+    if prior_key in saved:
+        prior_ref, peer_ref = saved[prior_key], saved[review_key]
+        accepted(get, peer_ref, 'accepted_bounded_finite_tranche_closed', actual=prior_ref)
+        prior = get(prior_ref)
+        previous_rows, origins = closed_lineage_rows(prior_ref, part, sources, identity, get, seen)
+        require(ids[:len(previous_rows)] == prior['complete_ids'], 'closure_lineage_prefix')
+        for origin in origins:
+            origin.setdefault('closure_lineage', []).append(dict(actual=role_ref,
+                previous=prior_ref, review=peer_ref, accepted_flag='accepted_bounded_finite_tranche_closed'))
+        if zero:
+            require(same(reference, prior['verified_finals']) and ids == prior['complete_ids']
+                    and type(saved['new_claims']) is int and saved['new_claims'] == 0
+                    and type(saved['new_finals_verified']) is int
+                    and saved['new_finals_verified'] == 0, 'zero_claim_closure_changed')
+            return previous_rows, origins
+        require(same(saved['prior_verified_finals'], prior['verified_finals']),
+                'closure_lineage_prior_artifact')
+    else:
+        require(not zero and not any(key in saved for key in
+                ('prior_closed_review', 'prior_verified_finals')), 'closure_lineage_missing_predecessor')
+    require(type(saved['new_finals_verified']) is int and saved['new_finals_verified'] == len(rows)
+            and ids == [row['measurement_id'] for row in previous_rows + rows],
+            'closure_lineage_delta_partition')
+    for index, row in enumerate(rows):
+        require('qualification_error' not in row, 'unqualified_lineage_row')
+        origins.append(dict(role=part['role'], actual=role_ref, verified_finals=reference,
+            verified_index=index, row_sha256=hashlib.sha256(encoded(row)).hexdigest()))
+    return copy.deepcopy(previous_rows + rows), origins
+
+
+def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_flag,
+                     *, allow_closed_lineage=False):
     """Reorder accepted native rows, retaining each original artifact and index."""
     closure = get(actual_ref)
     accepted(get, review_ref, acceptance_flag, actual=actual_ref)
@@ -168,7 +232,14 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
                 and same(saved['native_runner'], data['sources']['runner'])
                 and same(saved['adapter'], data['sources']['adapter']), 'role_closure_identity')
         original_ref = saved['verified_finals']
-        rows = get(original_ref)
+        if allow_closed_lineage:
+            rows, row_origins = closed_lineage_rows(role_ref, part, data['sources'],
+                                                   saved['identity'], get)
+        else:
+            rows = get(original_ref)
+            row_origins = [dict(role=role, actual=role_ref, verified_finals=original_ref,
+                verified_index=index, row_sha256=hashlib.sha256(encoded(row)).hexdigest())
+                for index, row in enumerate(rows)]
         expected_ids = [row['measurement_id'] for row in membership['rows'] if row['role'] == role]
         require(type(saved['terminal']) is int and saved['terminal'] == len(rows)
                 and saved['complete_ids'] == [row['measurement_id'] for row in rows]
@@ -178,8 +249,7 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
             mid = row['measurement_id']
             require(mid not in values and 'qualification_error' not in row, 'duplicate_or_unqualified_row')
             values[mid] = copy.deepcopy(row)
-            origins[mid] = dict(role=role, actual=role_ref, verified_finals=original_ref,
-                                verified_index=index, row_sha256=hashlib.sha256(encoded(row)).hexdigest())
+            origins[mid] = row_origins[index]
     require(set(values) == set(membership['measurement_ids'])
             and type(closure['terminal']) is int and closure['terminal'] == len(values),
             'combined_verification_partition')
@@ -216,7 +286,7 @@ def projected_evidence(data, membership, verified_reference, verified):
     return evidence
 
 
-def occupied_rows(previous, manifest, selected_runs, record):
+def occupied_rows(previous, manifest, selected_runs, record, *, retain_supplements=False):
     """Keep a full unique-key index and literal selected presence rows in memory."""
     seen, rows = set(), []
     for segment in manifest['segments']:
@@ -230,12 +300,99 @@ def occupied_rows(previous, manifest, selected_runs, record):
                 seen.add(key)
                 count += 1
                 rows.append(row if row['run_id'] in selected_runs
-                            and row['readout'] == 'self_evaluation_presence'
+                            and (row['readout'] == 'self_evaluation_presence'
+                                 or retain_supplements and row['readout'] in (
+                                     'self_evaluation_strongly_favors',
+                                     'self_evaluation_leans_towards_or_favors'))
                             else dict(run_id=row['run_id'], readout=row['readout']))
         require(count == segment['physical_measurements'], 'previous_segment_count')
     require(len(rows) == previous['terminal_slots'] == manifest['physical_measurements'],
             'previous_total_count')
     return rows
+
+
+def retained_pair_ledger(entries, manifest, assignments, members, verified,
+                         occupied, get):
+    """Prove old pairs against accepted imports and the cumulative native rows."""
+    require(type(entries) is list and entries, 'prior_projection_ledger_required')
+    by_key = {(row['run_id'], row['readout']): row for row in occupied}
+    require(len(by_key) == len(occupied), 'duplicate_previous_slot')
+    member_keys = {(row['run_id'], row['readout']): row for row in members}
+    require(len(member_keys) == len(members), 'duplicate_terminal_slot')
+    current = unique(verified, 'measurement_id', 'duplicate_native_row')
+    segment_refs = {row['payload']['path']: row['payload'] for row in manifest['segments']}
+    retained, seen_results = {}, set()
+    for entry in entries:
+        result = get(entry['result'])
+        require(entry['result']['path'] not in seen_results, 'duplicate_prior_projection')
+        seen_results.add(entry['result']['path'])
+        accepted(get, entry['review'], 'accepted_supplement_pair_verified_slots',
+                 actual=entry['result'], slots=result['slots'], assignments=assignments)
+        require(result['schema'] == 'causes.supplement_pair_pipeline_result.v1'
+                and result['mode'] in ('project', 'continue')
+                and same(result['assignments'], assignments)
+                and same(segment_refs.get(result['slots']['path']), result['slots']),
+                'prior_projection_not_in_current_manifest')
+        slots = get(result['slots'])
+        require(type(slots) is list and slots and type(result['occupied']) is int
+                and result['occupied'] == len(slots), 'prior_projection_count')
+        run_instruments = {}
+        for row in slots:
+            key = (row['run_id'], row['readout'])
+            require(key not in retained and key in member_keys
+                    and same(by_key.get(key), row), 'prior_projection_slot_changed_or_removed')
+            member = member_keys[key]
+            evidence = row['evidence']
+            value = current[member['measurement_id']]
+            index = evidence['verified_index']
+            originals = get(evidence['verified_finals'])
+            require(type(originals) is list and type(index) is int
+                    and 0 <= index < len(originals) and same(originals[index], value),
+                    'prior_native_row_changed')
+            require(evidence['measurement_id'] == member['measurement_id']
+                    and same(evidence['final'], value['final'])
+                    and evidence['request_sha256'] == value['request_body_sha256'],
+                    'prior_measurement_identity_changed')
+            run_instruments.setdefault(key[0], set()).add(key[1])
+            retained[key] = dict(slot=row, prior_result=entry['result'],
+                                 prior_review=entry['review'], prior_slots=result['slots'])
+        require(all(readouts == {'self_evaluation_strongly_favors',
+                                 'self_evaluation_leans_towards_or_favors'}
+                    for readouts in run_instruments.values()), 'partial_prior_pair')
+    require(set(retained) == set(member_keys) & set(by_key), 'unproved_occupied_supplement')
+    return retained
+
+
+def remove_verified_retained_pairs(projection, retained, current_evidence):
+    """Keep old slots literal; only return newly derived, wholly unoccupied pairs."""
+    canonical = {(row['run_id'], row['readout']): row for row in projection['slots']}
+    require(len(canonical) == len(projection['slots']) and set(retained) <= set(canonical),
+            'retained_pair_not_complete')
+    mappings = []
+    for key, proof in retained.items():
+        old, new = proof['slot'], canonical[key]
+        require(same({k: v for k, v in old.items() if k != 'evidence'},
+                     {k: v for k, v in new.items() if k != 'evidence'}),
+                'retained_slot_value_changed')
+        mid = new['evidence']['measurement_id']
+        require(same(old['evidence']['native_collector'],
+                     current_evidence[mid]['native_collector']), 'retained_collector_changed')
+        mappings.append(dict(run_id=key[0], readout=key[1], measurement_id=mid,
+            original_slot_sha256=hashlib.sha256(encoded(old)).hexdigest(),
+            prior_result=proof['prior_result'], prior_review=proof['prior_review'],
+            prior_slots=proof['prior_slots'], original_evidence=copy.deepcopy(old['evidence']),
+            cumulative_evidence=copy.deepcopy(current_evidence[mid])))
+    old_runs = {key[0] for key in retained}
+    slots = [row for row in projection['slots'] if (row['run_id'], row['readout']) not in retained]
+    require(not {row['run_id'] for row in slots} & old_runs, 'partly_retained_pair')
+    result = copy.deepcopy(projection)
+    result.update(slots=slots,
+        terminal_run_ids=[run for run in projection['terminal_run_ids'] if run not in old_runs],
+        existing_presence=[row for row in projection['existing_presence'] if row['run_id'] not in old_runs],
+        counts=dict(contexts=len({row['run_id'] for row in slots}), occupied=len(slots),
+                    observed=sum(row['status'] == 'observed' for row in slots),
+                    missing=sum(row['status'] == 'missing' for row in slots)))
+    return result, mappings
 
 
 def deny_effects(event, args):
@@ -254,15 +411,16 @@ def main():
     request_ref, authority_ref = pin(args.request), pin(args.authority)
     request, authority = checked(request_ref), checked(authority_ref)
     require(request['schema'] == 'causes.supplement_pair_pipeline_request.v1'
-            and request['mode'] == 'project' and same(request['source'], pin(__file__)),
+            and request['mode'] in ('project', 'continue') and same(request['source'], pin(__file__)),
             'request_schema_or_source')
+    mode = request['mode']
     accepted(checked, request['source_review'], 'accepted_supplement_pair_pipeline_source',
              source=request['source'])
     accepted(checked, request['bindings_review'], 'accepted_supplement_pair_pipeline_bindings',
              source=request['source'], source_review=request['source_review'],
-             bindings=request['bindings'], mode='project')
+             bindings=request['bindings'], mode=mode)
     require(authority['root_authorized'] is True and same(authority['request'], request_ref)
-            and authority['mode'] == 'project' and same(authority['source'], request['source'])
+            and authority['mode'] == mode and same(authority['source'], request['source'])
             and type(authority['maximum_invocations']) is int
             and authority['maximum_invocations'] == 1 and authority['automatic_retry'] is False,
             'once_authority')
@@ -297,18 +455,25 @@ def main():
         guard.record(reference)
     jobs, membership, assignments, _ = validate_membership(data, get)
     verified, origins = combine_verified(data, membership, get, binding['verification'],
-        binding['verification_review'], binding['verification_acceptance_flag'])
+        binding['verification_review'], binding['verification_acceptance_flag'],
+        allow_closed_lineage=mode == 'continue')
     previous = get(binding['previous'])
     accepted(get, binding['previous_review'], 'accepted_measurement_segments',
              actual=binding['previous'], assignments=data['assignments'], manifest=previous['manifest'])
     manifest = get(previous['manifest'])
     require(same(manifest['assignments'], data['assignments']), 'previous_assignments')
     occupied = occupied_rows(previous, manifest,
-        {row['run_id'] for row in membership['rows']}, guard)
+        {row['run_id'] for row in membership['rows']}, guard, retain_supplements=mode == 'continue')
+    retained = {}
+    if mode == 'continue':
+        retained = retained_pair_ledger(binding['prior_projections'], manifest,
+            data['assignments'], membership['rows'], verified, occupied, get)
+    else:
+        require(not binding.get('prior_projections'), 'continuation_mode_required')
     output.mkdir()
     writer = LimitedWriter(output, limit)
     intent = writer.save('INTENT.v1.json', dict(request=request_ref, authority=authority_ref,
-        source=request['source'], mode='project', at=datetime.datetime.now(datetime.timezone.utc).isoformat()))
+        source=request['source'], mode=mode, at=datetime.datetime.now(datetime.timezone.utc).isoformat()))
     verified_ref = writer.save('VERIFIED_FINALS.derived.v1.json', verified)
     derivation = writer.save('VERIFICATION_ORIGINS.v1.json', dict(
         actual=binding['verification'], review=binding['verification_review'],
@@ -322,7 +487,15 @@ def main():
                 for value, row in zip(evidence.values(), verified)), 'combined_artifact_index_identity')
     projection = projector.project_verified_supplement_pairs(jobs=jobs,
         epochs=assignments['epochs'], terminal_membership=membership['rows'],
-        verified_finals=verified, occupied_rows=occupied, evidence_by_measurement=evidence)
+        verified_finals=verified,
+        occupied_rows=[row for row in occupied if (row['run_id'], row['readout']) not in retained],
+        evidence_by_measurement=evidence)
+    retained_ref = None
+    if mode == 'continue':
+        projection, mappings = remove_verified_retained_pairs(projection, retained, evidence)
+        retained_ref = writer.save('RETAINED_PAIRS.v1.json', dict(rows=mappings,
+            original_slots_preserved=True, emitted_again=0,
+            previous=binding['previous'], previous_review=binding['previous_review']))
     slots = writer.save('SLOTS.v1.json', projection['slots'])
     membership_ref = writer.save('MEMBERSHIP.v1.json', dict(
         terminal_run_ids=projection['terminal_run_ids'],
@@ -330,7 +503,7 @@ def main():
         source_membership=data['membership'], verification=binding['verification']))
     presence = writer.save('EXISTING_PRESENCE.v1.json', projection['existing_presence'])
     guard.finish()
-    result = dict(schema='causes.supplement_pair_pipeline_result.v1', mode='project',
+    result = dict(schema='causes.supplement_pair_pipeline_result.v1', mode=mode,
         slots=slots, membership=membership_ref, existing_presence=presence,
         verified_finals=verified_ref, verification_origins=derivation,
         counts=projection['counts'], occupied=projection['counts']['occupied'],
@@ -343,6 +516,9 @@ def main():
         verified_named_files=len(guard.identities), host_calls=0, model_calls=0,
         queue_invocations=0, original_writes=0, analysis_performed=False,
         max_output_bytes=limit, prior_output_bytes=writer.written)
+    if mode == 'continue':
+        result.update(retained_pairs=retained_ref, retained_slots=len(retained),
+                      prior_projections=binding['prior_projections'])
     print(json.dumps(writer.save('RESULT.v1.json', result)), flush=True)
 
 
