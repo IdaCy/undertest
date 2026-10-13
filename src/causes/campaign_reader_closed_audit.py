@@ -10,6 +10,8 @@ def get(p):return json.loads(Path(p).read_bytes())
 def ck(r):return get(verify(r))
 def imp(name,r):
  verify(r);s=importlib.util.spec_from_file_location(name,r['path']);m=importlib.util.module_from_spec(s);sys.modules[name]=m;s.loader.exec_module(m);return m
+def runtime_for_plan(runtime,plan):
+ return runtime.bind_for_plan(plan) if 'cohort_extension' in plan else runtime
 def validate_descriptor(settings):
  fields={'schema','root','actual','plan','prior_progress','direct_binding','capture_execution','capture_source','reader_source','prepared','startup_actual_path','output'}
  assert type(settings) is dict, 'descriptor_fields'
@@ -165,7 +167,9 @@ def review_saved_closed(descriptor_ref):
    for kind,who in [('actor',proc['identity']),('supervisor',sup['supervisor'])]:assert all(who[k]==prior['before'][kind]['actual'][k]for k in ('pid','start_ticks','argv'))
  raw=verify(a['journal']).read_bytes();assert raw==verify(a['journal_original']).read_bytes() and raw.endswith(b'\n');rows=[json.loads(x)for x in raw.splitlines()];result=ck(a['runtime_result']);assert result['journal']==a['journal_original']
  if prior is not None:assert raw.startswith(verify(prior['journal']['saved']).read_bytes())
- runtime=imp('historical_continuation_saved_reader_review',a['reader_source']);mods=runtime.native_modules();capture=imp('historical_continuation_saved_closed_capture',a['source'])
+ runtime=imp('historical_continuation_saved_reader_review',a['reader_source'])
+ runtime=runtime_for_plan(runtime,plan)
+ mods=runtime.native_modules();capture=imp('historical_continuation_saved_closed_capture',a['source'])
  loaded=runtime.load(a['plan'],a['plan_review'],mods);loaded_plan,loaded_prep,assigned,ready,config,baseline,states=loaded
  assert loaded_plan==plan and loaded_prep==prep
  validate_cohort_counts(cohort_kind,runtime,plan,prep,assigned)
