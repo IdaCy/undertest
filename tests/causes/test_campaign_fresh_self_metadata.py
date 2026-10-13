@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -87,6 +88,99 @@ class FreshSelfMetadataTests(unittest.TestCase):
                              base_result=result,base_review=base_peer,previous_preparation=parent,previous_review=parent_peer,
                              materialize_template=self.put(self.materialize),readout_template=self.put(self.readout),pairs=self.pairs)
         self.descriptor_ref=self.put(self.descriptor)
+
+    def extra_supplement(self, run='second-supplement'):
+        phase=self.put({'phase':run})
+        phase_peer=self.put(dict(accepted_saved_corpus_self_phase_cut=True,actual=phase))
+        ids=[run+'/strongly',run+'/leans']
+        member=self.put(dict(kind='supplement_phase',actual=phase,review=phase_peer,
+                             terminal_run_ids=[run],terminal_measurement_ids=ids))
+        extra=planner.slots(run)-{(run,'self_'+planner.SELF[0])}
+        rows=[dict(measurement_id=mid,run_id=run,source_kind='historical_extra_self',
+                   custody=dict(membership=member,actual=phase,review=phase_peer))for mid in ids]
+        manifest=self.put(dict(parts=[dict(membership=member,actual=phase,review=phase_peer,count=1)],
+                               rows=rows,new_slot_keys=[list(k)for k in sorted(extra)]))
+        result=self.put(dict(source=self.source,manifest=manifest,new_physical_measurements=2))
+        review=self.put(dict(accepted_historical_extra_self_measurement_readout=True,actual=result,
+                             source=self.source,manifest=manifest,counts=dict(new_physical_measurements=2)))
+        return dict(accepted_supplement_result=result,accepted_supplement_review=review,
+                    supplement_membership=member,phase=phase,phase_review=phase_peer,
+                    exact_supplement_run_ids=[run],exact_supplement_slots=[list(k)for k in sorted(extra)],
+                    historical_unavailable_run_ids=['unavailable'])
+
+    def two_supplement_descriptor(self):
+        second=self.extra_supplement()
+        self.occupied.update(planner.slots('second-supplement'));self.refresh()
+        entries=[copy.deepcopy(self.parent['historical_supplement_accounting']),second]
+        self.descriptor['historical_supplement_accounting']=entries
+        return entries
+
+    def test_two_accepted_supplements_cover_the_complete_union(self):
+        entries=self.two_supplement_descriptor()
+        with patch.object(Path,'mkdir',side_effect=AssertionError('read-only plan wrote')):
+            artifacts=planner.plan(self.put(self.descriptor))
+        result=artifacts['PREPARATION.v1.json']
+        self.assertEqual(result['historical_supplement_accounting'],entries)
+        self.assertEqual(result['old_fresh_groups'],1)
+        self.assertEqual(result['new_measurement_slots'],12)
+        self.assertEqual(result['prospective_total_measurements'],24)
+
+    def test_legacy_single_proof_keeps_its_dictionary_and_counts(self):
+        result=planner.plan(self.descriptor_ref)['PREPARATION.v1.json']
+        self.assertEqual(result['historical_supplement_accounting'],
+                         self.parent['historical_supplement_accounting'])
+        self.assertIsInstance(result['historical_supplement_accounting'],dict)
+        self.assertEqual(result['prospective_total_measurements'],21)
+
+    def test_inherited_proof_list_needs_no_descriptor_override(self):
+        entries=self.two_supplement_descriptor()
+        self.parent['historical_supplement_accounting']=entries;self.refresh()
+        result=planner.plan(self.descriptor_ref)['PREPARATION.v1.json']
+        self.assertEqual(result['historical_supplement_accounting'],entries)
+
+    def test_proof_prefix_cannot_be_removed_reordered_or_changed(self):
+        entries=self.two_supplement_descriptor()
+        self.parent['historical_supplement_accounting']=entries;self.refresh()
+        changed=copy.deepcopy(entries);changed[0]['exact_supplement_run_ids']=['replacement']
+        for invalid in [entries[1:],entries[::-1],changed]:
+            with self.subTest(invalid=invalid):
+                self.descriptor['historical_supplement_accounting']=invalid
+                with self.assertRaisesRegex(ValueError,'historical_accounting_prefix'):
+                    planner.plan(self.put(self.descriptor))
+
+    def test_empty_or_malformed_proof_list_refuses(self):
+        for invalid in [[],[None],None]:
+            with self.subTest(invalid=invalid):
+                self.descriptor['historical_supplement_accounting']=invalid
+                with self.assertRaisesRegex(ValueError,'historical_accounting_schema'):
+                    planner.plan(self.put(self.descriptor))
+
+    def test_duplicate_supplement_groups_refuse(self):
+        old=self.parent['historical_supplement_accounting']
+        self.descriptor['historical_supplement_accounting']=[old,copy.deepcopy(old)]
+        with self.assertRaisesRegex(ValueError,'historical_supplement_overlap'):
+            planner.plan(self.put(self.descriptor))
+
+    def test_supplements_must_keep_the_same_unavailable_set(self):
+        entries=self.two_supplement_descriptor()
+        entries[1]['historical_unavailable_run_ids']=['another-unavailable']
+        with self.assertRaisesRegex(ValueError,'historical_unavailable_changed'):
+            planner.plan(self.put(self.descriptor))
+
+    def test_each_supplement_requires_its_actual_acceptance(self):
+        entries=self.two_supplement_descriptor()
+        peer=planner.load(entries[1]['accepted_supplement_review'])
+        peer['accepted_historical_extra_self_measurement_readout']=False
+        entries[1]['accepted_supplement_review']=self.put(peer)
+        with self.assertRaisesRegex(ValueError,'accepted_metadata_join'):
+            planner.plan(self.put(self.descriptor))
+
+    def test_accepted_supplement_must_already_occupy_base_slots(self):
+        second=self.extra_supplement()
+        self.descriptor['historical_supplement_accounting']=[
+            self.parent['historical_supplement_accounting'],second]
+        with self.assertRaisesRegex(ValueError,'supplement_occupied_slots'):
+            planner.plan(self.put(self.descriptor))
 
     def test_five_producers_exact_historical_accounting_and_zero_skip(self):
         with patch.object(Path,'mkdir',side_effect=AssertionError('read-only plan wrote')):

@@ -127,6 +127,27 @@ def historical_groups(accounting, occupied):
     return runs, unavailable
 
 
+def historical_union(descriptor, parent, occupied):
+    """Extend accepted supplement accounting without dropping earlier proofs."""
+    previous = parent['historical_supplement_accounting']
+    accounting = descriptor.get('historical_supplement_accounting', previous)
+    prior_entries = previous if isinstance(previous, list) else [previous]
+    entries = accounting if isinstance(accounting, list) else [accounting]
+    require(prior_entries and entries
+            and all(isinstance(entry, dict) for entry in prior_entries + entries),
+            'historical_accounting_schema')
+    require(entries[:len(prior_entries)] == prior_entries, 'historical_accounting_prefix')
+    supplement = set()
+    unavailable = None
+    for entry in entries:
+        runs, missing = historical_groups(entry, occupied)
+        require(not supplement.intersection(runs), 'historical_supplement_overlap')
+        require(unavailable is None or missing == unavailable, 'historical_unavailable_changed')
+        supplement.update(runs)
+        unavailable = missing
+    return accounting, supplement, unavailable
+
+
 def plan(descriptor_ref):
     """Return deterministic artifacts for an ordered list of native producer pairs."""
     descriptor = load(descriptor_ref)
@@ -150,8 +171,7 @@ def plan(descriptor_ref):
         ids = proof['ordered_intersection']
         require(len(ids) == len(set(ids)) and not prior_fresh.intersection(ids), 'previous_group_duplicate')
         prior_fresh.update(ids)
-    accounting = parent['historical_supplement_accounting']
-    supplement, unavailable = historical_groups(accounting, occupied)
+    accounting, supplement, unavailable = historical_union(descriptor, parent, occupied)
     complete = {run for run, name in occupied if name == 'self_'+SELF[0] and slots(run) <= occupied}
     require(not prior_fresh.intersection(supplement | unavailable)
             and complete == prior_fresh | supplement | unavailable, 'complete_prior_group_union')
