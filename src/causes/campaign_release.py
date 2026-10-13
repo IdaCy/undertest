@@ -1,8 +1,8 @@
-"""Separately reviewed release-only composition over an unchanged native runtime.
+"""Release-only composition with explicit optional stack/host transitions.
 
-Allocation reconstructions in registration validation use per-instance caches.
-Every original predicate and freshness/live check still executes; the source
-pair and full input bytes are rechecked each pass.
+Allocation reconstructions use per-instance caches. Transition-free behavior is
+unchanged; the shared transition contract separates archived source-host custody
+from current owner checks. All source/input pins and fresh live gates remain.
 """
 import argparse
 import copy
@@ -35,7 +35,8 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
     base = reader(lineage['base_policy'])
     base_registration = reader(lineage['base_registration'])
     review = reader(lineage['base_review'])
-    require(base['schema'] == 'causes.campaign_monitor_policy.v1'
+    require((base['schema'] == 'causes.campaign_monitor_policy.v1'
+             or (policy.get('stack_transition') is not None and base['schema'] == succession.POLICY_SCHEMA))
             and review.get('accepted_native_succession_base') is True
             and review.get('policy') == lineage['base_policy']
             and review.get('registration') == lineage['base_registration'],
@@ -45,10 +46,13 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
             and policy['sync_roots'][:count] == base['sync_roots']
             and base_registration['phase'] == base['phases'][-1]['phase'],
             'native_base_root_order_changed')
-    for key in ('controller_host', 'transfer_host', 'host_transfer', 'provider',
-                'tunnels', 'reverse_listener_process', 'provider_port', 'relay_port',
-                'model', 'model_key', 'max_model_len', 'holds', 'remote_base'):
-        require(policy[key] == base[key], 'native_base_binding_changed:' + key)
+    transition = succession.native_stack_transition(policy, reader)
+    require(registration.get('stack_transition') == policy.get('stack_transition'), 'native_registration_transition_changed')
+    binding = transition['stack']['bindings'] if transition else base
+    current_config = transition['value']['current_config'] if transition else base['phases'][-1]['controller_config']
+    custody_reader = succession.native_custody_reader(transition, reader)
+    for key in succession.STACK_BINDING_KEYS:
+        require(policy[key] == binding[key], 'native_base_binding_changed:' + key)
     require(policy['minimum_gpu_free_mib'] >= base['minimum_gpu_free_mib']
             and policy['max_observation_age_seconds'] <= base['max_observation_age_seconds'],
             'native_observation_limits_weakened')
@@ -62,9 +66,11 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
                 and link['predecessor']['output_root'] == previous['output_root']
                 and link['predecessor']['process'] == previous['process'],
                 'native_predecessor_order_changed')
-        closed_predecessor(link['predecessor'], reader)
+        closed_predecessor(link['predecessor'], custody_reader)
         allocation = accepted(link['allocation'], 'accepted_native_corpus_allocation',
                               'allocation', reader)
+        if transition is not None:
+            require(allocation['controller_host'] == policy['controller_host'], 'native_stack_allocation_host_changed')
         if index == len(phases) - 1:
             require(link['allocation']['evidence'] == allocation_ref, 'release_final_allocation_changed')
             validate_native_allocation(allocation, reader, cache=allocation_cache)
@@ -88,7 +94,7 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
                 and allocation['output_root'] == phase['output_root']
                 and allocation['family'] == phase['runtime_cohort']
                 and allocation['jobs'] == phase['controller_jobs']
-                and allocation['config'] == phase['controller_config'] == base['phases'][-1]['controller_config']
+                and allocation['config'] == phase['controller_config'] == current_config
                 and allocation['workers'] == phase['workers']
                 and allocation['no_fixed_study_pooling'] is True
                 and phase['capacity_required'] is True,
@@ -116,9 +122,17 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
     old_scopes = base['history']['donor_scopes']
     require(scopes[:len(old_scopes)] == old_scopes, 'native_base_donor_history_changed')
     local = [row for row in scopes if row['host'] == policy['controller_host']]
-    require([row['output_root'] for row in local] == [p['output_root'] for p in phases[:-1]]
+    expected_local = ([p['output_root'] for p in phases[:-1]] if transition is None else
+                      [p['output_root'] for p in transition['exclusion']['donor_histories']] +
+                      [p['output_root'] for p in phases[count:-1]])
+    require([row['output_root'] for row in local] == expected_local
             and all(row['mode'] == 'sealed' and row['recorder_relevant'] is True for row in local),
             'native_closed_donor_scope_changed')
+    if transition is not None:
+        archived = [row for row in registration['donor_histories'] if row['host'] == transition['value']['source_host']]
+        require(archived == transition['archive']['donor_histories'], 'native_archived_donors_changed')
+        require([row for row in registration['donor_histories'] if row['host'] == policy['controller_host']][:len(transition['exclusion']['donor_histories'])]
+                == transition['exclusion']['donor_histories'], 'native_current_donors_changed')
     require(registration['donor_histories'] == phases[-1]['donor_histories'],
             'native_donor_registration_changed')
     projection = [{key: row[key] for key in ('host', 'output_root', 'mode', 'recorder_relevant')}
@@ -126,8 +140,9 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
     require(projection == scopes, 'native_donor_history_missing')
     for link in links:
         predecessor = link['predecessor']
-        closure = closed_predecessor(predecessor, reader)
-        donors = [row for row in registration['donor_histories'] if row['host'] == policy['controller_host'] and row['output_root'] == predecessor['output_root']]
+        closure = closed_predecessor(predecessor, custody_reader)
+        host = succession.native_predecessor_host(policy, predecessor, transition)
+        donors = [row for row in registration['donor_histories'] if row['host'] == host and row['output_root'] == predecessor['output_root']]
         require(len(donors) == 1 and donors[0]['journal'] == closure['journal'], 'native_closed_history_pin_changed')
     return links[-1]
 
@@ -151,10 +166,15 @@ def validate_release_registration(reg, policy, reader=h.checked, *, allocation_r
             and type(controller['workers']) is int
             and controller['workers'] == phase['workers'], 'controller_scope_changed')
     require(phase['process'] is not None and controller['process'] == phase['process'], 'exact_owner_required')
-    require([r['output_root'] for r in reg['prior_local_owners']] == [p['output_root'] for p in phases[:index]],
+    from causes.campaign_corpus_succession import native_stack_transition, native_local_owners
+    transition = native_stack_transition(policy, reader)
+    prior = native_local_owners(policy, transition, reader) if transition else phases[:index]
+    require([r['output_root'] for r in reg['prior_local_owners']] == [p['output_root'] for p in prior],
             'prior_owner_root_order_changed')
-    require([r['process'] for r in reg['prior_local_owners']] == [p['process'] for p in phases[:index]],
+    require([r['process'] for r in reg['prior_local_owners']] == [p['process'] for p in prior],
             'prior_owner_identity_changed')
+    if transition is not None:
+        require(reg['prior_local_owners'] == prior, 'native_current_owner_projection_changed')
     for key in ('controller_templates', 'controller_jobs', 'controller_config'):
         require(reg[key] == phase[key], 'controller_input_policy_changed')
     require(reg['runtime_cohort'] == phase['runtime_cohort'], 'runtime_cohort_changed')
@@ -182,7 +202,7 @@ def validate_release_registration(reg, policy, reader=h.checked, *, allocation_r
     require(manifest['mi_reservation'] == transfer['mi_reservation']
             and manifest['jobs'] == transfer['original_phase02_jobs']
             and manifest['target_output_roots'] == transfer['target_output_roots']
-            and manifest['target_host'] == policy['controller_host']
+            and manifest['target_host'] == (transition['value']['source_host'] if transition else policy['controller_host'])
             and manifest.get('all_target_ids_unissued_on_both_hosts') is True
             and manifest.get('prior_phase01_retired') is True, 'transfer_manifest_changed')
     templates = reader(reg['controller_templates'])
@@ -248,11 +268,14 @@ def validate_release_registration(reg, policy, reader=h.checked, *, allocation_r
             require(any(Path(ref['path']).name == name and ref['sha256'] == sha for ref in expected_sources), 'allocator_source_changed')
         require(reg['donor_histories'] == phase['donor_histories'] and reg['donor_histories'], 'donor_history_binding_required')
         require([row['output_root'] for row in reg['donor_histories'] if row['host'] == policy['controller_host']]
-                == [p['output_root'] for p in phases[:index]], 'prior_local_history_missing')
+                == ([p['output_root'] for p in phases[:index]] if transition is None else
+                    [p['output_root'] for p in transition['exclusion']['donor_histories']] +
+                    [p['output_root'] for p in phases[len(transition['base']['phases']):index]]), 'prior_local_history_missing')
         history = policy['history']
         projected = [{k:row[k] for k in ('host','output_root','mode','recorder_relevant')} for row in reg['donor_histories']]
         require(projected == history['donor_scopes'], 'required_donor_scope_changed')
-        require(all(row['host'] in (policy['transfer_host'],policy['controller_host']) and row['mode'] in ('sealed','live_prefix')
+        require(all(row['host'] in (policy['transfer_host'], policy['controller_host'],
+                                                  transition['value']['source_host'] if transition else policy['controller_host']) and row['mode'] in ('sealed','live_prefix')
                     and type(row['recorder_relevant']) is bool for row in projected), 'invalid_donor_scope')
         models = [reader(ref) for ref in history['model_configs']]
         require(models and all(cfg['model'] == policy['model'] for cfg in models), 'same_provider_alias_model_changed')
@@ -360,10 +383,16 @@ class ReleaseOnlyNativeAdmission(admission.NativeAdmission):
         for key in ('provider', 'host_transfer', 'legacy_owners'):
             require(foundation[key] == p[key], 'native_foundation_changed:' + key)
         require(foundation['predecessors'] == p['predecessors'], 'native_foundation_predecessors_changed')
-        for key in ('legacy_owners_healthy', 'provider_tunnels_healthy', 'original_transfer_present',
-                    'donor_histories_clear', 'native_no_active_owned_work', 'all_predecessors_absent_and_unlocked'):
+        from causes.campaign_corpus_succession import native_transition_foundation
+        transition = native_transition_foundation(p, foundation)
+        flags = ('legacy_owners_healthy', 'provider_tunnels_healthy', 'original_transfer_present',
+                 'donor_histories_clear', 'native_no_active_owned_work')
+        if transition is None:
+            flags += ('all_predecessors_absent_and_unlocked',)
+        for key in flags:
             require(foundation[key] is True, 'native_foundation_not_clear:' + key)
-        donor_cuts_clear(p['history'], p['donor_histories'], foundation['donor_cuts'])
+        donor_cuts_clear(p['history'], p['donor_histories'], foundation['donor_cuts'],
+                         transition['fault_applicability'] if transition else None)
         for ref in foundation['evidence_pins']: h.checked_bytes(ref)
         if action == self.release_action:
             ready = accepted(x['startup'], 'accepted_native_startup_consumers', 'readiness'); recent(ready['at'])
