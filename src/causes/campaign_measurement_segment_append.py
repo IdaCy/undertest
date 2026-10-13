@@ -16,6 +16,8 @@ GROUPS = {
     'reader': ('reader_presence', 'reader_strongly_favors', 'reader_leans_towards_or_favors'),
     'self': ('self_evaluation_presence', 'self_evaluation_strongly_favors',
              'self_evaluation_leans_towards_or_favors'),
+    'self_supplement': ('self_evaluation_strongly_favors',
+                        'self_evaluation_leans_towards_or_favors'),
 }
 
 
@@ -231,6 +233,11 @@ def derive(bindings_reference):
     for descriptor in additions:
         rows, _, groups = load_segment(descriptor, reuse, bindings['assignments'], assignments, new=True)
         for group in groups:
+            if descriptor['group']['kind'] == 'self_supplement':
+                # Presence belongs to the accepted predecessor, including a missing slot.
+                # A presence added in this pass cannot qualify the supplementary pair.
+                require((group[0][0], 'self_evaluation_presence') in old_keys,
+                        'supplement_requires_existing_presence')
             require(selector.admit(group), 'occupied_measurement_group_cannot_be_replayed')
         new_rows.extend(rows)
     old_digest, new_digest = rows_digest(old_rows), rows_digest(new_rows)
