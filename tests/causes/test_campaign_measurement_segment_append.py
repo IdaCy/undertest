@@ -260,6 +260,102 @@ class SegmentAppendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'append_request_not_authorized'):
                     append.run(self.write('wrong-type', changed))
 
+    def test_supplement_pair_preserves_observed_and_missing_presence(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                presence = self.row('t', 'self_evaluation_presence', missing=missing, epoch=False)
+                descriptors = [self.previous_segments[0],
+                               self.segment([presence], 'slots', new=False)]
+                old_rows = self.base_rows + [presence]
+                previous = self.make_previous(descriptors, old_rows)
+                pair = [self.row('t', name, missing=index == 1)
+                        for index, name in enumerate(append.GROUPS['self_supplement'])]
+                addition = self.segment(pair, 'output_slots', group_kind='self_supplement',
+                                        count='counts.occupied')
+                before = {d['segment']['payload']['path']:
+                          Path(d['segment']['payload']['path']).read_bytes()
+                          for d in descriptors + [addition]}
+                derived = append.derive(self.bindings(previous=previous,
+                    previous_segments=descriptors, additions=[addition]))
+                self.assertEqual(derived[-1]['old_rows_sha256'], append.rows_digest(old_rows))
+                self.assertEqual(derived[-1]['added_slots'], 2)
+                self.assertEqual(derived[-1]['added_status_counts'], {'observed': 1, 'missing': 1})
+                self.assertEqual(derived[-2]['terminal_slots'], 9)
+                self.assertEqual(derived[-2]['counts']['self_evaluation_presence'],
+                                 append.coverage(old_rows, self.assignments)['counts']['self_evaluation_presence'])
+                self.assertEqual(derived[-3]['segments'][:2], [d['segment'] for d in descriptors])
+                for path, body in before.items():
+                    self.assertEqual(Path(path).read_bytes(), body)
+
+    def test_supplement_requires_presence_in_accepted_predecessor(self):
+        pair = self.segment([self.row('x', name) for name in append.GROUPS['self_supplement']],
+                            'slots', group_kind='self_supplement')
+        with self.assertRaisesRegex(ValueError, 'supplement_requires_existing_presence'):
+            append.derive(self.bindings(additions=[pair]))
+        # Even a complete self group earlier in the same pass cannot supply the prerequisite.
+        with self.assertRaisesRegex(ValueError, 'supplement_requires_existing_presence'):
+            append.derive(self.bindings(additions=[self.additions[1], pair]))
+
+    def test_supplement_partial_and_complete_replay_refuse(self):
+        for run, reason in [('t', 'partial_measurement_group_overlap'),
+                            ('b', 'occupied_measurement_group_cannot_be_replayed')]:
+            with self.subTest(run=run):
+                addition = self.segment([self.row(run, name) for name in append.GROUPS['self_supplement']],
+                                        'slots', group_kind='self_supplement')
+                with self.assertRaisesRegex(ValueError, reason):
+                    append.derive(self.bindings(additions=[addition]))
+
+    def test_supplement_partial_extra_and_null_groups_refuse(self):
+        pair = [self.row('x', name) for name in append.GROUPS['self_supplement']]
+        for rows in (pair[:1], pair + [self.row('x', 'self_evaluation_presence')],
+                     pair + [self.row('x', 'reader_presence')]):
+            with self.subTest(readouts=[r['readout'] for r in rows]):
+                addition = self.segment(rows, 'slots', group_kind='self_supplement')
+                with self.assertRaisesRegex(ValueError, 'partial_or_extra_instrument_group'):
+                    append.derive(self.bindings(additions=[addition]))
+        addition = self.segment(pair, 'slots', group_kind='self_supplement')
+        addition['group'] = None
+        with self.assertRaisesRegex(ValueError, 'complete_instrument_group_required'):
+            append.derive(self.bindings(additions=[addition]))
+
+    def test_supplement_duplicate_and_nonterminal_presence_refuse(self):
+        presence = self.row('x', 'self_evaluation_presence')
+        addition = self.segment([self.row('x', name) for name in append.GROUPS['self_supplement']],
+                                'slots', group_kind='self_supplement')
+        for rows, reason in [([presence, presence], 'duplicate_physical_measurement'),
+                             ([dict(presence, status='pending')], 'terminal_measurement_required')]:
+            with self.subTest(reason=reason):
+                descriptors = [self.previous_segments[0], self.segment(rows, 'slots', new=False)]
+                previous = self.make_previous(descriptors, self.base_rows + rows)
+                with self.assertRaisesRegex(ValueError, reason):
+                    append.derive(self.bindings(previous=previous,
+                        previous_segments=descriptors, additions=[addition]))
+
+    def test_supplement_terminal_membership_and_duplicate_runs(self):
+        descriptors = [self.previous_segments[0], self.segment(self.old_rows[:1], 'slots', new=False)]
+        previous = self.make_previous(descriptors, self.base_rows + self.old_rows[:1])
+        addition = self.segment([self.row('t', name) for name in append.GROUPS['self_supplement']],
+                                'slots', group_kind='self_supplement')
+        for runs, valid in [(['t'], True), (['t', 't'], False), (['t', 'x'], False)]:
+            with self.subTest(runs=runs):
+                current = copy.deepcopy(addition)
+                result = append.checked(current['segment']['result'])
+                del result['selected_run_ids']
+                result['membership'] = self.write('membership', {'terminal_run_ids': runs})
+                ref = self.write('result', result)
+                current['segment']['result'] = ref
+                current['segment']['review'] = self.write('review', dict(result, actual=ref,
+                    accepted_fixture_segment=True, findings=[]))
+                current['group']['membership'] = 'terminal_run_ids'
+                binding = self.bindings(previous=previous, previous_segments=descriptors,
+                                        additions=[current])
+                if valid:
+                    self.assertEqual(append.derive(binding)[-1]['added_slots'], 2)
+                else:
+                    reason = 'new_duplicate_or_empty_groups' if len(set(runs)) < len(runs) else 'partial_or_extra_instrument_group'
+                    with self.assertRaisesRegex(ValueError, reason):
+                        append.derive(binding)
+
 
 if __name__ == '__main__':
     unittest.main()
