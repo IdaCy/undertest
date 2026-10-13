@@ -218,7 +218,8 @@ def native_lineage(policy, registration, reader=h.checked):
                     and ((allocation['max_full'] > 0) == bool(full_selection)),
                     'native_continuation_workload_changed')
         else:
-            require(allocation['workload'] == 'mixed' and allocation['max_full'] > 0,
+            require((allocation['workload'] == 'mixed' and allocation['max_full'] > 0)
+                    or (allocation['workload'] == 'prefix_only' and allocation['max_full'] == 0),
                     'native_qualification_workload_changed')
         if index == len(phases) - 1:
             argv = registration['controller']['process']['argv']
@@ -365,7 +366,7 @@ def native_allocation(value, reader=h.checked, *, cache=None, _control_reader=No
     require(value['workload'] == ('mixed' if full else 'prefix_only')
             and bool(full) == (value['max_full'] > 0), 'native_allocation_workload_changed')
     if value['target_mode'] == 'finite_qualification':
-        require(full and value['control'] is None and extensions == []
+        require(value['control'] is None and extensions == []
                 and value['selection']['block_index'] == 0, 'native_finite_scope_changed')
         block = allocator.block(0)
         by_id = {job['allocation']['run_id']: job for job in block['jobs']}
@@ -375,7 +376,8 @@ def native_allocation(value, reader=h.checked, *, cache=None, _control_reader=No
                 and h.encoded(jobs) == h.encoded([by_id[rid] for rid in selected]),
                 'native_finite_selection_changed')
         modes = [job['allocation']['continue_to_end'] for job in jobs]
-        require(True in modes and False in modes, 'native_finite_exposure_scope_empty')
+        require(False in modes and ((True in modes) == bool(full)),
+                'native_finite_exposure_scope_empty')
     else:
         require(value['target_mode'] == 'continuous_corpus' and jobs == []
                 and value['selection'] is None and value['control'] == value['allocation_control']
