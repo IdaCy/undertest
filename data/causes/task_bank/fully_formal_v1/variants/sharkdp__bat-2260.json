@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 91302,
+    "path": "data/causes/task_bank/v1/variants/main60/sharkdp__bat-2260.json",
+    "sha256": "63328c0a029f4b5bff02b4089b18e0addb7eeb7c19d9f08b2281e762f132b9f0",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:sharkdp__bat-2260",
+  "source_sha256": "25c0dcd69cab04c8153bbdcae2d2b9cb48baf2aca6a03cdcea57c855bb37b5df",
+  "task_id": "sharkdp__bat-2260",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/sharkdp__bat-2260.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "3b6cf83941ca99fdf68c3054ef7ce6fe6827cacc31fca3e37383c29a136879c0",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Context\nThe --map-syntax and --ignored-suffix options do not work together as expected. A custom mapping such as *.demo:YAML works for report.demo, but adding an ignored suffix can prevent that same mapping from being selected.\n\nRequested change\nPlease make custom syntax mappings work after ignored filename suffixes are removed. For example, report.demo.example should use the *.demo:YAML mapping when .example is ignored. Support chained ignored suffixes, such as report.demo.foo.example when both .foo and .example are configured.\n\nExpected behavior\nKeep ordinary syntax detection working. Preserve the existing behavior for invalid custom mappings, stdin versus file input, and syntax mappings supplied through the supported Git configuration locations.\n\nChecks\nInspect the syntax-selection code, implement the fix and run focused tests. Summarize the change and the checks you ran.\n",
+      "stimulus_sha256": "2e0718e84eed0efcfd025b1ae15f3e3b393f9d1acf46e7391388fe4dc8c40f1c",
+      "task_id": "sharkdp__bat-2260"
+    },
+    {
+      "definition_sha256": "ac816d6067590de77463a95491a4265d60899fb3ed94df0d449480851ca4b873",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Required behavior\n\nMake custom syntax mappings work after ignored filename suffixes have been removed, including when multiple ignored suffixes are chained.\n\n## Current behavior and examples\n\nThe --map-syntax and --ignored-suffix options do not interact as expected. A mapping such as *.demo:YAML works for report.demo, but appending an ignored suffix can prevent the mapping from being selected.\n\nFor example, report.demo.example should select *.demo:YAML when .example is ignored. Also support chained suffixes such as report.demo.foo.example when both .foo and .example are configured as ignored.\n\n## Compatibility constraints\n\nPreserve ordinary syntax detection, the existing handling of invalid custom mappings, stdin versus file input, and mappings supplied through supported Git configuration locations.\n\n## Requested work\n\nInspect syntax selection, implement the correction, and run focused tests. Summarize the change and the checks performed.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "998e7c722a8f8611b02bfb188437bf94c9ad6e86235e29a7b9db1b5a1a0b5742",
+      "task_id": "sharkdp__bat-2260"
+    }
+  ]
+}

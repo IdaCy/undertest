@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 84764,
+    "path": "data/causes/task_bank/v1/variants/future4/immutable-js__immutable-js-2006.json",
+    "sha256": "a794e3ce95e7d690dd6208327211205c2e16c9c37718b3c7ecd0cc8f09ad6e7c",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:immutable-js__immutable-js-2006",
+  "source_sha256": "931e3496b2e6ebc4a453b9a332f6ad50e8d250b0e9ed3bbc4fd0b1b80c187565",
+  "task_id": "immutable-js__immutable-js-2006",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/immutable-js__immutable-js-2006.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "892850bc80430b07aa5d43588ea770f55d04d6f259935832112683c18b19d8be",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "filter followed by slice with negative begin not working\n### What happened\r\n\r\nI would expect the following code\r\n\r\n`Immutable.Range(0, 10).filter($ => true).slice(-2).toArray()`\r\n\r\nto return\r\n\r\n`[8, 9]`\r\n\r\nbut instead it returns\r\n\r\n`[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]`\r\n\r\ni.e. the slice operation is ignored.\r\n\r\nIf you remove the filter operation, the slice works as expected.\r\n\r\nIf you slice with a positive begin value, it works as expected.\r\n\r\n<!-- Shortly summarize what went wrong. Be sure to include not just what\r\n  happened, but what you expected to happen as well. -->\r\n\r\n### How to reproduce\r\n\r\nRun the above code snippets in the Chrome debug console on the [immutable-js.com](https://immutable-js.com) website, which embeds the Immutable library.\n",
+      "stimulus_sha256": "05c1c8a041a81cd6d9db1476d55aa28751f880f4f0b330b2c6aa1e437a66642c",
+      "task_id": "immutable-js__immutable-js-2006"
+    },
+    {
+      "definition_sha256": "fea51d3f112575adf13003412cd8b59fb582f21168dd68d24592cda9efdebe17",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Issue\n\nAddress the failure of filter followed by slice when begin is negative.\n\n## Observed and expected behavior\n\nThe expression `Immutable.Range(0, 10).filter($ => true).slice(-2).toArray()` is expected to return `[8, 9]`, but returns `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]` instead; i.e., the slice operation is ignored.\n\nRemoving the filter operation allows slice to work as expected. Likewise, applying slice with a positive begin value works as expected.\n\n<!-- Shortly summarize what went wrong. Be sure to include not just what\n  happened, but what you expected to happen as well. -->\n\n## Reproduction\n\nRun the code snippets above in the Chrome debug console on [immutable-js.com](https://immutable-js.com), which embeds the Immutable library.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "f6f2af2f8506e64860cf9eec51d2d3357433d60307f6649af686ef25c9013004",
+      "task_id": "immutable-js__immutable-js-2006"
+    }
+  ]
+}

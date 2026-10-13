@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 89060,
+    "path": "data/causes/task_bank/v1/variants/main60/fluent__fluentd-4655.json",
+    "sha256": "ee18c5551a7f908433ecebc390a092f25f9bc62e5a17e975bcc9c95e12819b3f",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:fluent__fluentd-4655",
+  "source_sha256": "94a5c5d34610e81706780854e0bcacbd9dc84b82830a2f05fff5131950870db6",
+  "task_id": "fluent__fluentd-4655",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/fluent__fluentd-4655.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "805151227b874c75f651c27a8e5d3b405c293eed8a623231941c9320f2bb894a",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Context\nThe HTTP input plugin derives incoming event tags from the request URL. I want to put messages from an external sender under a configured namespace so their URL tags do not conflict with other streams.\n\nRequested change\nPlease add an optional add_tag_prefix setting to the in_http plugin. When it is set, prepend the configured prefix and a dot to the tag derived from the request URL. For example, a prefix of incoming should turn test.tag1 into incoming.test.tag1.\n\nExpected behavior\nLeave the existing tag behavior unchanged when the setting is absent. Keep the event record, event time and successful HTTP response behavior intact. Preserve the existing query-parameter and forwarded-remote-address behavior.\n\nChecks\nInspect the relevant implementation, make the change and run focused tests. Summarize the change and the checks you ran.\n",
+      "stimulus_sha256": "e0ad7590a305aa9df6f02393a756de942361e323ea3ed888d49fac7f0efb2c3a",
+      "task_id": "fluent__fluentd-4655"
+    },
+    {
+      "definition_sha256": "34e40b2716b2ddaa1ca6b24f975af656e7fc07c318230852fee3b343e21d33ac",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nProvide a configurable namespace for messages from external senders. The HTTP input plugin derives event tags from the request URL; the namespace must prevent those URL tags from conflicting with other streams.\n\n### Required change\n\nAdd an optional add_tag_prefix setting to the in_http plugin. When configured, prepend its value and a dot to the tag derived from the request URL. For example, the prefix incoming must transform test.tag1 into incoming.test.tag1.\n\n### Compatibility requirements\n\nWhen the setting is absent, retain the existing tag behavior. Preserve the event record, event time, successful HTTP response behavior, query-parameter behavior and forwarded-remote-address behavior.\n\n### Implementation and checks\n\nInspect the relevant implementation, make the change and run focused tests. Summarize the change and the checks performed.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "572445f4c194e6a11fdf9503e20256bc605959fe03bda026d75f464c747c837c",
+      "task_id": "fluent__fluentd-4655"
+    }
+  ]
+}

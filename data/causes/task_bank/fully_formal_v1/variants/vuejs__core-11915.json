@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 80619,
+    "path": "data/causes/task_bank/v1/variants/main60/vuejs__core-11915.json",
+    "sha256": "f9915f11bef68309129b6e68e4fbe8423fb9d93907e212f1b4b1cf9e735eb6c2",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:vuejs__core-11915",
+  "source_sha256": "a378d0fb58a85045c2a2dcba79b56243d64aea479e7ba566cf4fed3577888cb7",
+  "task_id": "vuejs__core-11915",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/vuejs__core-11915.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "a429653eb16bb017792ed8b73a9885a63cdda4b44bd7d4efc21a551737bebbc0",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "v-pre not ignoring {{ inside textarea\n### Vue version\n\n3.5.4\n\n### Link to minimal reproduction\n\nhttps://jsfiddle.net/h4ds29me/\n\n### Steps to reproduce\n\nWhen you include vue via CDN (https://unpkg.com/vue@3/dist/vue.global.prod.js) and wrap a textarea in v-pre, the {{ aren't ignored and it escapes everything after that (assuming there is no closing }}). \r\nSee this jsfiddle for an example: \r\nhttps://jsfiddle.net/h4ds29me/ \r\n{{ is ignored outside the textarea fine.\n\n### What is expected?\n\nThe {{ is ignored inside the v-pre textarea\n\n### What is actually happening?\n\nThe {{ is not ignored inside the v-pre textarea\n\n### System Info\n\n_No response_\n\n### Any additional comments?\n\n_No response_\n",
+      "stimulus_sha256": "181f3d2bce19e6d4036304339924a0755076f8d7f7b4db230c345e8a10c8b471",
+      "task_id": "vuejs__core-11915"
+    },
+    {
+      "definition_sha256": "be24e8938f2919e6432de5c2f96fb54c989e21ee52609b39cd6f9a43118858ea",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nCorrect the handling of {{ inside a textarea covered by v-pre.\n\n### Version and reproduction\n\nVue version: 3.5.4.\n\nMinimal reproduction: https://jsfiddle.net/h4ds29me/\n\nInclude Vue through the CDN (https://unpkg.com/vue@3/dist/vue.global.prod.js) and wrap a textarea in v-pre. The opening {{ is not ignored, and everything after it is escaped when there is no closing }}.\n\nThe example is also referenced at https://jsfiddle.net/h4ds29me/. Outside the textarea, {{ is ignored correctly.\n\n### Expected and observed behavior\n\n{{ should be ignored inside the v-pre textarea. Instead, {{ is not ignored there.\n\nNo system information or additional comments were provided.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "75f1f5cb081ede8a3e79d05c2c745db05e477ea9c26803b8fcfb963a2edcd913",
+      "task_id": "vuejs__core-11915"
+    }
+  ]
+}

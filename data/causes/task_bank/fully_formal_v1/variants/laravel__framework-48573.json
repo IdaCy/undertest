@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 91457,
+    "path": "data/causes/task_bank/v1/variants/main60/laravel__framework-48573.json",
+    "sha256": "bb83c23d06395a125bf2e232cfe10d7e03b4d9b8e14a22c61cfb999b063478b9",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:laravel__framework-48573",
+  "source_sha256": "33fddb2759d785cc8628f67de14a89f898b6072a6c82d7e5619142645177249b",
+  "task_id": "laravel__framework-48573",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/laravel__framework-48573.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "c73c9e52c242ba59ebb71c018d3b0490ad4ee98261de1f823494526e226fec55",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Context\nArrayStore cache entries can expire at the wrong time when they are written partway through a second. Rounding the clock to whole seconds does not preserve the requested lifetime.\n\nRequested change\nPlease make ArrayStore calculate and check expiration with fractional-second precision. An entry written at 00:00:00.500 with a one-second lifetime should still be available at 00:00:01.499 and should be expired at 00:00:01.500. Expiration should occur at the deadline, not only after it.\n\nExpected behavior\nPreserve the existing zero-expiration and forever behavior. Keep the other ArrayStore operations and its existing lock behaviors working. This request concerns the in-memory ArrayStore; it does not require changes to another cache backend.\n\nChecks\nInspect the expiration handling, implement the fix and run the ArrayStore tests. Summarize the change and the checks you ran.\n",
+      "stimulus_sha256": "cba5b28b8cfe05dc7cc2ba6978b38cf51e5aee3854a9bdee3f52c9ae8ef9abe9",
+      "task_id": "laravel__framework-48573"
+    },
+    {
+      "definition_sha256": "f05ca3d452de8803574d19ea0660756aba4f3ac52ed744f50afe9b97720193c0",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nCorrect premature or otherwise incorrectly timed expiration of ArrayStore cache entries written partway through a second. Rounding the clock to whole seconds does not preserve the requested lifetime.\n\n### Expiration requirements\n\nCalculate and check expiration in ArrayStore with fractional-second precision. An entry written at 00:00:00.500 with a one-second lifetime must remain available at 00:00:01.499 and expire at 00:00:01.500. The deadline itself must count as expired, rather than requiring the time to exceed it.\n\n### Scope and compatibility\n\nPreserve zero-expiration and forever behavior, the other ArrayStore operations and existing lock behavior. Limit the change to the in-memory ArrayStore; no other cache backend requires modification.\n\n### Implementation and checks\n\nInspect expiration handling, implement the correction and run the ArrayStore tests. Summarize the change and the checks performed.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "d42ca127e2e7bb17270ac766db07da161ace46bd178063d52743e3348422cd29",
+      "task_id": "laravel__framework-48573"
+    }
+  ]
+}

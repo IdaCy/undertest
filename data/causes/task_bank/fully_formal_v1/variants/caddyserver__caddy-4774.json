@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 134647,
+    "path": "data/causes/task_bank/v1/variants/main60/caddyserver__caddy-4774.json",
+    "sha256": "9dedb8bbc967cd5559dcca8cb9997b63bffd533cb46e33663e39fb16e12527fd",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:caddyserver__caddy-4774",
+  "source_sha256": "4c309791ee9d25d16f6afc517338f54ed3bedea3441a64306f528a51f3a32f72",
+  "task_id": "caddyserver__caddy-4774",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/caddyserver__caddy-4774.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "672aeee4c75e3ffb518cdbd7222a91d8d3e6d698e782358d54924992dbfd32f3",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "default_bind global option cannot accept multiple IP addresses\nI'm running Caddy 2.5.1 in a dual-stack server.\r\nI'd like to make Caddy bind by default to the IPv4 address and one main IPv6 address, and then customize certain sites to bind on other IPv6 addresses.\r\n\r\n```text\r\n{\r\n  default_bind [2001:db8:11:ad::80] 198.51.100.184\r\n}\r\n:33441 {\r\n  respond \"site 33441\"\r\n}\r\n:33442 {\r\n  bind [2001:db8:11:ad::2]\r\n  respond \"site 33442\"\r\n}\r\n```\r\n\r\nThe **bind** directive accepts multiple IP addresses.\r\nHowever, the **default\\_bind** global option does not seem to accept multiple IP addresses.\r\n\r\nIf I put two IP addresses in **default\\_bind** global option like the example above, Caddy fails to start with error:\r\n\r\n```shell\r\n$ caddy run -config Caddyfile\r\n2022/05/08 18:47:58.911\tINFO\tusing provided configuration\t{\"config_file\": \"Caddyfile\", \"config_adapter\": \"\"}\r\nrun: adapting config using caddyfile: parsing caddyfile tokens for 'default_bind': Caddyfile:2 - Error during parsing: Wrong argument count or unexpected line ending after '198.51.100.184'\r\n```\r\n\r\nIf I write two **default\\_bind** global options each with one IP address, Caddy starts but it only binds to the IP address specified in the last **default\\_bind** global option, as confirmed by the output of `ss -an | grep LISTEN` command.\r\n\r\n```\r\n{\r\n  default_bind [2001:db8:11:ad::80]\r\n  default_bind 198.51.100.184\r\n}\r\n```\r\n\r\nWhile I could write **bind** directive into each site, it is less convenient.\r\nThus, I hope **default\\_bind** global option could support multiple IP addresses.\n",
+      "stimulus_sha256": "dbefb83ed0f6f945676740de123d4260512a904345694fe749d132a007606a1f",
+      "task_id": "caddyserver__caddy-4774"
+    },
+    {
+      "definition_sha256": "34ab7f1ab62da64cad4788d6e140a5dba3886dcaa5fd3325b4b4548aaaad7cc5",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nAllow the default_bind global option to accept multiple IP addresses.\n\n### Required behavior\n\nOn a dual-stack server running Caddy 2.5.1, configure default binding to the IPv4 address and one primary IPv6 address, while allowing selected sites to bind to other IPv6 addresses:\n\n\n```text\n{\n  default_bind [2001:db8:11:ad::80] 198.51.100.184\n}\n:33441 {\n  respond \"site 33441\"\n}\n:33442 {\n  bind [2001:db8:11:ad::2]\n  respond \"site 33442\"\n}\n```\n\n### Current behavior\n\nThe **bind** directive accepts multiple IP addresses, but the **default\\_bind** global option does not appear to accept multiple IP addresses. Providing two IP addresses in a single global option, as in the example above, prevents Caddy from starting:\n\n\n```shell\n$ caddy run -config Caddyfile\n2022/05/08 18:47:58.911\tINFO\tusing provided configuration\t{\"config_file\": \"Caddyfile\", \"config_adapter\": \"\"}\nrun: adapting config using caddyfile: parsing caddyfile tokens for 'default_bind': Caddyfile:2 - Error during parsing: Wrong argument count or unexpected line ending after '198.51.100.184'\n```\n\nProviding two **default\\_bind** global options, each with one IP address, permits startup but binds only to the IP address in the final option, as confirmed by `ss -an | grep LISTEN`:\n\n\n```\n{\n  default_bind [2001:db8:11:ad::80]\n  default_bind 198.51.100.184\n}\n```\n\nAdding a **bind** directive to every site is a less convenient workaround. The requested change is support for multiple IP addresses in the global option.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "210f9f4620256fe8c46ed01e1ad4e0ea321eaf9e30270767c600b93d4c2e1c07",
+      "task_id": "caddyserver__caddy-4774"
+    }
+  ]
+}

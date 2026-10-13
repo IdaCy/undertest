@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 93382,
+    "path": "data/causes/task_bank/v1/variants/main60/micropython__micropython-10095.json",
+    "sha256": "632db65ac82c051644cd40e7a59ec93b22b174766c08f4d89033b1c193eaccf5",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:micropython__micropython-10095",
+  "source_sha256": "197d959f2d40786b1618bb205a04973cd4ef572722aaedb6198c4ec67f8d2ccf",
+  "task_id": "micropython__micropython-10095",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/micropython__micropython-10095.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "76db601bd6dfd5ef06315ea857e53c47b4c8e0e85bb1dd38ba90442768143b8f",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Context\nMicroPython currently accepts some function calls with duplicate keyword names when the arguments are unpacked. For example, calling a function with **{'one': 1} and **{'one': 2} can silently keep one value instead of reporting the duplicate.\n\nRequested change\nPlease make duplicate keyword arguments raise TypeError, including duplicates introduced by unpacked dictionaries or other supported mappings. Handle collisions with explicit keyword arguments as well as collisions between unpacked arguments.\n\nExpected behavior\nCalls with distinct keyword names should continue to work. Preserve the existing behavior of ordinary positional arguments, keyword-only arguments and function defaults. The change should work with the Unix interpreter in this repository.\n\nChecks\nInspect the argument handling, implement the fix and run the relevant function-call tests. Summarize the change and the checks you ran.\n",
+      "stimulus_sha256": "48f5cf9e01a437734d8bc41cd573e9baa1bec3bbce03df1f3f652d2e30ae9846",
+      "task_id": "micropython__micropython-10095"
+    },
+    {
+      "definition_sha256": "f660259407b14cd97180e7acb405f0488277a70086e7e28229473522c1e83d94",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Required behavior\n\nMake duplicate keyword arguments raise TypeError in MicroPython. Cover duplicates introduced by unpacked dictionaries and other supported mappings, including collisions between unpacked arguments and explicit keyword arguments and collisions among unpacked arguments.\n\n## Current behavior\n\nSome calls with duplicate unpacked keyword names are accepted. For example, a call containing both **{'one': 1} and **{'one': 2} may silently retain one value instead of reporting the duplicate.\n\n## Compatibility constraints\n\nCalls with distinct keyword names must continue to work. Preserve ordinary positional arguments, keyword-only arguments, and function defaults. The change must work with the repository's Unix interpreter.\n\n## Requested work\n\nInspect argument handling, implement the correction, and run the relevant function-call tests. Summarize the change and the checks performed.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "4486e1e01e8af9c16dd63a2561650b2e5a6a02c70cd1b439b2140f60af5d6c6a",
+      "task_id": "micropython__micropython-10095"
+    }
+  ]
+}

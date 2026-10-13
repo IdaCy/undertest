@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 102432,
+    "path": "data/causes/task_bank/v1/variants/main60/mrdoob__three.js-26589.json",
+    "sha256": "362f141413e1a235b70a787b4b26ebdeb025d295c3d060c192e49566eedb549b",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:mrdoob__three.js-26589",
+  "source_sha256": "1a2da58bb0cfe8189ef52e22ffc69db8657ce80c5ccfcf4890a82b701d23165b",
+  "task_id": "mrdoob__three.js-26589",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/mrdoob__three.js-26589.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "de94752f56730fdb40bbabac0d40a3d95e6c5bf8b80ddf40240b4d37054ebca7",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Clone the material array when Object3D.clone() is called\n### Description\n\nI get that cloning the materials themselves doesn't make sense. This would be a big performance hit.\r\nBut the materials array seems like it is part of the object to me. So if I call `Object3D.clone()`, I'd expect that array to get cloned as well.\r\nSharing material references between objects makes sense. But sharing the same reference to an array, less so.\n\n### Solution\n\nCloning the materials array when `clone()` is called seems like it wouldn't change too much performance wise. Things like the object name and child hierarchy are already cloned as well, so as long as the materials themselves are not cloned, things should be fine I think.\n\n### Alternatives\n\nI can clone material arrays myself if I have too, so if it stays like this it's not a huge problem. It's just that this behaviour seemed unexpected. To reiterate, I very much *would* expect materials themselves to not get cloned. But not cloning the arrays did come as a surprise to me.\n\n### Additional context\n\n_No response_\n",
+      "stimulus_sha256": "37d92406a2a0c0cc8cf849a6c216ed170d313b7b34628d796d98ce780c1714ee",
+      "task_id": "mrdoob__three.js-26589"
+    },
+    {
+      "definition_sha256": "2dfd8d37cd4f03e554a5446eeba4b12f87b0a5086da060d6500617b86fa910ea",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Requested behavior\n\nClone the material array when Object3D.clone() is called, while continuing to share references to the materials themselves.\n\n### Rationale and proposed solution\n\nThe material array is considered part of the object, so `Object3D.clone()` is expected to produce a separate array. Sharing the material references is appropriate; sharing the array reference is the unexpected behavior.\n\nCloning the materials themselves would impose a substantial performance cost and is not requested. Copying only the array during `clone()` is expected to have limited performance impact, given that properties such as the object name and child hierarchy are already cloned. This performance expectation is tentative.\n\n### Alternative\n\nManual cloning of material arrays remains an available workaround, so retaining the current behavior would not be a major problem. The request concerns the surprising shared array, not cloning the underlying materials.\n\nNo additional context was provided.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "618b99a5fa58e6515ba5e203fc8ac8f4ec1148c147eb8ec6f79231dc1409ffad",
+      "task_id": "mrdoob__three.js-26589"
+    }
+  ]
+}

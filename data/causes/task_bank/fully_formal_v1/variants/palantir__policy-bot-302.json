@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 72974,
+    "path": "data/causes/task_bank/v1/variants/native12/palantir__policy-bot-302.json",
+    "sha256": "c3758af61aa1404241a5359c4f0d64c5852f8d0e41cf8529d5985cb59033f631",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:palantir__policy-bot-302",
+  "source_sha256": "066155c48506d9ab5773c15ebc9a10e864c8c9ffdde43c618a08898751e5905a",
+  "task_id": "palantir__policy-bot-302",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/palantir__policy-bot-302.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "0c1e635400d539a6a204ce24a1a3f7fd4fc4fd18ee4c14001d3f6633ecca061c",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Stop re-requesting reviews when all-users mode is used\nWe've encountered the following issues on a GitHub repository today:\r\n- We have a PR that modifies a single file.\r\n- That file is configured to require approval from a GitHub team, and the requesting mode is set to `all-users`.\r\n- policy-bot requests the review from all the users of that GitHub team, as expected.\r\n- A member reviews the PR (in this case the PR is rejected asking for changes).\r\n- policy-bot immediately re-requests a review from the member that reviewed.\r\n\r\nThis triggers more email notifications than are necessary, but more importantly the state the PR is left in looks like it needs to be reviewed (i.e. action pending on the reviewing team) when it actually isn't.",
+      "stimulus_sha256": "5cbd74e379636b2b508f5e6be3909c4cceabd2d1808229c0960638d409f6880e",
+      "task_id": "palantir__policy-bot-302"
+    },
+    {
+      "definition_sha256": "3bcd2b9646f6b09ca4ed27e1a15d92f97b52660f2d85d9eef2ac0500ade11bd8",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nStop immediately requesting another review from a member who has already reviewed when all-users mode is used.\n\n### Reported sequence\n\nThe following occurred in a GitHub repository:\n\n1. A PR changes a single file.\n2. Approval from a GitHub team is required for that file, with request mode set to `all-users`.\n3. policy-bot requests reviews from every member of the GitHub team, as expected.\n4. A member reviews the PR; in the reported case, the PR is rejected with changes requested.\n5. policy-bot immediately requests another review from the same member.\n\n### Impact\n\nThe repeated request generates unnecessary email notifications and leaves the PR appearing to require review when it does not, i.e. with an action shown as pending for the reviewing team.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "96293783cb6e9ed2324b0f9811961ffdfe2eabbc27dd030eb64a43d12e47be18",
+      "task_id": "palantir__policy-bot-302"
+    }
+  ]
+}

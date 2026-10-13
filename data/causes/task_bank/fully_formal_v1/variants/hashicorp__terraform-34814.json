@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 192547,
+    "path": "data/causes/task_bank/v1/variants/main60/hashicorp__terraform-34814.json",
+    "sha256": "d34db650dcec69cb4932282d43aa0ffffcd5dcd8164e737fbeb8e130d44cf0e2",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:hashicorp__terraform-34814",
+  "source_sha256": "abe9943c38817134c4806ac485704fb034c02a37739fd67b63fe40f06d1de1fd",
+  "task_id": "hashicorp__terraform-34814",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/hashicorp__terraform-34814.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "40f1b543b6dcd428b5ac3dc99b8d6a969399f435ef6e30dd23c3c9dd4cd18019",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "SSH connections are kept open\n### Terraform Version\n\n```shell\nTerraform v1.6.2\r\non linux_amd64\r\n+ provider registry.terraform.io/hashicorp/null v3.1.1\n```\n\n\n### Terraform Configuration Files\n\n```terraform\r\nterraform {\r\n  required_version = \"~> 1.1\"\r\n  required_providers {\r\n    null = {\r\n      source  = \"hashicorp/null\"\r\n      version = \"~> 3.1.1\"\r\n    }\r\n  }\r\n}\r\n\r\nvariable \"host\" {\r\n  type = string\r\n  default = \"139.144.128.15\"\r\n}\r\nvariable \"user\" {\r\n  type = string\r\n  default = \"root\"\r\n}\r\nvariable \"private_key\" {\r\n  type = string\r\n  default = \"/home/mkovarik/.ssh/mkovarik-dev\"\r\n}\r\n\r\n\r\nresource \"null_resource\" \"ssh_connection\" {\r\n  connection {\r\n    type                = \"ssh\"\r\n    host                = var.host\r\n    agent               = \"false\"\r\n    user                = var.user\r\n    timeout             = \"600s\"\r\n    private_key         = file(var.private_key)\r\n  }\r\n  provisioner \"remote-exec\" {\r\n    inline = [\r\n       \"touch abc\",\r\n    ]\r\n  }\r\n}\r\nresource \"null_resource\" \"more_ssh_connections\" {\r\n  connection {\r\n    type                = \"ssh\"\r\n    host                =  var.host\r\n    agent               = \"false\"\r\n    user                =  var.user\r\n    timeout             = \"600s\"\r\n    private_key         = file(var.private_key)\r\n  }\r\n  provisioner \"remote-exec\" {\r\n    inline = [\r\n       \"touch abc\",\r\n       \"touch abc\",\r\n    ]\r\n  }\r\n  provisioner \"remote-exec\" {\r\n    inline = [\r\n       \"touch abc\",\r\n    ]\r\n  }\r\n}\r\nresource \"null_resource\" \"local-sleep\" {\r\n  depends_on = [\r\n     null_resource.ssh_connection,\r\n     null_resource.more_ssh_connections\r\n  ]\r\n  provisioner \"local-exec\" {\r\n       command = \"sleep 10; netstat -natp | grep ${var.host}\"\r\n  }\r\n}\r\n\r\n```\r\n\n\n### Debug Output\n\nhttps://gist.github.com/Michkov/302f06370581fa66f216ed80bac09097\n\n### Expected Behavior\n\nExecution of netstat should not show ESTABLISHED connection to the host, SSH connection should be closed directly after execution.\n\n### Actual Behavior\n\nSSH connections to the host are still ESTABLISHED even the commands were executed.\n\n### Steps to Reproduce\n\n1. Set variables -> host, user and private_key\r\n2. `terraform init`\r\n3. `terraform apply`\r\n\n\n### Additional Context\n\nTerraform keeps SSH connections opened. This is problematic when hosts are having connection limits set. Also when using Bastions there are too many unnecessary connections kept established.\n\n### References\n\n_No response_\n",
+      "stimulus_sha256": "423c4b2a01ae275b70ac15f0179565930ce247f034875f0894d1f43fb66a03d0",
+      "task_id": "hashicorp__terraform-34814"
+    },
+    {
+      "definition_sha256": "80fcc538f80aac9c23d1d3080667d51cdbcb970e74dcb1c946c35b8adfeaef89",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nClose SSH connections immediately after command execution rather than retaining them.\n\n### Expected and observed behavior\n\nAfter execution, netstat should not show an ESTABLISHED connection to the host; the SSH connection should close immediately. Instead, SSH connections remain ESTABLISHED after the commands finish.\n\nRetaining these SSH connections causes problems for hosts with connection limits and leaves excessive unnecessary connections established when using bastions.\n\n### Configuration and diagnostic evidence\n\nTerraform version:\n\n\n```shell\nTerraform v1.6.2\non linux_amd64\n+ provider registry.terraform.io/hashicorp/null v3.1.1\n```\n\nConfiguration files:\n\n\n```terraform\nterraform {\n  required_version = \"~> 1.1\"\n  required_providers {\n    null = {\n      source  = \"hashicorp/null\"\n      version = \"~> 3.1.1\"\n    }\n  }\n}\n\nvariable \"host\" {\n  type = string\n  default = \"139.144.128.15\"\n}\nvariable \"user\" {\n  type = string\n  default = \"root\"\n}\nvariable \"private_key\" {\n  type = string\n  default = \"/home/mkovarik/.ssh/mkovarik-dev\"\n}\n\n\nresource \"null_resource\" \"ssh_connection\" {\n  connection {\n    type                = \"ssh\"\n    host                = var.host\n    agent               = \"false\"\n    user                = var.user\n    timeout             = \"600s\"\n    private_key         = file(var.private_key)\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n       \"touch abc\",\n    ]\n  }\n}\nresource \"null_resource\" \"more_ssh_connections\" {\n  connection {\n    type                = \"ssh\"\n    host                =  var.host\n    agent               = \"false\"\n    user                =  var.user\n    timeout             = \"600s\"\n    private_key         = file(var.private_key)\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n       \"touch abc\",\n       \"touch abc\",\n    ]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n       \"touch abc\",\n    ]\n  }\n}\nresource \"null_resource\" \"local-sleep\" {\n  depends_on = [\n     null_resource.ssh_connection,\n     null_resource.more_ssh_connections\n  ]\n  provisioner \"local-exec\" {\n       command = \"sleep 10; netstat -natp | grep ${var.host}\"\n  }\n}\n\n```\n\nDebug output: https://gist.github.com/Michkov/302f06370581fa66f216ed80bac09097\n\n### Reproduction\n\n1. Set the host, user and private_key variables.\n2. Run `terraform init`.\n3. Run `terraform apply`.\n\nNo additional references were provided.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "f8b71867ba00a7de27c1d9e4cacca3f3a61d29aeafde82f42a5760ae6fbb3712",
+      "task_id": "hashicorp__terraform-34814"
+    }
+  ]
+}

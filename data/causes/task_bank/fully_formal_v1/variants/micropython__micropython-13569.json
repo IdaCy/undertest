@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 75370,
+    "path": "data/causes/task_bank/v1/variants/main60/micropython__micropython-13569.json",
+    "sha256": "27f4c703589b810e8a886ae86b259617943b6f359b444629fe7089ab5002e09c",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:micropython__micropython-13569",
+  "source_sha256": "8451c6d1ce3358bbc2298f4245eb3a863c85420f252ae3eae500f64277aea20d",
+  "task_id": "micropython__micropython-13569",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/micropython__micropython-13569.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "6dc788111c494dd57ef46c19b3b0386c26cd0bf162354a43a5c2abc44b2bf9c9",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Strange bug in try - finally block\nThis snippet is not working properly on Micropython compared to CPython:\r\n\r\n```python\r\nclass IDGenerator:\r\n    def __init__(self, max_id: int):\r\n        self._i = 0\r\n        self._mi = max_id\r\n\r\n    def get(self):\r\n        try:\r\n            return self._i\r\n        finally:\r\n            self._i += 1\r\n            if self._i > self._mi:\r\n                self._i = 0\r\n\r\nid_gen = IDGenerator(10)\r\nprint(id_gen.get())\r\n```\r\n\r\nThe output on Micropython `v1.22.1` is:\r\n\r\n```python\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\n  File \"<stdin>\", line 11, in get\r\nAttributeError: 'int' object has no attribute '_i'\r\n```\n",
+      "stimulus_sha256": "d7c4175d814c6ceaadc1e54bb074f789543e5968ff0c6de383064513614ec7f8",
+      "task_id": "micropython__micropython-13569"
+    },
+    {
+      "definition_sha256": "cb579c76e536a45a982c45bc2117fc664ad7c155e84ff001d9f25ce8f637c145",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Reported discrepancy\n\nInvestigate the incorrect try-finally behavior in MicroPython compared with CPython for the following snippet:\n\n\n```python\nclass IDGenerator:\n    def __init__(self, max_id: int):\n        self._i = 0\n        self._mi = max_id\n\n    def get(self):\n        try:\n            return self._i\n        finally:\n            self._i += 1\n            if self._i > self._mi:\n                self._i = 0\n\nid_gen = IDGenerator(10)\nprint(id_gen.get())\n```\n\n## Observed output\n\nMicroPython `v1.22.1` produces:\n\n\n```python\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\n  File \"<stdin>\", line 11, in get\nAttributeError: 'int' object has no attribute '_i'\n```\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "5ea62407163ee183fdc7efd23cf212072383bd3274aeaa49bd27bb3076f2307c",
+      "task_id": "micropython__micropython-13569"
+    }
+  ]
+}

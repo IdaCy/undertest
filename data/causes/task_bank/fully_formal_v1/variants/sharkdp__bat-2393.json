@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 88421,
+    "path": "data/causes/task_bank/v1/variants/main60/sharkdp__bat-2393.json",
+    "sha256": "de728be6663a465a8ebecefc7c1b1eca9d6afdb532c19a48e922ccac62796ba4",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:sharkdp__bat-2393",
+  "source_sha256": "5a7cb2e1f40d4758f21645312c114e13a90a41b89def94112f325501497388e2",
+  "task_id": "sharkdp__bat-2393",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/sharkdp__bat-2393.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "f553b3a6b4a0a3487c42350319066153fe444010e28349f38999a589e75e98cc",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Context\nThe cache --clear command accepts a --target directory but currently clears the default cache directory instead. This makes it difficult to clear a separate cache safely and to test the behavior in a temporary directory.\n\nRequested change\nPlease make bat cache --clear --target DIR clear the chosen directory. When a target is provided, leave the default cache directory and its contents unchanged. Keep the existing default-directory behavior when no target is supplied.\n\nExpected behavior\nPreserve cache building and normal handling of a file named cache. The existing cache_clear integration test is currently ignored; enable that test as part of the change so it checks a temporary directory.\n\nChecks\nInspect the cache command, implement the fix and run the relevant integration tests. Summarize the change and the checks you ran.\n",
+      "stimulus_sha256": "c1d2df4b7fd5c4f0da637e633589c21d7c05812c3f2897fe273ae3a21808492e",
+      "task_id": "sharkdp__bat-2393"
+    },
+    {
+      "definition_sha256": "7c093225eacc4f38b6360045177c51c7cf707dcefc2f7164b5175eaf9be24983",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nMake the cache --clear command honor a supplied --target directory. It currently clears the default directory instead, preventing reliable clearing of a separate cache and temporary-directory testing.\n\n### Required behavior\n\nThe command bat cache --clear --target DIR must clear the selected directory. When a target is supplied, leave the default cache directory and its contents unchanged. Without a target, retain the existing default-directory behavior.\n\nPreserve cache building and ordinary handling of a file named cache. Enable the currently ignored cache_clear integration test so that it checks a temporary directory.\n\n### Implementation and checks\n\nInspect the cache command, implement the correction and run the relevant integration tests. Summarize the change and the checks performed.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "1fbec2ebf859d062f69cd96782ff03961a701541e4bea92cb5ce828f232a2042",
+      "task_id": "sharkdp__bat-2393"
+    }
+  ]
+}

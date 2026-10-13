@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 51276,
+    "path": "data/causes/task_bank/v1/variants/native7/sindresorhus__execa-490.json",
+    "sha256": "09cfc429bfd507c767eb6e5eee6b9e27c210fbb056058b7fc4d27c3352676d31",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:sindresorhus__execa-490",
+  "source_sha256": "267af4f5a9aae9929c975b87afc9fae22f8506fdabb4811f8bca2362be07d42d",
+  "task_id": "sindresorhus__execa-490",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/sindresorhus__execa-490.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "27cc14d88144cf881802426bd69734c335c5d814a04643144a22ebf98f849d84",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Support `AbortController`\nNode.js is adopting it for everything, so I think we should support it too.\r\n\r\nhttps://developer.mozilla.org/en-US/docs/Web/API/AbortController\r\n\r\nNode.js just added support for it in `.spawn()`: https://nodejs.org/en/blog/release/v15.5.0/\r\n\r\nThis would not replace the current `.cancel()` function, in the near-term at least.",
+      "stimulus_sha256": "4557cfbd8690cdbd04f1a5d36c48c6414d11fcdae2afb49ec532cc0bd1279adb",
+      "task_id": "sindresorhus__execa-490"
+    },
+    {
+      "definition_sha256": "1871bb8d637f4063fcca61a598e8f659ea1cf230527bd90b65e671df8fba90fa",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Requested capability\n\nAdd support for `AbortController`, which Node.js is adopting broadly.\n\n## References and compatibility\n\nAPI reference: https://developer.mozilla.org/en-US/docs/Web/API/AbortController.\n\nNode.js has recently added this support to `.spawn()`, as described at https://nodejs.org/en/blog/release/v15.5.0/.\n\nThis support should not replace the existing `.cancel()` function, at least in the near term.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "088db836f9f7be976f6003d0937f3e37250b04bf5206d1d268699ac63f2c373b",
+      "task_id": "sindresorhus__execa-490"
+    }
+  ]
+}

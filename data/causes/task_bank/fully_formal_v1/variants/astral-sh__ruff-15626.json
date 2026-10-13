@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 80969,
+    "path": "data/causes/task_bank/v1/variants/main60/astral-sh__ruff-15626.json",
+    "sha256": "a01ff4665e74a5aaed7c235df52460be55b8a11e9f3128ee7eef9f5faca0fcfa",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:astral-sh__ruff-15626",
+  "source_sha256": "6da6d85cc3f7f199fea3b415fff58775481623f4fa951da47996d56daa30148c",
+  "task_id": "astral-sh__ruff-15626",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/astral-sh__ruff-15626.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "6c1f277bea6278211857f68cf16b1b217bed65d9055f227ee86b56096459fcd3",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "SIM201 and SIM202 fixes should be marked unsafe\nThe fixes for [`negate-equal-op` (SIM201)](https://docs.astral.sh/ruff/rules/negate-equal-op/) and [`negate-not-equal-op` (SIM202)](https://docs.astral.sh/ruff/rules/negate-not-equal-op/) should generally be marked unsafe because `__eq__` and `__ne__` may return any type, not just `bool`. The fixes are still safe when the operands are of types whose `__eq__` and `__ne__` are known to return `bool`.\n\n```console\n$ cat sim20.py\nimport numpy as np\na = np.array([0])\nb = np.array([1])\nprint(not a == b)\nprint(not a != b)\n\n$ python sim20.py\nTrue\nFalse\n\n$ ruff --isolated check --select SIM201,SIM202 sim20.py --fix\nFound 2 errors (2 fixed, 0 remaining).\n\n$ python sim20.py\n[ True]\n[False]\n```\n",
+      "stimulus_sha256": "be8efd370a15e2b941006e417b38b316962f45f00d99bcce704c90ab4fc4bf80",
+      "task_id": "astral-sh__ruff-15626"
+    },
+    {
+      "definition_sha256": "956c17e0fdced54ce606ff3ef28eaa59e34ca3f4b916bceb629268ca92d27db2",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Required classification\n\nMark fixes for SIM201 and SIM202 as generally unsafe. This applies to [`negate-equal-op` (SIM201)](https://docs.astral.sh/ruff/rules/negate-equal-op/) and [`negate-not-equal-op` (SIM202)](https://docs.astral.sh/ruff/rules/negate-not-equal-op/) because `__eq__` and `__ne__` may return any type, rather than only `bool`.\n\nRetain the safe classification when the operand types are known to have `__eq__` and `__ne__` implementations that return `bool`.\n\n### Example\n\n\n```console\n$ cat sim20.py\nimport numpy as np\na = np.array([0])\nb = np.array([1])\nprint(not a == b)\nprint(not a != b)\n\n$ python sim20.py\nTrue\nFalse\n\n$ ruff --isolated check --select SIM201,SIM202 sim20.py --fix\nFound 2 errors (2 fixed, 0 remaining).\n\n$ python sim20.py\n[ True]\n[False]\n```",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "45fde267661313c5bf5d0c4b6222fded0c5763d16f3e1ca81f6d0c647b7d4577",
+      "task_id": "astral-sh__ruff-15626"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 49612,
+    "path": "data/causes/task_bank/v1/variants/main60/projectlombok__lombok-3486.json",
+    "sha256": "7ede8f57dac3bc4727727255cdaeab8832bfef0a513a65517e0c70d13efbdc10",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:projectlombok__lombok-3486",
+  "source_sha256": "4679dc74c56700156dc038cf1846e882117001ae3c8e034351d9a05d394de6ec",
+  "task_id": "projectlombok__lombok-3486",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/projectlombok__lombok-3486.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "0d7b37017ec839471e91c88c742a6bf8747da9c9e8d6bf7788a8fcaffd3cbd9d",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "[BUG] @SuperBuilder does not generate Javadoc.\nWhen is use `@SuperBuilder` on the class the javadoc is no generated, with `@Builder` the javadoc is correctly generated.\r\n\r\nLombok version: 1.18.20\r\n\n",
+      "stimulus_sha256": "022406f1b31c9a6add255e509068e645073b521f8057d536d229076b105d2a6d",
+      "task_id": "projectlombok__lombok-3486"
+    },
+    {
+      "definition_sha256": "4e820676c3bea6b9b206271849d55b6924002b0508aa95a33e574311c96c0d6e",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nResolve the [BUG] that prevents @SuperBuilder from generating Javadoc.\n\n### Observed comparison\n\nApplying `@SuperBuilder` to a class does not generate Javadoc. Applying `@Builder` generates it correctly.\n\n### Version\n\nLombok 1.18.20.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "3e657904e32d8fab09d666445e1b59d294e0c32177246c5b40d8f58ea7ecf898",
+      "task_id": "projectlombok__lombok-3486"
+    }
+  ]
+}

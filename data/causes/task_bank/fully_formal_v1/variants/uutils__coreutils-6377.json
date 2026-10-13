@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 43131,
+    "path": "data/causes/task_bank/v1/variants/main60/uutils__coreutils-6377.json",
+    "sha256": "679fe3f6d4b11437ef29fc99b5930b69647f987dfdccea2092b25eb3b5a7b296",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:uutils__coreutils-6377",
+  "source_sha256": "6665620b3685bb37274231f9521a63b08c73992c6b781df5c16f6dd5dd45f2c5",
+  "task_id": "uutils__coreutils-6377",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/uutils__coreutils-6377.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "f0c9a398b6b4548be8402eb01b210bc65f5eb579bd06d63b7204029bbea2a061",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "`env`: implement `--ignore-signal`\n```\r\n\r\n       --ignore-signal[=SIG]\r\n              set handling of SIG signal(s) to do nothing\r\n```\n",
+      "stimulus_sha256": "7ab25dd15a82926075d115fa25d926579d9085eac23f7e887888a0bd6c3c07c5",
+      "task_id": "uutils__coreutils-6377"
+    },
+    {
+      "definition_sha256": "0f922af81bc18f0362dd8c17566c3e9cddb53f2721812f6f633e321485bf04fa",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "Implement `--ignore-signal` for `env` with the signal-handling behavior specified below:\n\n```\n\n       --ignore-signal[=SIG]\n              set handling of SIG signal(s) to do nothing\n```",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "5547f069b3fddcc6a4c8ab3de4e0cfb53e48c28272dcd998283fc51c60a08101",
+      "task_id": "uutils__coreutils-6377"
+    }
+  ]
+}

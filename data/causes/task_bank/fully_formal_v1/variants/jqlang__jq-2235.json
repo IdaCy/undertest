@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 62261,
+    "path": "data/causes/task_bank/v1/variants/main60/jqlang__jq-2235.json",
+    "sha256": "424ff5dffcc886bc8f4835ce0a308f8633aaec455d7fe30f72a04328da38bf39",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:jqlang__jq-2235",
+  "source_sha256": "85db5c6365845dde02a036aba63f2aaefe0bf50aa5cf5ea5b004728b7a7cb815",
+  "task_id": "jqlang__jq-2235",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/jqlang__jq-2235.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "f24e50b74e3284f41d4c0be745daf462af767c0bc78564eda020e84b0a0d8273",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Add -0 command-line option\nIt'd be nice to be able to use ASCII `NUL` instead of `LF` for non-raw-output mode for use with `xargs -0` and such.  In raw output mode, of course, one can use `-j` and output `\"\\u0000\"` as necessary.\r\n\r\nAs a workaround until this is done, use raw-output mode and output raw values, but pipe all strings to `tojson` first: `jq -rj '... | if type==\"string\" then tojson else . end'`.\n",
+      "stimulus_sha256": "964ba1a6bb32263e3dfb822e69936f6e33d28f250ce51853b0efc893c2d11d58",
+      "task_id": "jqlang__jq-2235"
+    },
+    {
+      "definition_sha256": "9bb764657471f1838f1c01c1bea7d8560b13e6792f26ab0681b90b2e6339958e",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Requested option\n\nAdd a -0 command-line option to allow ASCII `NUL` instead of `LF` in non-raw-output mode, for use with tools such as `xargs -0`.\n\n## Existing behavior and workaround\n\nIn raw-output mode, `-j` can already be used to output `\"\\u0000\"` as needed. Until the requested option is available, use raw-output mode and emit raw values, first passing every string through `tojson`:\n\n`jq -rj '... | if type==\"string\" then tojson else . end'`.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "41e51ded46d35894b1febde31475f8b1fe0e8a5002293e4c6293d3b9e17bc5ce",
+      "task_id": "jqlang__jq-2235"
+    }
+  ]
+}

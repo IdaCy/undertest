@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 115226,
+    "path": "data/causes/task_bank/v1/variants/native7/biotite-dev__biotite-795.json",
+    "sha256": "282c33ceeb0780dee94ca2f193becb9c560e7224142bf1521e88ff558fa816a1",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:biotite-dev__biotite-795",
+  "source_sha256": "6dedbbfea31328ee072e1b5573ec0e39a7333795460e2fe17af46d43dc62f7e4",
+  "task_id": "biotite-dev__biotite-795",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/biotite-dev__biotite-795.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "fd50f8aa0b0039c122aa266653f22e7ac201768bb24cc22647bae4b103b1b63e",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "altloc_id missing from get_structure() output\nThe last few recent commits have altered the behavior of get_structure() so that its output is missing the altloc_id annotation. I can't tell if this is expected behavior or a bug, however the docstring implies that its a bug.\n```\n    altloc : {'first', 'occupancy', 'all'}\n        This parameter defines how *altloc* IDs are handled:\n            - ``'first'`` - Use atoms that have the first *altloc* ID\n              appearing in a residue.\n            - ``'occupancy'`` - Use atoms that have the *altloc* ID\n              with the highest occupancy for a residue.\n            - ``'all'`` - Use all atoms.\n              Note that this leads to duplicate atoms.\n              When this option is chosen, the ``altloc_id`` annotation\n              array is added to the returned structure.\n```\n\nSo it seems that either its a bug or the docstring should get updated.\n\nMinimal example to reproduce:\n\n```\nfrom biotite.database import rcsb\nimport biotite.structure.io.pdbx as pdbx\n\nciffile = rcsb.fetch(\"4zxb\", \"cif\")\ncif = pdbx.CIFFile.read(ciffile)\narray = pdbx.get_structure(\n    cif,\n    model=1,\n    altloc=\"all\",\n    use_author_fields=False,\n)\narray.get_annotation_categories()\n```\n\ncurrent output from the latest commit is\n```\n['chain_id',\n 'res_id',\n 'ins_code',\n 'res_name',\n 'hetero',\n 'atom_name',\n 'element']\n```\nrolling back to `d0ae83d` gives\n```\n['chain_id',\n 'res_id',\n 'ins_code',\n 'res_name',\n 'hetero',\n 'atom_name',\n 'element',\n 'altloc_id']\n```",
+      "stimulus_sha256": "ae8872c3b1b73c363f0d2ff9cb5227e8e12cf6878e5ed8a2fa5213ba25c48292",
+      "task_id": "biotite-dev__biotite-795"
+    },
+    {
+      "definition_sha256": "9edb90e9a01819a34051ee695ece3debc47f044aa309c9d5aa53dee96801b1f3",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nDetermine whether the missing altloc_id annotation in the output of get_structure() is a defect or an intended change requiring a docstring update.\n\n### Observed change\n\nThe last few commits changed get_structure() so that its output no longer includes altloc_id. Whether this behavior is intentional is unclear; the docstring suggests a defect:\n\n```\n    altloc : {'first', 'occupancy', 'all'}\n        This parameter defines how *altloc* IDs are handled:\n            - ``'first'`` - Use atoms that have the first *altloc* ID\n              appearing in a residue.\n            - ``'occupancy'`` - Use atoms that have the *altloc* ID\n              with the highest occupancy for a residue.\n            - ``'all'`` - Use all atoms.\n              Note that this leads to duplicate atoms.\n              When this option is chosen, the ``altloc_id`` annotation\n              array is added to the returned structure.\n```\n\n\n### Reproduction and comparison\n\nMinimal example:\n\n```\nfrom biotite.database import rcsb\nimport biotite.structure.io.pdbx as pdbx\n\nciffile = rcsb.fetch(\"4zxb\", \"cif\")\ncif = pdbx.CIFFile.read(ciffile)\narray = pdbx.get_structure(\n    cif,\n    model=1,\n    altloc=\"all\",\n    use_author_fields=False,\n)\narray.get_annotation_categories()\n```\n\n\nOutput from the latest commit:\n\n```\n['chain_id',\n 'res_id',\n 'ins_code',\n 'res_name',\n 'hetero',\n 'atom_name',\n 'element']\n```\n\n\nOutput after reverting to `d0ae83d`:\n\n```\n['chain_id',\n 'res_id',\n 'ins_code',\n 'res_name',\n 'hetero',\n 'atom_name',\n 'element',\n 'altloc_id']\n```",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "f5bf028904205769fc8d78e340217fe1223684e77bdd2dce968c9f52763c311f",
+      "task_id": "biotite-dev__biotite-795"
+    }
+  ]
+}

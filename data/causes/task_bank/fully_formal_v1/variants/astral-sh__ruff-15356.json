@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 144093,
+    "path": "data/causes/task_bank/v1/variants/main60/astral-sh__ruff-15356.json",
+    "sha256": "b29b76ac3a2cce130f424983bbcf1e3fd3e5dbfa11d12a711c7143aac3fd25e6",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:astral-sh__ruff-15356",
+  "source_sha256": "ef1223284b81894c3de80f8485f489d05f39faff7428e8c2948fc8dfc2298945",
+  "task_id": "astral-sh__ruff-15356",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/astral-sh__ruff-15356.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "33834a4bdd18f04adbc09d6484f7925d67cfbef3c8b69e5b476e54550a34ba98",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "False positive of E252, double output for each occurence\nruff 0.8.6 with preview option enabled\nPython 3.13.1\n\n`ruff252.py`:\n```\nfrom typing import Annotated\nimport pydantic\n\ntype MyType = Annotated[\n    str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n\n```\n\n```\n% ruff check --preview --select E252 ruff252.py\nruff252.py:5:35: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                   ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:35: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                   ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:49: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                 ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:49: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                 ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:60: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                            ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:60: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                            ^ E252\n  |\n  = help: Add missing whitespace\n\nFound 6 errors.\n[*] 6 fixable with the `--fix` option.\n```\n",
+      "stimulus_sha256": "b459ae864b4c2c2a38b67a385c81aef42aaa6873bca8ccaf768532a836453904",
+      "task_id": "astral-sh__ruff-15356"
+    },
+    {
+      "definition_sha256": "6fd6992995426869ad6ab4520d74cbb1a93ff1388133de2aa3a055c177e2111a",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nCorrect the false-positive E252 diagnostics and duplicate output for each occurrence.\n\n### Environment\n\nRuff 0.8.6 with preview enabled; Python 3.13.1.\n\n### Reproduction and observed output\n\nFile `ruff252.py`:\n\n```\nfrom typing import Annotated\nimport pydantic\n\ntype MyType = Annotated[\n    str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n\n```\n\n\n```\n% ruff check --preview --select E252 ruff252.py\nruff252.py:5:35: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                   ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:35: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                   ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:49: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                 ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:49: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                 ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:60: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                            ^ E252\n  |\n  = help: Add missing whitespace\n\nruff252.py:5:60: E252 [*] Missing whitespace around parameter equals\n  |\n4 | type MyType = Annotated[\n5 |     str, pydantic.Field(min_length=4, max_length=7, pattern='^[0-9]{4,7}$')]\n  |                                                            ^ E252\n  |\n  = help: Add missing whitespace\n\nFound 6 errors.\n[*] 6 fixable with the `--fix` option.\n```",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "17c3819b47310ff1132547b17e159d75d2e97f3293aea4c6c0ffb0157cd64119",
+      "task_id": "astral-sh__ruff-15356"
+    }
+  ]
+}

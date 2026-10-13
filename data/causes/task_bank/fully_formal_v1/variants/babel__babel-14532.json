@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 176655,
+    "path": "data/causes/task_bank/v1/variants/native12/babel__babel-14532.json",
+    "sha256": "f06d2a487a43c5c13cf4357e52933f12a571a5369d05c1b588ce19de20300d63",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:babel__babel-14532",
+  "source_sha256": "ab9fadfe61ab9ed4e79fd568d7a4790935aa607a9ffce779994f8fa31b07c953",
+  "task_id": "babel__babel-14532",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/babel__babel-14532.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "26e28ed0466bc64cc0081fe57a75aeccb14e92b53f9ebbb29b2dc81c82e040e3",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "[Bug]: Function Statements Require a Function Name\n### 💻\n\n- [X] Would you like to work on a fix?\n\n### How are you using Babel?\n\n@babel/cli\n\n### Input code\n\n```js\r\nconst v0 = [\r\n    {\r\n        5: 'foo',\r\n        v20(val, x) {\r\n            let v1 = {};\r\n            v4(8, 'a', 7, 3, 'a');\r\n            (() => {\r\n                array[args]++;\r\n                return f2[v14(10, true).attr.v6 - 2](y[2].attr);\r\n            })().map(c, v0).map++;\r\n        },\r\n        null: 'a'\r\n    },\r\n    {\r\n        name: 'Hugo',\r\n        age: 8\r\n    },\r\n    {\r\n        name: 'Sunny',\r\n        age: 1\r\n    }\r\n];\r\n```\r\nHere is the [REPL](https://babel.dev/repl#?browsers=defaults%2C%20not%20ie%2011%2C%20not%20ie_mob%2011&build=&builtIns=false&corejs=false&spec=false&loose=true&code_lz=MYewdgzgLgBAbgBhgXhgbQFA2zA3lnQgVgC4YByAMxBHIBoDDs4AmBACjgEMAbOmAB4BKPIyaEeAU1hwAjCjwBfANxjxzACzsAHP3Jd6MAOz8AzHoNDV6pu3YjkAPlE2bXAE7uuATzQeA5hAAugDUIdau4u7SAK7uYDCULGhyWrII_FDuMZJCAHRcUFl5cABsMAC0MCxB7L41BUXuVmrqikL2eQC2XAAO7MD8iPk9vWER4ooMNmAxPDxk-uRiU2L4M1xdkosAEjH-tNPqXP7bMNorR9jr6mCbZ-QAyjFgYN70rdgnZ7IrGEHKIA&debug=false&forceAllTransforms=true&shippedProposals=false&circleciRepo=&evaluate=false&fileSize=false&timeTravel=false&sourceType=unambiguous&lineWrap=true&presets=env&prettier=false&targets=&version=7.17.8&externalPlugins=&assumptions=%7B%7D)\n\n### Configuration file name\n\nbabel.config.json\n\n### Configuration\n\n```json\r\n{\r\n  \"sourceType\": \"unambiguous\",\r\n  \"presets\": [\"@babel/preset-env\"],\r\n  \"plugins\": [\r\n    \"@babel/plugin-transform-runtime\"\r\n  ]\r\n}\r\n```\n\n### Current and expected behavior\n\nThere is an error about self-executing function with arrow function transformed by babel.\r\nSpecifically, the original code can be run by node correctly, but there is an error transformed by babel as follows when run by node\r\n```shell\r\nfunction () {\r\n    ^^^^^^^^\r\n\r\nSyntaxError: Function statements require a function name\r\n```\n\n### Environment\n\n\r\n- babel \r\n- - ├── @babel/cli@7.17.0=6\r\n- - ├── @babel/generator@7.17.3\r\n- - ├── @babel/plugin-transform-runtime@7.17.0\r\n- - ├── @babel/preset-env@7.16.11\r\n- Node: [v17.3.0]\r\n- npm version [8.5.2]\r\n- os [ubuntu 20.04]\n\n### Possible solution\n\n_No response_\n\n### Additional context\n\n_No response_\n",
+      "stimulus_sha256": "209f53f047b96d7804e97a6882843a7fc9f70f2b9c6f5c2a57ddd0897560f8e5",
+      "task_id": "babel__babel-14532"
+    },
+    {
+      "definition_sha256": "314fd8a8f11bd45088eae2f4f46af16c4b413053990a96f573003f5d9b2862c2",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nAddress the function-name syntax error introduced when transforming a self-executing function containing an arrow function.\n\n### Usage and contribution status\n\n- [X] Willingness to work on a fix is indicated.\n- Babel is used through @babel/cli.\n\n### Input and configuration\n\n```js\nconst v0 = [\n    {\n        5: 'foo',\n        v20(val, x) {\n            let v1 = {};\n            v4(8, 'a', 7, 3, 'a');\n            (() => {\n                array[args]++;\n                return f2[v14(10, true).attr.v6 - 2](y[2].attr);\n            })().map(c, v0).map++;\n        },\n        null: 'a'\n    },\n    {\n        name: 'Hugo',\n        age: 8\n    },\n    {\n        name: 'Sunny',\n        age: 1\n    }\n];\n```\n\n\nReproduction link: [REPL](https://babel.dev/repl#?browsers=defaults%2C%20not%20ie%2011%2C%20not%20ie_mob%2011&build=&builtIns=false&corejs=false&spec=false&loose=true&code_lz=MYewdgzgLgBAbgBhgXhgbQFA2zA3lnQgVgC4YByAMxBHIBoDDs4AmBACjgEMAbOmAB4BKPIyaEeAU1hwAjCjwBfANxjxzACzsAHP3Jd6MAOz8AzHoNDV6pu3YjkAPlE2bXAE7uuATzQeA5hAAugDUIdau4u7SAK7uYDCULGhyWrII_FDuMZJCAHRcUFl5cABsMAC0MCxB7L41BUXuVmrqikL2eQC2XAAO7MD8iPk9vWER4ooMNmAxPDxk-uRiU2L4M1xdkosAEjH-tNPqXP7bMNorR9jr6mCbZ-QAyjFgYN70rdgnZ7IrGEHKIA&debug=false&forceAllTransforms=true&shippedProposals=false&circleciRepo=&evaluate=false&fileSize=false&timeTravel=false&sourceType=unambiguous&lineWrap=true&presets=env&prettier=false&targets=&version=7.17.8&externalPlugins=&assumptions=%7B%7D)\n\nConfiguration file: babel.config.json\n\n```json\n{\n  \"sourceType\": \"unambiguous\",\n  \"presets\": [\"@babel/preset-env\"],\n  \"plugins\": [\n    \"@babel/plugin-transform-runtime\"\n  ]\n}\n```\n\n\n### Expected and observed behavior\n\nThe self-executing function containing an arrow function produces an error after transformation by babel. The original code runs correctly in node; after transformation by babel, execution in node produces:\n\n```shell\nfunction () {\n    ^^^^^^^^\n\nSyntaxError: Function statements require a function name\n```\n\n\n### Environment\n\n- babel package listing:\n  - @babel/cli@7.17.0=6\n  - @babel/generator@7.17.3\n  - @babel/plugin-transform-runtime@7.17.0\n  - @babel/preset-env@7.16.11\n- Node: [v17.3.0]\n- npm version: [8.5.2]\n- Operating system: [ubuntu 20.04]\n\n### Unspecified details\n\nPossible solution: _No response_\n\nAdditional context: _No response_",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "6f6ec2018621bf7f0a8e97e17a05066300261edd9fc28be514d14be79411c879",
+      "task_id": "babel__babel-14532"
+    }
+  ]
+}

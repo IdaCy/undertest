@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 44526,
+    "path": "data/causes/task_bank/v1/variants/native12/roave__betterreflection-618.json",
+    "sha256": "84e4c80ca2533546c91ddfd8f759a2e9b1ba32eb79825aa7d687277ee8fee4b2",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:roave__betterreflection-618",
+  "source_sha256": "e3f57f15d7132109adf370d858d916e233a7806f0b58a34cfd5407ca32dd33d2",
+  "task_id": "roave__betterreflection-618",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/roave__betterreflection-618.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "0324e26d1fded07ebc65114b671b7aa4728ad21050c3b0c7c6c2671c0133ddf4",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "PhpStormStubsSourceStubber should be case-insensitive for classes and functions\nAsking for `SOAPFault` and `SoapFault` should yield the same results.\r\n\r\nPoC fix: https://github.com/ondrejmirtes/BetterReflection/commit/3105728871436e1c34c86db23f6dfe711fd9c12d",
+      "stimulus_sha256": "9ce5fdb7efa9575e291dedb3eaef512125fca383ba6bc36533e147c91b14a569",
+      "task_id": "roave__betterreflection-618"
+    },
+    {
+      "definition_sha256": "50e9e47fe0a94fa0157fff5ec16d6e393e406dae3741db164601ffa0f151baf8",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Required behavior\n\nMake PhpStormStubsSourceStubber case-insensitive for class and function lookups. Requests for `SOAPFault` and `SoapFault` must return the same results.\n\n### Proposed implementation\n\nA PoC correction is available at https://github.com/ondrejmirtes/BetterReflection/commit/3105728871436e1c34c86db23f6dfe711fd9c12d.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "7d5f8f2aeb2fefb3bd9334a085ebc4812c0ddf92ce732b75f6d988d33b00c358",
+      "task_id": "roave__betterreflection-618"
+    }
+  ]
+}

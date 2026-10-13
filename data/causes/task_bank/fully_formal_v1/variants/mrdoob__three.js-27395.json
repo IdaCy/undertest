@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 61685,
+    "path": "data/causes/task_bank/v1/variants/main60/mrdoob__three.js-27395.json",
+    "sha256": "6975f62105118003d64c5d5d8569c3aa503681342fbc32f2f81a6cc307ad62d1",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:mrdoob__three.js-27395",
+  "source_sha256": "9392d4183d6bb099e9e2e8a5de1e253926f681e1a72f868631363baacf6c2af4",
+  "task_id": "mrdoob__three.js-27395",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/mrdoob__three.js-27395.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "899679c8335e2fac20b93852d13f7042c4ec7d49cc522a477bd979f2f8eea6f6",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Class Sphere is missing property isSphere\n### Description\n\nBox3 has this.isBox3 = true;\r\nSphere does not have this.isSphere;\n\n### Reproduction steps\n\nI need it for \r\nif(collider.isSphere)\n\n### Code\n\na = new Sphere()\r\nif(a.isSphere){ debugger }\n\n### Live example\n\nno example\n\n### Screenshots\n\n_No response_\n\n### Version\n\nr159\n\n### Device\n\n_No response_\n\n### Browser\n\n_No response_\n\n### OS\n\n_No response_\n",
+      "stimulus_sha256": "bcc3729c3dcda6dd1a32284f8c7719ed650897596cf7a90f35c9ffd5847aaf53",
+      "task_id": "mrdoob__three.js-27395"
+    },
+    {
+      "definition_sha256": "2dfaf4424d5271b96a06577baaa8034c729b42b4bb04a294644d2b340c8afe8b",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Requested property\n\nProvide the missing isSphere property on Sphere. Box3 has this.isBox3 = true, whereas Sphere has no this.isSphere.\n\n## Intended usage\n\nThe property is needed for the condition if(collider.isSphere). The supplied code example is:\n\n### Code\n\na = new Sphere()\nif(a.isSphere){ debugger }\n\n\n\n## Reported environment\n\nVersion: r159. No live example, screenshots, device, browser, or OS details were provided.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "853a8de0d489ef918314d68be52d8b0b30cebba1b9e9a126d82b0085c7cf3168",
+      "task_id": "mrdoob__three.js-27395"
+    }
+  ]
+}
