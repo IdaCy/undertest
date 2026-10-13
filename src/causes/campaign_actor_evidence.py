@@ -167,7 +167,7 @@ def _audit_episode(directory, job, config, *, original_directory, allow_censored
                 == ['attempt.json', 'receipt.json', 'request.json', 'response.raw'], 'actor_request_file_roster_changed')
         request = _read(root, f'actor/{name}/request.json')
         expected = runner.request(config, messages, runner.seed_for(allocation['seed'], ['actor', turn]), config['tools'])
-        require(request == expected, 'actor_request_changed:' + name)
+        require(runner.encoded(request) == runner.encoded(expected), 'actor_request_changed:' + name)
         attempt = _read(root, f'actor/{name}/attempt.json')
         receipt = _read(root, f'actor/{name}/receipt.json')
         response_path = handoff.canonical_path(actor / 'response.raw')

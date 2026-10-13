@@ -234,6 +234,22 @@ class PrefixEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'tool_execution_path_changed'):
             self.check()
 
+    def test_json_distinct_request_types_refuse_with_rehashed_receipts(self):
+        self.config['sampling']['max_tokens'] = 32768
+        self.generate()
+        original = self.read('actor/0000/request.json')
+        for key, value in (('n', True), ('stream', 0), ('parallel_tool_calls', 1),
+                           ('max_tokens', 32768.0)):
+            with self.subTest(key=key):
+                request = dict(original, **{key: value})
+                self.save('actor/0000/request.json', request)
+                for file in ('attempt', 'receipt'):
+                    record = self.read(f'actor/0000/{file}.json')
+                    record['request_sha256'] = runner.sha(request)
+                    self.save(f'actor/0000/{file}.json', record)
+                with self.assertRaisesRegex(ValueError, 'actor_request_changed:0000'):
+                    self.check()
+
     def test_prefix_cannot_be_relabelled_full_or_censored(self):
         self.generate()
         with self.assertRaisesRegex(ValueError, 'full_episode_required'):
