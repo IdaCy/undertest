@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 SOURCE=Path(__file__).resolve().parents[2]/'src/causes/campaign_reader_closed_audit.py'
 spec=importlib.util.spec_from_file_location('closed_audit_test_target',SOURCE)
@@ -57,5 +58,112 @@ class ClosedAuditBoundaries(unittest.TestCase):
  def test_incomplete_natural_selection_refuses(self):
   rows,plan=self.history();rows['p1']['expected_unclaimed_contexts']=2
   with patch.object(m,'ck',lambda r:rows[r['path']]),self.assertRaises(AssertionError):m.previous_history(plan)
+
+class SavedCohortBoundaries(unittest.TestCase):
+ def setUp(self):
+  self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
+ def put(self,name,value):
+  p=self.root/name;p.write_bytes(value if isinstance(value,bytes) else json.dumps(value).encode());return m.pin(p)
+ def case(self):
+  cohort=self.put('cohort.json',dict(selected_run_ids=['a','b','unavailable'],assigned_contexts=3))
+  peer=self.put('peer.json',dict(accepted_original_candidate_measurement_cohort=True,cohort=cohort,findings=[]))
+  prep=dict(cohort=cohort,cohort_review=peer,counts=dict(selected=3,context_ready=2,reader_ready=2,reader_requests=6,unavailable=1,self_requests=4))
+  return dict(cohort=cohort),prep,[dict(run_id=x) for x in ('a','b','unavailable')]
+ def test_saved_cohort_accepts_unavailable_and_separate_self_metadata(self):
+  plan,prep,assigned=self.case()
+  m.validate_cohort_counts('saved_corpus',None,plan,prep,assigned)
+ def test_substituted_or_duplicate_assigned_run_refuses(self):
+  plan,prep,assigned=self.case()
+  for run in ('a','foreign'):
+   with self.subTest(run=run),self.assertRaisesRegex(AssertionError,'saved_cohort_assigned_runs'):
+    m.validate_cohort_counts('saved_corpus',None,plan,prep,assigned[:2]+[dict(run_id=run)])
+ def test_unaccepted_or_changed_cohort_refuses(self):
+  plan,prep,assigned=self.case();peer=m.ck(prep['cohort_review']);peer['cohort']=self.put('other.json',{})
+  prep['cohort_review']=self.put('bad_peer.json',peer)
+  with self.assertRaisesRegex(AssertionError,'saved_cohort_acceptance'):m.validate_cohort_counts('saved_corpus',None,plan,prep,assigned)
+ def test_saved_integer_counts_and_three_instruments_are_required(self):
+  plan,prep,assigned=self.case()
+  for key,value in [('unavailable',True),('reader_requests',5),('context_ready',1),('selected',4)]:
+   changed=copy.deepcopy(prep);changed['counts'][key]=value
+   with self.subTest(key=key),self.assertRaises(AssertionError):m.validate_cohort_counts('saved_corpus',None,plan,changed,assigned)
+ def test_fresh_global_count_and_pending_accounting_remain(self):
+  runtime=SimpleNamespace(KNOWN={'fresh_known':'known'},checked=lambda ref:dict(global_count=5))
+  prep=dict(counts=dict(selected=5,copied=3,reader_ready=2,unavailable=1,pending=2))
+  m.validate_cohort_counts('fresh_candidate',runtime,{},prep,[{}, {}, {}])
+  for key,value in [('selected',6),('pending',1),('unavailable',0)]:
+   changed=copy.deepcopy(prep);changed['counts'][key]=value
+   with self.subTest(key=key),self.assertRaises(AssertionError):m.validate_cohort_counts('fresh_candidate',runtime,{},changed,[{}, {}, {}])
+
+class ProcessJournalBoundaries(unittest.TestCase):
+ setUp=SavedCohortBoundaries.setUp
+ put=SavedCohortBoundaries.put
+ def progress_case(self):
+  ref=self.put('identity.json',{})
+  process={'identity':dict(pid=301,start_ticks='77',argv=['python','reader'])}
+  supervisor={'supervisor':dict(pid=300,start_ticks='76',argv=['python','supervisor'])}
+  events=[dict(event='claimed',key='a'),dict(event='finished',key='a'),dict(event='claimed',key='b')]
+  raw=b''.join(json.dumps(row).encode()+b'\n' for row in events)
+  journal=self.put('prefix.jsonl',raw)
+  seen=dict(reader=dict(process['identity'],state='S'),supervisor=dict(supervisor['supervisor'],state='S'))
+  observation=dict(plan=ref,packet=ref,original_process=ref,supervisor_intent=ref,journal_original_path=str(self.root/'original.jsonl'),journal_snapshot=journal,process_before=seen,process_after=copy.deepcopy(seen),counts=dict(claimed_contexts=2,terminal_contexts=1,active_contexts=1,unclaimed_contexts=0,event_counts={'claimed':2,'finished':1}),observed_from='2026-01-01T00:01:00+00:00',observed_to='2026-01-01T00:01:00+00:00',complete_exists=False,findings=[])
+  actual=dict(plan=ref,packet=ref,actor_process=ref,supervisor_intent=ref,journal_original=dict(path=observation['journal_original_path']),observed_at='2026-01-01T00:03:00+00:00')
+  closed=raw+json.dumps(dict(event='finished',key='b')).encode()+b'\n'
+  settings=dict(output=str(self.root/'output.json'))
+  return observation,actual,process,supervisor,closed,settings
+ def seal(self,observation,settings,observations=None):
+  startup=self.put('startup.json',observation);settings['startup_actual_path']=startup['path']
+  review=self.put('startup_peer.json',dict(accepted_reader_process_journal_startup=True,actual=startup,findings=[]))
+  return self.put('custody.json',dict(schema='causes.reader_process_journal_progress_custody.v1',startup=startup,startup_review=review,startup_review_flag='accepted_reader_process_journal_startup',observations=observations or []))
+ def run_case(self,case,observations=None):
+  observation,actual,process,supervisor,closed,settings=case
+  return m.validate_process_journal_progress(self.seal(observation,settings,observations),settings,actual,process,supervisor,closed,2)
+ def test_exact_snapshot_does_not_claim_historical_lock(self):
+  result=self.run_case(self.progress_case())
+  self.assertTrue(result['journal_prefixes_verified']);self.assertFalse(result['historical_watch_lock_identity_claimed'])
+  self.assertEqual(result['observations'][0]['terminal_contexts'],1)
+ def test_all_dated_prefixes_and_counts_are_checked(self):
+  case=self.progress_case();later=copy.deepcopy(case[0]);later['observed_from']=later['observed_to']='2026-01-01T00:02:00+00:00';later['previous']=self.put('startup.json',case[0])
+  later['journal_snapshot']=self.put('later.jsonl',case[4]);later['counts'].update(terminal_contexts=2,active_contexts=0,event_counts={'claimed':2,'finished':2})
+  result=self.run_case(case,[self.put('later.json',later)])
+  self.assertEqual([x['terminal_contexts'] for x in result['observations']],[1,2])
+  later['counts']['terminal_contexts']=1
+  with self.assertRaisesRegex(AssertionError,'progress_counts'):self.run_case(case,[self.put('bad_later.json',later)])
+ def test_same_pid_with_changed_start_or_argv_refuses(self):
+  for field,value in [('start_ticks','78'),('argv',['python','other'])]:
+   case=self.progress_case();case[0]['process_after']['reader'][field]=value
+   with self.subTest(field=field),self.assertRaisesRegex(AssertionError,'progress_process_identity'):self.run_case(case)
+ def test_changed_packet_or_original_process_refuses(self):
+  for key in ('packet','original_process','supervisor_intent'):
+   case=self.progress_case();case[0][key]=self.put('foreign.json',{'foreign':True})
+   with self.subTest(key=key),self.assertRaises(AssertionError):self.run_case(case)
+ def test_rehashed_unrelated_or_partial_prefix_refuses(self):
+  for raw in (b'{"event":"claimed","key":"foreign"}\n',b'{"event":"claimed"}'):
+   case=self.progress_case();case[0]['journal_snapshot']=self.put('bad_prefix.jsonl',raw)
+   with self.subTest(raw=raw),self.assertRaisesRegex(AssertionError,'progress_journal_prefix'):self.run_case(case)
+ def test_duplicate_observation_and_backwards_time_refuse(self):
+  case=self.progress_case();reference=self.seal(case[0],case[5]);custody=m.ck(reference);custody['observations']=[custody['startup']]
+  with self.assertRaisesRegex(AssertionError,'duplicate_progress_observation'):
+   m.validate_process_journal_progress(self.put('duplicate.json',custody),case[5],case[1],case[2],case[3],case[4],2)
+  later=copy.deepcopy(case[0]);later['observed_from']=later['observed_to']='2026-01-01T00:00:00+00:00';later['previous']=custody['startup']
+  with self.assertRaisesRegex(AssertionError,'progress_time_order'):self.run_case(case,[self.put('backwards.json',later)])
+ def test_unaccepted_startup_cannot_replace_native_custody(self):
+  case=self.progress_case();reference=self.seal(case[0],case[5]);custody=m.ck(reference)
+  custody['startup_review']=self.put('bad_review.json',dict(actual=custody['startup'],findings=[]))
+  with self.assertRaisesRegex(AssertionError,'startup_acceptance'):
+   m.validate_process_journal_progress(self.put('unaccepted.json',custody),case[5],case[1],case[2],case[3],case[4],2)
+
+class DescriptorV2Boundaries(unittest.TestCase):
+ def setUp(self):
+  ClosedAuditBoundaries.setUp(self);self.d.update(schema='causes.saved_reader_closed_audit_descriptor.v2',cohort_kind='saved_corpus',process_journal_progress=self.ref,direct_binding=None)
+ def test_saved_explicit_descriptor_accepts(self):m.validate_descriptor(self.d)
+ def test_unknown_cohort_kind_refuses(self):
+  self.d['cohort_kind']='automatic'
+  with self.assertRaisesRegex(AssertionError,'cohort_kind'):m.validate_descriptor(self.d)
+ def test_ambiguous_custody_modes_refuse(self):
+  self.d['direct_binding']=self.ref
+  with self.assertRaisesRegex(AssertionError,'one_prior_custody_mode'):m.validate_descriptor(self.d)
+ def test_cannot_overwrite_process_journal_custody(self):
+  self.d['output']=self.ref['path']
+  with self.assertRaisesRegex(AssertionError,'output_overwrites_input'):m.validate_descriptor(self.d)
 
 if __name__=='__main__':unittest.main()

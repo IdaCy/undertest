@@ -11,19 +11,87 @@ def ck(r):return get(verify(r))
 def imp(name,r):
  verify(r);s=importlib.util.spec_from_file_location(name,r['path']);m=importlib.util.module_from_spec(s);sys.modules[name]=m;s.loader.exec_module(m);return m
 def validate_descriptor(settings):
- assert type(settings) is dict and set(settings)=={'schema','root','actual','plan','prior_progress','direct_binding','capture_execution','capture_source','reader_source','prepared','startup_actual_path','output'}, 'descriptor_fields'
- assert settings['schema']=='causes.saved_reader_closed_audit_descriptor.v1', 'descriptor_schema'
+ fields={'schema','root','actual','plan','prior_progress','direct_binding','capture_execution','capture_source','reader_source','prepared','startup_actual_path','output'}
+ assert type(settings) is dict, 'descriptor_fields'
+ version=settings.get('schema')
+ if version=='causes.saved_reader_closed_audit_descriptor.v2':
+  fields|={'cohort_kind','process_journal_progress'}
+ assert set(settings)==fields, 'descriptor_fields'
+ assert version in ('causes.saved_reader_closed_audit_descriptor.v1','causes.saved_reader_closed_audit_descriptor.v2'), 'descriptor_schema'
+ assert settings.get('cohort_kind','fresh_candidate') in ('fresh_candidate','saved_corpus'), 'cohort_kind'
  for key in ('root','startup_actual_path','output'):
   p=Path(settings[key]);assert p.is_absolute() and p.resolve()==p and not p.is_symlink(), 'noncanonical_descriptor_path'
  for key in ('actual','plan','capture_execution','capture_source','reader_source','prepared'):
   assert type(settings[key]) is dict and set(settings[key])=={'path','bytes','sha256'}, 'exact_pin_required'
   verify(settings[key])
- assert (settings['prior_progress'] is None)!=(settings['direct_binding'] is None), 'one_prior_custody_mode'
- for key in ('prior_progress','direct_binding'):
-  if settings[key] is not None:verify(settings[key])
+ custody_keys=('prior_progress','direct_binding','process_journal_progress')
+ assert sum(settings.get(key) is not None for key in custody_keys)==1, 'one_prior_custody_mode'
+ for key in custody_keys:
+  if settings.get(key) is not None:
+   assert type(settings[key]) is dict and set(settings[key])=={'path','bytes','sha256'}, 'exact_pin_required'
+   verify(settings[key])
  protected={settings[k]['path']for k in ('actual','plan','capture_execution','capture_source','reader_source','prepared')}
- protected.update(settings[k]['path']for k in ('prior_progress','direct_binding')if settings[k] is not None)
+ protected.update(settings[k]['path']for k in custody_keys if settings.get(k) is not None)
  assert settings['output'] not in protected, 'output_overwrites_input'
+
+def validate_cohort_counts(kind,runtime,plan,prep,assigned):
+ counts=prep['counts']
+ if kind=='fresh_candidate':
+  assert counts['selected']==runtime.checked(runtime.KNOWN['fresh_known'])['global_count'] and len(assigned)==counts['copied']
+  assert counts['reader_ready']+counts['unavailable']==counts['copied'] and counts['copied']+counts['pending']==counts['selected']
+ else:
+  assert kind=='saved_corpus' and plan['cohort']==prep['cohort'], 'saved_cohort_join'
+  cohort=ck(prep['cohort']);peer=ck(prep['cohort_review'])
+  assert peer.get('accepted_original_candidate_measurement_cohort') is True and peer['cohort']==prep['cohort'] and peer['findings']==[], 'saved_cohort_acceptance'
+  assert all(type(counts[key]) is int and counts[key]>=0 for key in ('selected','context_ready','reader_ready','reader_requests','unavailable')), 'saved_cohort_integer_counts'
+  run_ids=cohort['selected_run_ids']
+  assert type(run_ids) is list and len(run_ids)==len(set(run_ids))==cohort['assigned_contexts']==counts['selected'], 'saved_cohort_membership'
+  assert len(assigned)==counts['selected']==counts['reader_ready']+counts['unavailable'], 'saved_cohort_counts'
+  assert {row['run_id'] for row in assigned}==set(run_ids), 'saved_cohort_assigned_runs'
+  assert counts['context_ready']==counts['reader_ready'] and counts['reader_requests']==3*counts['reader_ready'], 'saved_cohort_reader_counts'
+
+def validate_process_journal_progress(reference,settings,actual,process,supervisor,closed_journal,ready_count):
+ """Check dated process/journal snapshots without asserting an earlier lock inode."""
+ custody=ck(reference)
+ assert set(custody)=={'schema','startup','startup_review','startup_review_flag','observations'}, 'process_journal_custody_fields'
+ assert custody['schema']=='causes.reader_process_journal_progress_custody.v1', 'process_journal_custody_schema'
+ flag=custody['startup_review_flag'];assert type(flag) is str and flag.startswith('accepted_'), 'startup_review_flag'
+ peer=ck(custody['startup_review'])
+ assert peer.get(flag) is True and peer['actual']==custody['startup'] and peer['findings']==[], 'startup_acceptance'
+ assert custody['startup']['path']==settings['startup_actual_path'], 'startup_path'
+ assert type(custody['observations']) is list, 'progress_observations'
+ references=[custody['startup']]+custody['observations']
+ assert len({ref['path'] for ref in references})==len(references), 'duplicate_progress_observation'
+ previous=b'';previous_at=None;checked=[]
+ for index,ref in enumerate(references):
+  assert type(ref) is dict and set(ref)=={'path','bytes','sha256'}, 'exact_progress_pin'
+  assert settings['output'] not in (ref['path'],custody['startup_review']['path']), 'output_overwrites_progress'
+  observation=ck(ref)
+  if index:assert observation['previous']==references[index-1], 'progress_previous_join'
+  for key in ('plan','packet'):assert observation[key]==actual[key], 'progress_'+key
+  assert observation['original_process']==actual['actor_process'] and observation['supervisor_intent']==actual['supervisor_intent'], 'progress_original_process'
+  assert observation['journal_original_path']==actual['journal_original']['path'], 'progress_journal_path'
+  for side in ('process_before','process_after'):
+   for key,identity in (('reader',process['identity']),('supervisor',supervisor['supervisor'])):
+    seen=observation[side][key]
+    assert all(seen[field]==identity[field] for field in ('pid','start_ticks','argv')) and seen.get('state') not in ('Z','X'), 'progress_process_identity'
+  snapshot=verify(observation['journal_snapshot']).read_bytes()
+  assert snapshot.endswith(b'\n') and snapshot.startswith(previous) and closed_journal.startswith(snapshot), 'progress_journal_prefix'
+  assert settings['output']!=observation['journal_snapshot']['path'], 'output_overwrites_progress'
+  rows=[json.loads(line) for line in snapshot.splitlines()]
+  claims=[row['key'] for row in rows if row['event']=='claimed']
+  terminals=[row['key'] for row in rows if row['event'] in ('finished','unresolved_current_reader_attempt')]
+  assert len(claims)==len(set(claims)) and len(terminals)==len(set(terminals)) and set(terminals)<=set(claims), 'progress_claim_accounting'
+  expected=dict(claimed_contexts=len(claims),terminal_contexts=len(terminals),active_contexts=len(claims)-len(terminals),unclaimed_contexts=ready_count-len(claims))
+  assert expected['unclaimed_contexts']>=0 and all(type(observation['counts'][key]) is int and observation['counts'][key]==value for key,value in expected.items()), 'progress_counts'
+  event_counts=observation['counts']['event_counts']
+  assert all(type(value) is int for value in event_counts.values()) and event_counts==dict(collections.Counter(row['event'] for row in rows)), 'progress_event_counts'
+  observed_at=datetime.datetime.fromisoformat(observation['observed_to']);observed_from=datetime.datetime.fromisoformat(observation['observed_from'])
+  assert observed_at.tzinfo is not None and observed_from.tzinfo is not None and observed_from<=observed_at and (previous_at is None or observed_from>previous_at) and observed_at<=datetime.datetime.fromisoformat(actual['observed_at']), 'progress_time_order'
+  assert observation.get('at',observation['observed_to'])==observation['observed_to'], 'progress_timestamp_join'
+  assert observation['complete_exists'] is False and observation.get('process_identity_matched',True) is True and observation['findings']==[], 'progress_live_scope'
+  checked.append(dict(actual=ref,journal=observation['journal_snapshot'],**expected));previous=snapshot;previous_at=observed_at
+ return dict(custody=reference,startup_review=custody['startup_review'],observations=checked,journal_prefixes_verified=True,historical_watch_lock_identity_claimed=False)
 
 def previous_history(plan):
  history=[];seen=set();expected=plan['prior_arrival6_final_cut']
@@ -44,6 +112,7 @@ def previous_history(plan):
 
 def review_saved_closed(descriptor_ref):
  settings=ck(descriptor_ref);validate_descriptor(settings)
+ cohort_kind=settings.get('cohort_kind','fresh_candidate');simple_ref=settings.get('process_journal_progress')
  O=Path(settings['actual']['path']).parent;PRIOR=None if settings['prior_progress'] is None else Path(settings['prior_progress']['path']);CAPTURE_EXECUTION=Path(settings['capture_execution']['path'])
  ap=settings['actual'];a=ck(ap);verify(settings['capture_execution']);output=Path(settings['output'])
  assert not output.exists() and output.parent.is_dir()
@@ -54,7 +123,10 @@ def review_saved_closed(descriptor_ref):
  for k in ['source','plan','plan_review','output','submit_intent','submit_result']:assert root[k]==rq[k]
  for k in ['source','plan','plan_review','submit_intent','submit_result']:assert rq[k]==a[k]
  assert ck(a['intent'])==dict(request=a['request'],source=a['source'],root_capture_adoption=rq['root_capture_adoption'],automatic_retry=False)
- plan=ck(a['plan']);pp=ck(a['plan_review']);prep=ck(a['prepared']);assert pp['accepted_fresh_candidate_reader_plan']is True and pp['plan']==a['plan'] and pp['source']==a['reader_source']==plan['source'] and a['plan']==settings['plan']
+ plan=ck(a['plan']);pp=ck(a['plan_review']);prep=ck(a['prepared'])
+ plan_flag='accepted_fresh_candidate_reader_plan' if cohort_kind=='fresh_candidate' else 'accepted_saved_corpus_reader_plan'
+ assert pp[plan_flag]is True and pp['plan']==a['plan'] and pp['source']==a['reader_source']==plan['source'] and a['plan']==settings['plan']
+ if cohort_kind=='saved_corpus':assert plan['schema']=='causes.saved_corpus_reader_plan.v1', 'saved_plan_schema'
  history,all_previous=previous_history(plan)
  assert a['route_predecessor']==plan['route_predecessor']==plan['intervening_reader_cuts'][-1]['actual']
  prior=priorpeerref=direct_binding_ref=None
@@ -62,7 +134,7 @@ def review_saved_closed(descriptor_ref):
   prior=ck(pin(PRIOR));priorpeerref=pin(PRIOR.parent/'INDEPENDENT_REVIEW.v1.json');priorpeer=ck(priorpeerref)
   assert priorpeer['accepted_fresh_candidate_reader_progress']is True and priorpeer['actual']==pin(PRIOR) and priorpeer['findings']==[]
   for field in ('plan','reader_source','packet'):assert a[field]==prior[field]
- else:
+ elif simple_ref is None:
   direct_binding_ref=settings['direct_binding'];assert direct_binding_ref is not None;direct=ck(direct_binding_ref)
   assert direct['startup_invoked']is direct['notifier_invoked']is False and direct['maximum_invocations']==1 and direct['whole_inverse_equal']is True
   assert direct['complete']==a['complete'] and not Path(settings['startup_actual_path']).exists()
@@ -95,11 +167,13 @@ def review_saved_closed(descriptor_ref):
  if prior is not None:assert raw.startswith(verify(prior['journal']['saved']).read_bytes())
  runtime=imp('historical_continuation_saved_reader_review',a['reader_source']);mods=runtime.native_modules();capture=imp('historical_continuation_saved_closed_capture',a['source'])
  loaded=runtime.load(a['plan'],a['plan_review'],mods);loaded_plan,loaded_prep,assigned,ready,config,baseline,states=loaded
- assert loaded_plan==plan and loaded_prep==prep and prep['counts']['selected']==runtime.checked(runtime.KNOWN['fresh_known'])['global_count'] and len(assigned)==prep['counts']['copied']
+ assert loaded_plan==plan and loaded_prep==prep
+ validate_cohort_counts(cohort_kind,runtime,plan,prep,assigned)
  all_ready=ck(plan['additive_ready']);assert len(all_ready)==prep['counts']['reader_ready'] and len(ready)==plan['expected_unclaimed_contexts']>0
- assert prep['counts']['reader_ready']+prep['counts']['unavailable']==prep['counts']['copied'] and prep['counts']['copied']+prep['counts']['pending']==prep['counts']['selected']
  readykeys={r['measurement_key']for r in ready};assert not readykeys.intersection(all_previous) and len(readykeys)==len(ready)
  assert set(plan['previous_cohort_claimed_keys'])==all_previous.intersection(r['measurement_key']for r in all_ready) and len(plan['previous_cohort_claimed_keys'])==len(set(plan['previous_cohort_claimed_keys']))
+ simple_progress=None
+ if simple_ref is not None:simple_progress=validate_process_journal_progress(simple_ref,settings,a,proc,sup,raw,len(ready))
  v=capture.validate_history(rows,result,plan,assigned,ready,carry,states,mods)
  assert rows[0]['carry']==a['route_state_carry'] and a['claimed_keys']==v['claims'] and a['unclaimed_keys']==v['unclaimed']==[]
  assert a['assigned']==len(assigned) and a['ready']==a['claimed']==a['finished_or_unresolved']==len(ready) and a['active']==a['unclaimed']==0 and a['all_claims_accounted']is True
@@ -121,7 +195,12 @@ def review_saved_closed(descriptor_ref):
   assert attempt['instrument']==m['instrument'] and attempt['request_sha256']==e['canonical_sha256'] and attempt['source_sha256']==prep['reader_source']['sha256'] and attempt['max_retries']==0 and attempt['store']is False and all(attempt[k]==value for k,value in e['pins'].items())
  capture_execution=ck(pin(CAPTURE_EXECUTION));assert capture_execution['returncode']==0 and capture_execution.get('automatic_retry',False)is False and verify(capture_execution['stderr']).read_bytes()==b'' and json.loads(verify(capture_execution['stdout']).read_bytes())==ap
  counts=collections.Counter((i,s)for e in rows if e['event']=='finished'for i,s in e['instrument_statuses'].items())
- out=dict(schema='causes.finite_reader_route_closed_cut_independent_review.v1',at=datetime.datetime.now(datetime.timezone.utc).isoformat(),accepted_finite_reader_route_closed_cut=True,accepted_fresh_candidate_reader_batch_closed_cut=True,actual=ap,**{k:a[k]for k in ['source','request','plan','plan_review','reader_source','root','journal','journal_original','runtime_result','prepared','route_predecessor','route_state_carry','identity','actor_process','supervisor_intent','packet','durable_adoption','execution','complete','submit_intent','submit_result']},source_review=rq['source_review'],root_capture_adoption=rq['root_capture_adoption'],intervening_reader_cuts=plan['intervening_reader_cuts'],prior_claimed_counts=[x['claimed']for x in history],prior_claimed_unique=len(all_previous),prior=pin(PRIOR) if PRIOR is not None else None,prior_review=priorpeerref,direct_closed_binding=direct_binding_ref,prior_progress_prefix_verified=prior is not None,capture_execution=pin(CAPTURE_EXECUTION),all_claims_accounted=True,assigned=len(assigned),ready=len(ready),claimed=len(ready),finished_or_unresolved=len(ready),active=0,unclaimed=0,actual_request_metadata_verified=len(a['actual_request_metadata']),missing_request_metadata=a['missing_request_metadata'],annotation_missing_contexts=len(v['annotation_missing']),native_failure_events=v['failures'],instrument_status_counts=[dict(instrument=i,status=s,count=n)for(i,s),n in sorted(counts.items())],initial_consecutive_failed_contexts=v['inherited'],final_consecutive_failed_contexts=v['final_counter'],quarantine=None,stop_reason=None,owned_pause=None,final_for_reader_analysis=False,findings=[],checks=['Exact descriptor-pinned plan, native closed source, accepted inputs/carry, sole capture/root adoption and optional genuine last-progress joins; direct closure requires original successful COMPLETE before first-capture binding.','Exact original native supervisor/reader packet, argv, rc0 COMPLETE/EXECUTION, empty stderr, native stdout/RESULT and saved original process absence/same free watch lock.','Any genuine prior progress journal prefix is retained; when absent, no prefix or earlier lock identity is claimed. Native load and complete-history replay reproduce the accepted nonempty ready count, ordered claims/terminals, zero unclaimed and every prior closed history, excluding every attempted key.','Every three-instrument slot accounted as exact original prepared request whole hash/attempt metadata or an explicit native absent-metadata entry; no semantic response/context decoding and no attempt replay.'],limitations=['Process absence/free lock are the saved genuine collector observations; no fresh process or lock observation by reviewer.','This operational peer closes only the exact accepted selection. Every prior attempt, including failed or unresolved attempts, remains excluded; cumulative counts retain the native frozen roster. No global study completion or runtime/import authority is asserted.'],review_source=pin(Path(__file__).resolve()),descriptor=descriptor_ref,reviewer='caus_prearm_recover',model_calls=0,host_calls=0,new_captures=0,response_or_judgment_reads=0)
+ out=dict(schema='causes.finite_reader_route_closed_cut_independent_review.v1',at=datetime.datetime.now(datetime.timezone.utc).isoformat(),accepted_finite_reader_route_closed_cut=True,accepted_fresh_candidate_reader_batch_closed_cut=cohort_kind=='fresh_candidate',actual=ap,**{k:a[k]for k in ['source','request','plan','plan_review','reader_source','root','journal','journal_original','runtime_result','prepared','route_predecessor','route_state_carry','identity','actor_process','supervisor_intent','packet','durable_adoption','execution','complete','submit_intent','submit_result']},source_review=rq['source_review'],root_capture_adoption=rq['root_capture_adoption'],intervening_reader_cuts=plan['intervening_reader_cuts'],prior_claimed_counts=[x['claimed']for x in history],prior_claimed_unique=len(all_previous),prior=pin(PRIOR) if PRIOR is not None else None,prior_review=priorpeerref,direct_closed_binding=direct_binding_ref,prior_progress_prefix_verified=prior is not None,capture_execution=pin(CAPTURE_EXECUTION),all_claims_accounted=True,assigned=len(assigned),ready=len(ready),claimed=len(ready),finished_or_unresolved=len(ready),active=0,unclaimed=0,actual_request_metadata_verified=len(a['actual_request_metadata']),missing_request_metadata=a['missing_request_metadata'],annotation_missing_contexts=len(v['annotation_missing']),native_failure_events=v['failures'],instrument_status_counts=[dict(instrument=i,status=s,count=n)for(i,s),n in sorted(counts.items())],initial_consecutive_failed_contexts=v['inherited'],final_consecutive_failed_contexts=v['final_counter'],quarantine=None,stop_reason=None,owned_pause=None,final_for_reader_analysis=False,findings=[],checks=['Exact descriptor-pinned plan, native closed source, accepted inputs/carry, sole capture/root adoption and optional genuine last-progress joins; direct closure requires original successful COMPLETE before first-capture binding.','Exact original native supervisor/reader packet, argv, rc0 COMPLETE/EXECUTION, empty stderr, native stdout/RESULT and saved original process absence/same free watch lock.','Any genuine prior progress journal prefix is retained; when absent, no prefix or earlier lock identity is claimed. Native load and complete-history replay reproduce the accepted nonempty ready count, ordered claims/terminals, zero unclaimed and every prior closed history, excluding every attempted key.','Every three-instrument slot accounted as exact original prepared request whole hash/attempt metadata or an explicit native absent-metadata entry; no semantic response/context decoding and no attempt replay.'],limitations=['Process absence/free lock are the saved genuine collector observations; no fresh process or lock observation by reviewer.','This operational peer closes only the exact accepted selection. Every prior attempt, including failed or unresolved attempts, remains excluded; cumulative counts retain the native frozen roster. No global study completion or runtime/import authority is asserted.'],review_source=pin(Path(__file__).resolve()),descriptor=descriptor_ref,reviewer='caus_prearm_recover',model_calls=0,host_calls=0,new_captures=0,response_or_judgment_reads=0)
+ if settings['schema']=='causes.saved_reader_closed_audit_descriptor.v2':
+  out.update(cohort_kind=cohort_kind,accepted_saved_corpus_reader_batch_closed_cut=cohort_kind=='saved_corpus',process_journal_progress=simple_progress)
+  if simple_progress is not None:
+   out['prior_progress_prefix_verified']=True
+   out['checks'][2]='Exact saved process identities and all declared dated journal prefixes verified; no historical watch-lock inode is claimed. Unchanged native load/history/request checks retain every prior attempt and fully account for the accepted selection.'
  return out
 
 def main(argv=None):
