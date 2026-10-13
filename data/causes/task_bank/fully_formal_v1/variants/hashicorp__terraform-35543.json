@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 93810,
+    "path": "data/causes/task_bank/v1/variants/main60/hashicorp__terraform-35543.json",
+    "sha256": "96f175f76d8b2701f46f49c9eb24c49676ec19e2751942aa1dce979630ba187d",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:hashicorp__terraform-35543",
+  "source_sha256": "8b2fbeb23e79905f7f27a5b9012368d62ea1797a0c13a7a2ba0d7c05f6e08039",
+  "task_id": "hashicorp__terraform-35543",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/hashicorp__terraform-35543.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "edd9a4850511e40477b4adec485f59b2a61113261dc0598e2be88265b1ef94c8",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "terraform validate does not validate import blocks\n### Terraform Version\n\n```shell\nTerraform v1.9.3\r\non linux_amd64\n```\n\n\n### Terraform Configuration Files\n\n```terraform\r\nresource \"null_resource\" \"undef-local\" {\r\n}\r\n\r\nresource \"null_resource\" \"undef-var\" {\r\n}\r\n\r\nimport {\r\n  to = null_resource.undef-local\r\n  id = local.something_not_defined\r\n}\r\n\r\nimport {\r\n  to = null_resource.undef-var\r\n  id = var.some_other_undefined_thing\r\n}\r\n\r\nimport {\r\n    to = null_resource.not-a-real-resource\r\n    id = \"blah\"\r\n}\r\n```\r\n\n\n### Debug Output\n\nhttps://gist.github.com/TylerReid/1b83440cd5dc79d76e7092bea3ed4158\n\n### Expected Behavior\n\nI expected `terraform validate` to catch undefined variables and resources in `import` blocks\n\n### Actual Behavior\n\n`validate` returns `Success! The configuration is valid.`\n\n### Steps to Reproduce\n\n1. `terraform validate`\n\n### Additional Context\n\n_No response_\n\n### References\n\n_No response_\n",
+      "stimulus_sha256": "1ec6db8b5434c28959821c1230a80dc66d702624987eea4d8cf63645a23f1136",
+      "task_id": "hashicorp__terraform-35543"
+    },
+    {
+      "definition_sha256": "e699ebc4ee16aa9d6c1f60eaac0d3de85eb460dccd165b2761db3dde71e6ffba",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Expected and observed behavior\n\nAddress the failure of `terraform validate` to detect undefined variables and resources in `import` blocks. For the configuration below, `validate` currently returns `Success! The configuration is valid.`.\n\n## Reproduction\n\nUse this configuration and run `terraform validate`:\n\n\n```terraform\nresource \"null_resource\" \"undef-local\" {\n}\n\nresource \"null_resource\" \"undef-var\" {\n}\n\nimport {\n  to = null_resource.undef-local\n  id = local.something_not_defined\n}\n\nimport {\n  to = null_resource.undef-var\n  id = var.some_other_undefined_thing\n}\n\nimport {\n    to = null_resource.not-a-real-resource\n    id = \"blah\"\n}\n```\n\nDebug output: https://gist.github.com/TylerReid/1b83440cd5dc79d76e7092bea3ed4158.\n\n## Environment\n\n\n```shell\nTerraform v1.9.3\non linux_amd64\n```\n\nNo additional context or references were provided.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "d938a9e7473d3408305bb03c55934b81964807638c78fe8a54e787189f36cad4",
+      "task_id": "hashicorp__terraform-35543"
+    }
+  ]
+}

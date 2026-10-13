@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 91970,
+    "path": "data/causes/task_bank/v1/variants/native12/niconoe__pyinaturalist-72.json",
+    "sha256": "3d6c45ef914e89a76a45588ba17241bc4be8d798138a447764df5f6e48ccbb6a",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:niconoe__pyinaturalist-72",
+  "source_sha256": "a50935851eb486784d26af72b8b0dabdd34c3b26daca170c0a27fb4254330da0",
+  "task_id": "niconoe__pyinaturalist-72",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/niconoe__pyinaturalist-72.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "42c82de7c058689a9dbba881a135befc9ef74f9b88cf70a6404ffb06f1ae8854",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Add support for providing credentials via environment variables\nAs an alternative to passing user credentials as arguments to `rest_api.get_access_token()`, it would be useful to also have the option of providing these via shell environment variables, for example:\r\n```\r\nexport INAT_USERNAME=\"\"\r\nexport INAT_PASSWORD=\"\"\r\nexport INAT_APP_ID=\"\"\r\nexport INAT_APP_SECRET=\"\"\r\n```\r\n\r\nThis is a pretty common pattern in other applications (for example, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html)), since environment variables offer a bit more flexibility. For example, creds can be stored in the system keychain or other secure format and then loaded with something like `export INAT_PASSWORD=$(secret-tool lookup ...)`.\r\n\r\nThere is also the python [keyring](https://github.com/jaraco/keyring) package that provides convenient integration with the system keyring, but that could be a separate issue (EDIT: created #69 for this).\r\n\r\nIf both function arguments and environment variables were to be specified, function arguments would take precedence.",
+      "stimulus_sha256": "ad423ba05d0b72f7fdc421558e66aa3587f295e6a3b97bf61e712a6450fa0ec5",
+      "task_id": "niconoe__pyinaturalist-72"
+    },
+    {
+      "definition_sha256": "154e947416a8e4d7d8316d064c3f5de3e34151a9488c60452f2586b9c02aa745",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Requested feature\n\nAllow credentials to be supplied through shell environment variables as an alternative to arguments to `rest_api.get_access_token()`. If both sources are supplied, function arguments must take precedence.\n\nExample variables:\n\n```\nexport INAT_USERNAME=\"\"\nexport INAT_PASSWORD=\"\"\nexport INAT_APP_ID=\"\"\nexport INAT_APP_SECRET=\"\"\n```\n\n\n### Rationale\n\nOther applications use this pattern (for example, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html)), because environment variables offer additional flexibility. Credentials can be stored in the system keychain or another secure format and then loaded with a command such as `export INAT_PASSWORD=$(secret-tool lookup ...)`.\n\n### Separate related work\n\nThe python [keyring](https://github.com/jaraco/keyring) package provides convenient integration with the system keyring. That integration can be addressed separately; a subsequent EDIT records creation of #69 for this purpose.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "36846b05ae99cbcaadb5df62ec2242fead4c4cdc042fc389f68fea2c6c17cf31",
+      "task_id": "niconoe__pyinaturalist-72"
+    }
+  ]
+}

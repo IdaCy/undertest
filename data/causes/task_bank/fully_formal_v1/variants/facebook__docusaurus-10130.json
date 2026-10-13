@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 207016,
+    "path": "data/causes/task_bank/v1/variants/future4/facebook__docusaurus-10130.json",
+    "sha256": "eec3e6ea9eb0c8ad9ef37d64f7d2a16172e8f5b2c1de83887ab21b062f7bcc79",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:facebook__docusaurus-10130",
+  "source_sha256": "9b17bdd05deb7056ebe3f5a05a4a6e302a39f5b6c13d076254ad1dcf821f0c95",
+  "task_id": "facebook__docusaurus-10130",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/facebook__docusaurus-10130.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "04c25b19568f8b554f34393c453fb2ff37259f660c94d5240d112f1e553d3789",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Broken links checker: inconsistent trailing slash behavior\n### Have you read the Contributing Guidelines on issues?\r\n\r\n- [X] I have read the [Contributing Guidelines on issues](https://github.com/facebook/docusaurus/blob/main/CONTRIBUTING.md#issues).\r\n\r\n### Prerequisites\r\n\r\n- [X] I'm using the latest version of Docusaurus.\r\n- [X] I have tried the `npm run clear` or `yarn clear` command.\r\n- [X] I have tried `rm -rf node_modules yarn.lock package-lock.json` and re-installing packages.\r\n- [ ] I have tried creating a repro with https://new.docusaurus.io.\r\n- [X] I have read the console error message carefully (if applicable).\r\n\r\n### Description\r\n\r\nThe broken link checker sometimes requires a trailing slash and sometimes it works without it.\r\n\r\nThe fix is then to do\r\n\r\n```md\r\n[reported link]: /docs/test#abc\r\n[working link]: /docs/test/#abc\r\n```\r\n\r\n### Reproducible demo\r\n\r\n_No response_\r\n\r\n### Steps to reproduce\r\n\r\nYou can reproduce it in our docs repository: https://github.com/21TORR/docs\r\n\r\n1. check it out\r\n2. run `pnpm install`\r\n3. go to this file https://github.com/21TORR/docs/blob/live/docs/php/tooling/janus-php.mdx and change the links:\r\n\r\n    ```diff\r\n    - [Composer bin plugin]: /docs/php/tooling/#composer-bin-plugin\r\n    + [Composer bin plugin]: /docs/php/tooling#composer-bin-plugin\r\n    ...\r\n    - [the note about it]: /docs/php/tooling/#phpunit\r\n    + [the note about it]: /docs/php/tooling#phpunit\r\n    ```\r\n4. run `pnpm build`\r\n\r\nAnd you will get the error:\r\n\r\n> Exhaustive list of all broken anchors found:\r\n> - Broken anchor on source page path = /docs/php/tooling/janus-php:\r\n>    -> linking to /docs/php/tooling#composer-bin-plugin\r\n>    -> linking to /docs/php/tooling#phpunit\r\n\r\n### Expected behavior\r\n\r\nI am not very familiar with the age old issue of trailing slashes and their handling in Docusaurus. But the pages themselves are accessible without trailing slash, so I would assume that the broken link checker would then just normalize the linked page before checking?\r\n\r\nOr are there cases where these links will actually 404?\r\n\r\n### Actual behavior\r\n\r\nThe links are reported as issues, even if copying the link and pasting it into the browser works flawlessly.\r\n\r\n### Your environment\r\n\r\n- Public source code: https://github.com/21TORR/docs\r\n- Public site URL:\r\n- Docusaurus version used: 3.3.2\r\n- Environment name and version (e.g. Chrome 89, Node.js 16.4): the build is run on Cloudflare Pages with Ubuntu 22.04.2 and Node 18.17.1\r\n- Operating system and version (e.g. Ubuntu 20.04.2 LTS): see above\r\n\r\nWe have a public repository that I could share, however I fixed all the cases there. I will look at reproducing the issue however.\r\n\r\n### Self-service\r\n\r\n- [ ] I'd be willing to fix this bug myself.\n",
+      "stimulus_sha256": "dcbb0503706042da6b11b0540a3e8f0aba20068ac06dbf10e2e9e4928e3f017d",
+      "task_id": "facebook__docusaurus-10130"
+    },
+    {
+      "definition_sha256": "627ff637bdcc30f5d7ed1ca728b8467bd743aba15fa304c172e5ed070618024e",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nInvestigate inconsistent trailing-slash requirements in the broken-link checker and determine whether linked pages should be normalized before checking or whether some of the reported links can actually return 404.\n\n### Observed behavior and workaround\n\nThe checker sometimes requires a trailing slash and sometimes accepts the same form without it. Adding the slash resolves the reported issue:\n\n\n```md\n[reported link]: /docs/test#abc\n[working link]: /docs/test/#abc\n```\n\nLinks are reported as invalid even though copying them into a browser opens the pages successfully. Familiarity with historical trailing-slash handling in Docusaurus is limited; normalization is a proposed explanation or solution, not an established requirement.\n\n### Reproduction\n\nNo separate reproducible demo was provided. The reported reproduction uses the documentation repository at https://github.com/21TORR/docs:\n\n1. Check out the repository.\n2. Run `pnpm install`.\n3. Open https://github.com/21TORR/docs/blob/live/docs/php/tooling/janus-php.mdx and modify the links as follows:\n\n\n    ```diff\n    - [Composer bin plugin]: /docs/php/tooling/#composer-bin-plugin\n    + [Composer bin plugin]: /docs/php/tooling#composer-bin-plugin\n    ...\n    - [the note about it]: /docs/php/tooling/#phpunit\n    + [the note about it]: /docs/php/tooling#phpunit\n    ```\n\n4. Run `pnpm build`.\n\nThe resulting error is:\n\n> Exhaustive list of all broken anchors found:\n> - Broken anchor on source page path = /docs/php/tooling/janus-php:\n>    -> linking to /docs/php/tooling#composer-bin-plugin\n>    -> linking to /docs/php/tooling#phpunit\n\nThe cases in the public repository have since been corrected; an attempt to reproduce the issue again is planned.\n\n### Reported prerequisites\n\n- [X] The [Contributing Guidelines on issues](https://github.com/facebook/docusaurus/blob/main/CONTRIBUTING.md#issues). have been read.\n- [X] The latest version of Docusaurus is in use.\n- [X] `npm run clear` or `yarn clear` has been tried.\n- [X] `rm -rf node_modules yarn.lock package-lock.json` and package reinstallation have been tried.\n- [ ] Creation of a reproduction through https://new.docusaurus.io. is not marked complete.\n- [X] The console error has been read carefully where applicable.\n\n### Environment\n\n- Public source: https://github.com/21TORR/docs.\n- Public site URL: not provided.\n- Docusaurus version: 3.3.2.\n- Build environment: Cloudflare Pages with Ubuntu 22.04.2 and Node 18.17.1. The source field's examples were e.g. Chrome 89 and Node.js 16.4; these are template examples, not the reported build configuration.\n- Operating system: as stated above. The source field's example was e.g. Ubuntu 20.04.2 LTS.\n\n### Contribution status\n\n- [ ] Willingness to implement the fix is not indicated.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "35f75bcedc19eaaec1b96ea286eb2285e7769800e2f8547f6a03b4aaa4f64529",
+      "task_id": "facebook__docusaurus-10130"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 141793,
+    "path": "data/causes/task_bank/v1/variants/native7/webpack-contrib__copy-webpack-plugin-590.json",
+    "sha256": "7941d782083a6f0c84d9aba20fd112fc522a1a40e46a1e13de6c241c6532c48f",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:webpack-contrib__copy-webpack-plugin-590",
+  "source_sha256": "4779f499deb16ef2b79dcb7ce47baf75d0af44e0a484327c5fa0033ffcc9ac2e",
+  "task_id": "webpack-contrib__copy-webpack-plugin-590",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/webpack-contrib__copy-webpack-plugin-590.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "e3082a4dc81284b7fe1c710332c51b4ed7b2c11bff726eeb29558a73378cec86",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "[Feature] Add order option\nHello,\r\n\r\nIn a project I am developing, I have an issue with copying files with the same name from multiple sources.\r\n\r\nConfiguration of copy webpack plugin is as follows:\r\n```\r\nnew CopyWebpackPlugin([\r\n            { from: 'node_modules/engine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: 'node_modules/subengine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: './static', test: /\\.(css|html|png)$/, force: true },\r\n        ]),\r\n```\r\n\r\nThe project has two dependencies, let's call them `engine` and `subengine`. They are both bundled within node_modules.\r\n\r\nEach of these has its own graphical assets. In case the file with an exact same name and path is in more than one repo, then one from \"project\" is more important than one from `subengine`, and one from `subengine` is more important than file from `engine`. \r\n\r\nLet's say each of these contains an `abc.png` file in its own `static` folder. The intended result is to have `abc.png` come from projects's own `./static` folder, but it instead, the one from `subengine` is used.\r\n\r\nHOWEVER.... which is where the fun begins...\r\n\r\nIf I do this:\r\n```\r\nnew CopyWebpackPlugin([\r\n            { from: 'node_modules/engine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: 'node_modules/subengine/static', test: /\\.(css|html|png)$/, force: true },\r\n            { from: './static', test: /\\.(css|html|png)$/, force: true },\r\n        ], {debug: 'debug'}),\r\n```\r\n\r\n...then the order is correct, and `abc.png` is taken from project's `static` folder.\r\n\r\nThis might be random behavior and just a coincidence, but it really seems having debug on fixes the issue every time. \r\n\r\nI am using:\r\n`\"webpack\": \"~4.17.2\",` (I would like not to update further for now because then the build breaks elsewhere)\r\n`\"copy-webpack-plugin\": \"^4.6.0\",`\r\n\r\nBuild on Windows 10, Node 8.4.0",
+      "stimulus_sha256": "d6b8a3e59a81a9c7a913616e27d845cffb9ef878adf4329441397a53bd2d7a3b",
+      "task_id": "webpack-contrib__copy-webpack-plugin-590"
+    },
+    {
+      "definition_sha256": "095866d5da8d97afe6587dc51da203dbc8007e7c12d89ed0168306ed5b43a4eb",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Feature request\n\nAdd an order option to address copying identically named files from multiple sources.\n\n## Configuration and required precedence\n\nThe copy webpack plugin configuration is:\n\n```\nnew CopyWebpackPlugin([\n            { from: 'node_modules/engine/static', test: /\\.(css|html|png)$/, force: true },\n            { from: 'node_modules/subengine/static', test: /\\.(css|html|png)$/, force: true },\n            { from: './static', test: /\\.(css|html|png)$/, force: true },\n        ]),\n```\n\n\nThe project depends on `engine` and `subengine`, both bundled in node_modules. Each contains graphical assets. When the same filename and path exist in multiple repositories, the file from \"project\" should take precedence over that from `subengine`, and the file from `subengine` should take precedence over that from `engine`.\n\nFor example, if each source contains `abc.png` in its own `static` directory, the resulting `abc.png` should come from the project's `./static` directory. Instead, the file from `subengine` is selected.\n\n## Behavior with debugging enabled\n\nWith debugging enabled in the following configuration:\n\n```\nnew CopyWebpackPlugin([\n            { from: 'node_modules/engine/static', test: /\\.(css|html|png)$/, force: true },\n            { from: 'node_modules/subengine/static', test: /\\.(css|html|png)$/, force: true },\n            { from: './static', test: /\\.(css|html|png)$/, force: true },\n        ], {debug: 'debug'}),\n```\n\n\nThe reported result is that the order is correct and `abc.png` is taken from the project's `static` directory. This could be random behavior or coincidence, but enabling debug appears to resolve the issue consistently.\n\n## Environment and version constraint\n\nVersions in use:\n\n`\"webpack\": \"~4.17.2\",`\n\n`\"copy-webpack-plugin\": \"^4.6.0\",`\n\nRetain the current webpack version for now, because a further update causes a separate build failure. The build runs on Windows 10 with Node 8.4.0.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "f8057b5820653224a9f1c43dacb4eee8acbd97edaf6a913c8fbacf03340de275",
+      "task_id": "webpack-contrib__copy-webpack-plugin-590"
+    }
+  ]
+}

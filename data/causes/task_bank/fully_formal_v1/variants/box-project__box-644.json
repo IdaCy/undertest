@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 49363,
+    "path": "data/causes/task_bank/v1/variants/native7/box-project__box-644.json",
+    "sha256": "c618e708fd5ac5afadf830e8c56f661a9b0be4753cecb8ca3d997e12a08e20ff",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:box-project__box-644",
+  "source_sha256": "361c92a804bae3b8a96125af7ea79097972cf91cc8ff47a3ae952e9f26f6b73d",
+  "task_id": "box-project__box-644",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/box-project__box-644.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "25ba0d9f56e52d66cbb22af06211a7ee3f8c3c6858cc8c57534490a41a4c582b",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Docker support with PHP 8\nAs latest version 3.16.0, Box is supposed to support both PHP 7.x and 8.x\r\n\r\nBut when you look inside [DockerFileGenerator](https://github.com/box-project/box/blob/3.16.0/src/DockerFileGenerator.php#L43-L49) no images are defined for PHP 8.0 and 8.1\r\n\r\nIs it just forgotten ? `8.0-cli-alpine` and `8.1-cli-alpine` images are available on DockerHub",
+      "stimulus_sha256": "88137e440dc74560347de41782fd466cbfe308968f58b22f0ccda6563260914f",
+      "task_id": "box-project__box-644"
+    },
+    {
+      "definition_sha256": "0b0a7ac2fe532938d127dd354f47ecfdd55a22cf52a20d54cfa23a3730f8b70e",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Issue to determine\n\nDetermine whether the missing Docker support for PHP 8 is an omission.\n\n## Reported discrepancy\n\nAs of version 3.16.0, Box is expected to support both PHP 7.x and 8.x. However, [DockerFileGenerator](https://github.com/box-project/box/blob/3.16.0/src/DockerFileGenerator.php#L43-L49) defines no images for PHP 8.0 or 8.1.\n\nThe `8.0-cli-alpine` and `8.1-cli-alpine` images are available on DockerHub.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "1c3a275040bf6cee4589576e324f91963d549d0b3b23a7c6b3a419f841a3bb39",
+      "task_id": "box-project__box-644"
+    }
+  ]
+}

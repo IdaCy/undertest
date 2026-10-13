@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 86648,
+    "path": "data/causes/task_bank/v1/variants/main60/gohugoio__hugo-12204.json",
+    "sha256": "6427e8a21e690aefb2bc4398ddc16e3a5e318bdbcfb8da2901fc65e645d1f092",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:gohugoio__hugo-12204",
+  "source_sha256": "d86222ac64d32cc5687fc53f761413e65990b059f371b62f3a11eb1865913bd6",
+  "task_id": "gohugoio__hugo-12204",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/gohugoio__hugo-12204.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "8dec6c4eb7cf4ad7d477eedfd99dd209aeb5414d1e984a1577ef8bc3120e95bb",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Embedded image render hook does not honor markdown attributes\nReference: <https://discourse.gohugo.io/t/image-block-attribute-disappears-with-0-123-x/48677>\r\n\r\nTest case:\r\n\r\n```go\r\nfunc TestFoo(t *testing.T) {\r\n\tt.Parallel()\r\n\r\n\tfiles := `\r\n-- config.toml --\r\ndisableKinds = ['page','rss','section','sitemap','taxonomy','term']\r\n\r\n[markup.goldmark.parser]\r\nwrapStandAloneImageWithinParagraph = false\r\n\r\n[markup.goldmark.parser.attribute]\r\nblock = true\r\n\r\n[languages.en]\r\n# weight = 1\r\n-- content/_index.md --\r\n![alt](a.jpg)\r\n{.foo}\r\n-- layouts/index.html --\r\n{{ .Content }}\r\n`\r\n\r\n\tb := hugolib.Test(t, files)\r\n\tb.AssertFileContent(\"public/index.html\", `<img src=\"a.jpg\" alt=\"alt\" class=\"foo\">`)\r\n\r\n\tfiles = strings.Replace(files, \"# weight\", \"weight\", -1)\r\n\r\n\tb = hugolib.Test(t, files)\r\n\tb.AssertFileContent(\"public/index.html\", `<img src=\"a.jpg\" alt=\"alt\" class=\"foo\">`) // failing test\r\n}\r\n```\n",
+      "stimulus_sha256": "8fa502f8cb87094a5affdbc376e2e90ebc7bd5f44090bf8d9c59856d8d944612",
+      "task_id": "gohugoio__hugo-12204"
+    },
+    {
+      "definition_sha256": "b0c0feab26691db49b846a976947b51fa9989ce34a4919394c5a313b7b5fc4e9",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Issue\n\nEnsure that the embedded image render hook honors Markdown attributes.\n\n## Supporting material\n\nThe reported behavior is described at <https://discourse.gohugo.io/t/image-block-attribute-disappears-with-0-123-x/48677> and reproduced by the following test case:\n\n\n```go\nfunc TestFoo(t *testing.T) {\n\tt.Parallel()\n\n\tfiles := `\n-- config.toml --\ndisableKinds = ['page','rss','section','sitemap','taxonomy','term']\n\n[markup.goldmark.parser]\nwrapStandAloneImageWithinParagraph = false\n\n[markup.goldmark.parser.attribute]\nblock = true\n\n[languages.en]\n# weight = 1\n-- content/_index.md --\n![alt](a.jpg)\n{.foo}\n-- layouts/index.html --\n{{ .Content }}\n`\n\n\tb := hugolib.Test(t, files)\n\tb.AssertFileContent(\"public/index.html\", `<img src=\"a.jpg\" alt=\"alt\" class=\"foo\">`)\n\n\tfiles = strings.Replace(files, \"# weight\", \"weight\", -1)\n\n\tb = hugolib.Test(t, files)\n\tb.AssertFileContent(\"public/index.html\", `<img src=\"a.jpg\" alt=\"alt\" class=\"foo\">`) // failing test\n}\n```\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "c99bf826068acf66f5eb5ebf43c9a7e28e468684f21605d62684b55b96d64e42",
+      "task_id": "gohugoio__hugo-12204"
+    }
+  ]
+}

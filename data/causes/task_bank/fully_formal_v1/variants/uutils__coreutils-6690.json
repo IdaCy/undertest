@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 62123,
+    "path": "data/causes/task_bank/v1/variants/main60/uutils__coreutils-6690.json",
+    "sha256": "ad49554d4fec8b5f70bd008c129cd2568659fee3bdf89430a4c63ba1f77694b6",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:uutils__coreutils-6690",
+  "source_sha256": "3a206d36c93e7fd671225ba269498ff2a6755f4718f9c35105c236fd861564e4",
+  "task_id": "uutils__coreutils-6690",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/uutils__coreutils-6690.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "7201ed2388c6eb5b35da4f69435ad84a43b1aca75318d0a16f5e9f018a87be84",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Zsh completion broken for `cp`\nHi,\r\n\r\nAfter installing through [pacman](https://archlinux.org/packages/extra/x86_64/uutils-coreutils/files/), the zsh completion for cp seems broken.\r\n\r\nWhen I type in `cp file <Tab>`, zsh suggests only the flags, and I have to type the target path without completion. This does not seem to be the case with `mv`, and I haven't found it anywhere else either.\n",
+      "stimulus_sha256": "6b354e738fdd75f651a2d8a0529f24049d8e31e664090402ad083b724a591634",
+      "task_id": "uutils__coreutils-6690"
+    },
+    {
+      "definition_sha256": "9f6671fad5bc092555c3b120758c5a8bab97b1da1570ed0308e75045152a3f7f",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Reported completion failure\n\nInvestigate zsh completion for `cp` after installation through [pacman](https://archlinux.org/packages/extra/x86_64/uutils-coreutils/files/), as it appears to be malfunctioning.\n\nEntering `cp file <Tab>` offers only flags, leaving the target path to be entered without completion. The same behavior does not appear to occur with `mv`, and the reporter has not observed it elsewhere.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "2ee9f8caff1deb5d80c15c6a21ec66922c3c4ac91ab8a6c157279caba22d4525",
+      "task_id": "uutils__coreutils-6690"
+    }
+  ]
+}

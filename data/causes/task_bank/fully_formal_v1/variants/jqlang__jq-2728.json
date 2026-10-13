@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 89241,
+    "path": "data/causes/task_bank/v1/variants/main60/jqlang__jq-2728.json",
+    "sha256": "288c103328b9e4733076c9717b2bdb10f264d2d097228f617ab28088b0d9f5fe",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:jqlang__jq-2728",
+  "source_sha256": "00969211bad86ce257351fc3a2798b7cb890c1e5a6a7060f992ddbbf060b6614",
+  "task_id": "jqlang__jq-2728",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/jqlang__jq-2728.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "7953dd7a03fefa8977fdddfa85686dfc3199988e33f8d82e3524b6c4ee466a1a",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Context\nI use jq inside a terminal wrapper and want to disable automatic ANSI colors through the environment. Adding a special command-line flag in every caller is inconvenient.\n\nRequested change\nPlease support the NO_COLOR environment variable. A nonempty value should disable automatic color output. An unset variable or an empty value should leave the normal terminal-based color choice unchanged.\n\nExpected behavior\nExplicit command-line choices still take precedence: -C can request colors even when NO_COLOR is set, and -M requests monochrome output. Preserve the ordinary output content and the existing jq and regular-expression behavior.\n\nChecks\nInspect the color-selection code, make the change and run the relevant checks. Include a check that uses a terminal so automatic color selection is exercised. Summarize the change and the checks you ran.\n",
+      "stimulus_sha256": "37e7476d7d6fed3fe5bcd9becad620b82dd638191158ef66e443b9f1663b27ca",
+      "task_id": "jqlang__jq-2728"
+    },
+    {
+      "definition_sha256": "3caffb386da564042440d98355cf27ad81c4181cfc1a60955cc60b5726b05e2b",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nAllow a terminal wrapper to disable automatic ANSI color output through the environment, without requiring a special command-line flag in every jq caller.\n\n### Color-selection rules\n\nSupport the NO_COLOR environment variable. A nonempty value must disable automatic colors. When the variable is unset or empty, retain normal terminal-based color selection.\n\nExplicit command-line choices take precedence: -C must request colors even when NO_COLOR is set, and -M must request monochrome output. Preserve ordinary output content and existing jq and regular-expression behavior.\n\n### Implementation and checks\n\nInspect and update the color-selection code, then run the relevant checks. Include a terminal-based check that exercises automatic color selection. Summarize the change and the checks performed.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "b5ea03ee1933707d241d46e0077826e59f62705712b3609224276eefe506730a",
+      "task_id": "jqlang__jq-2728"
+    }
+  ]
+}

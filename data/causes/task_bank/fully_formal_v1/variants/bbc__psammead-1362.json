@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 92587,
+    "path": "data/causes/task_bank/v1/variants/native12/bbc__psammead-1362.json",
+    "sha256": "b583fdd9e8b2d8dd417bf26b861aad7febbc93d7aa894b291052a08bf4e3dc52",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:bbc__psammead-1362",
+  "source_sha256": "73c850f537e158587cd6b3195436cd9525e8ef97d7c52dd90447058bd491a4e1",
+  "task_id": "bbc__psammead-1362",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/bbc__psammead-1362.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "674e50bfc8b1149aa612275703c8375571d67efe990d7e367d83f1ea1801f65c",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "SiteWideLinks should not use inline link styling\n**Is your feature request related to a problem? Please describe.**\r\nUX have confirmed that the SiteWideLinks component should not use the same styling as the inline link component. This is because the inline link is designed to be used in the body of the article and therefore has styling (such as using `border-bottom` rather than `text-decoration: underline`) that is meant to improve legibility when amongst other text. \r\n\r\nTherefore for consistency the SiteWideLink hover & focus styling should use text-decoration rather than border-bottom similar to how the [storyPromo `Link`](https://github.com/bbc/psammead/blob/latest/packages/components/psammead-story-promo/src/index.jsx#L238-L241) works\r\n\r\n**Describe the solution you'd like**\r\nChange the border-bottom styling on site-wide-links to be text-decoration: underline for consistency with links not in the article body (front-pages and promo components)\r\n\r\n**Describe alternatives you've considered**\r\nN/A\r\n\r\n**Testing notes**\r\n[Tester to complete]\r\n\r\nDev insight: Regression of the site-wide-links component in storybook\r\n\r\n**Additional context**\r\nN/A\r\n",
+      "stimulus_sha256": "717cc928c71de3f0efa8f987960407b5c1b5c659cd6d68b0a06023ad22d7d3d5",
+      "task_id": "bbc__psammead-1362"
+    },
+    {
+      "definition_sha256": "079630b4d2616361d9bb93c4ae378998caba1b864ceb176ddf9121d8346dc02e",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Objective\n\nChange SiteWideLinks so that it does not use inline link styling.\n\n## Rationale\n\nUX has confirmed that the SiteWideLinks component should not share the inline link component's styling. Inline links are intended for article body text, where choices such as `border-bottom` instead of `text-decoration: underline` improve legibility among surrounding text.\n\n## Requested styling\n\nFor consistency, the hover and focus styling of SiteWideLink should use text-decoration instead of border-bottom, following the behavior of the [storyPromo `Link`](https://github.com/bbc/psammead/blob/latest/packages/components/psammead-story-promo/src/index.jsx#L238-L241). Replace the border-bottom styling on site-wide-links with text-decoration: underline, consistent with links outside article bodies, including front pages and promo components.\n\n## Testing notes\n\nTester notes remain to be completed. The development guidance identifies regression coverage of the site-wide-links component in storybook.\n\nAlternatives considered: N/A. Additional context: N/A.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "2f50ff141abcd8cd80598762bba3a46861e89e46627d4076ad79a058d1140958",
+      "task_id": "bbc__psammead-1362"
+    }
+  ]
+}

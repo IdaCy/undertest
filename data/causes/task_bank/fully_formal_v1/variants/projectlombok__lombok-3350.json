@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 116406,
+    "path": "data/causes/task_bank/v1/variants/main60/projectlombok__lombok-3350.json",
+    "sha256": "fdd338c24a29983533d662807831054a22c0aa7c9bf16593ec5195c16cdc7aae",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:projectlombok__lombok-3350",
+  "source_sha256": "4ddcd161fdf8eba5a355287951cbc4dcd614cee16a5242114fa9e8bf335fa792",
+  "task_id": "projectlombok__lombok-3350",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/projectlombok__lombok-3350.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "a3e153ef175057e8937da5fd390f8212251d9a47d9961d8a30246567db4d663e",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "[FEATURE]  Support Jakarta Nonnull/Nullable annotations\nI ran into an issue with using Jakarta's `@Nullable` instead of javax (or checker).\r\n\r\nI tried to add the config property :\r\n```\r\nlombok.addNullAnnotations = CUSTOM:jakarta.annotation.Nonnull:jakarta.annotation.Nullable\r\n```\r\n\r\nAnd it seems to partially work (e.g. for return values), but when using `@Builder` the  `@Nullable` is not copied to the parameter of the generated method `first()` on the Builder.\r\n\r\n```\r\nimport jakarta.annotation.Nullable;\r\nimport java.util.List;\r\nimport lombok.Builder;\r\nimport lombok.Value;\r\n\r\n@Value\r\n@Builder\r\npublic class JakartaExample {\r\n\r\n    @Nullable\r\n    List<String> first;\r\n\r\n}\r\n```\r\n\r\nI'd expect \r\n\r\n```\r\npublic JakartaExample.JakartaExampleBuilder first(@Nullable final List<String> first) {\r\n      this.first = first;\r\n      return this;\r\n}\r\n```\r\nas a builder method, but currently the `@Nullable` is not copied (it does work for `javax` and `checkerframework` as expected)\r\n\r\nNot sure if it's important, but if I use the javax or checker annotations the `@Nullable` is copied, even when `lombok.addNullAnnotations` has the custom value mentioned above. So it seems some annotations are copied by default, regardless of the value of `lombok.addNullAnnotations`\n",
+      "stimulus_sha256": "9ef307f02beac0b3ff0162ea7f0616a69df5d3b4af09086121d182b0880b0b5c",
+      "task_id": "projectlombok__lombok-3350"
+    },
+    {
+      "definition_sha256": "000f885a2e8566c490b870ef55f51f2af78fef885504af63e10b91a315af1e3a",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## FEATURE request\n\nSupport Jakarta Nonnull/Nullable annotations. The reported problem occurs when Jakarta's `@Nullable` is used instead of the javax or checker annotation.\n\n## Configuration and reproduction\n\nThe following configuration was added:\n\n```\nlombok.addNullAnnotations = CUSTOM:jakarta.annotation.Nonnull:jakarta.annotation.Nullable\n```\n\nIt appears to work partially, e.g. for return values. However, with `@Builder`, `@Nullable` is not copied to the parameter of the generated Builder method `first()`:\n\n\n```\nimport jakarta.annotation.Nullable;\nimport java.util.List;\nimport lombok.Builder;\nimport lombok.Value;\n\n@Value\n@Builder\npublic class JakartaExample {\n\n    @Nullable\n    List<String> first;\n\n}\n```\n\n## Expected behavior\n\nThe generated builder method is expected to be:\n\n\n```\npublic JakartaExample.JakartaExampleBuilder first(@Nullable final List<String> first) {\n      this.first = first;\n      return this;\n}\n```\n\nCurrently, `@Nullable` is not copied. The corresponding behavior works as expected for `javax` and `checkerframework`.\n\n## Additional observation\n\nThe relevance of this observation is uncertain: the javax and checker annotations do have `@Nullable` copied even when `lombok.addNullAnnotations` is set to the custom value above. This suggests that some annotations are copied by default regardless of `lombok.addNullAnnotations`.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "5f7543284197c168975ed8fc39c037cb5ba98f02fd90ed42d94a6a22741f1de6",
+      "task_id": "projectlombok__lombok-3350"
+    }
+  ]
+}

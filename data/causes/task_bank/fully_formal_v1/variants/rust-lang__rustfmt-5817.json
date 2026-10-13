@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 73614,
+    "path": "data/causes/task_bank/v1/variants/native7/rust-lang__rustfmt-5817.json",
+    "sha256": "bcd1dc2d2ea6a8e89d1b1cc7dd74442743e65734e3f5e60006bc9a44d84a6464",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:rust-lang__rustfmt-5817",
+  "source_sha256": "5f728ca345b32436671e35479fd2381de457fb3a89d86bcc928422453fc6f955",
+  "task_id": "rust-lang__rustfmt-5817",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/rust-lang__rustfmt-5817.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "e75cf3fcd84b2b490dcb065f2cacf1e2115231511cbcde33d328a74af9a9d074",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "skip_macro_invocations: Cannot configure from `rustfmt.toml`\n`skip_macro_invocations` option doesn't parse as [documented](https://rust-lang.github.io/rustfmt/?version=master&search=macro#skip_macro_invocations). \r\n\r\nWriting `skip_macro_invocations=[\"*\", \"println\"]` in `rustfmt.toml` leads to this error:\r\n\r\n```\r\nError: Decoding config file failed:\r\nunknown variant `*`, expected `Name` or `All`\r\nin `skip_macro_invocations`\r\n\r\nPlease check your config file.\r\n```\r\n\r\nIt seems that parsing rules are not what is actually designed (`*` or some name), but more like tagged serde enum. These config files work:\r\n\r\n```toml\r\n[[skip_macro_invocations]]\r\nName=\"aboba\"\r\n```\r\n\r\n```toml\r\nskip_macro_invocations = [\"All\"]\r\n```",
+      "stimulus_sha256": "4d7d1b413275117f7bfa05408456d85f0aa1bdf323fa7ef46a8247402e250dc0",
+      "task_id": "rust-lang__rustfmt-5817"
+    },
+    {
+      "definition_sha256": "b9964d6829d1858ac9d95f866b63d7719e079c82403450d6081fec7885a4c646",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nResolve the discrepancy between documented configuration and actual parsing of skip_macro_invocations in `rustfmt.toml`.\n\n### Observed behavior\n\nThe `skip_macro_invocations` option does not parse as [documented](https://rust-lang.github.io/rustfmt/?version=master&search=macro#skip_macro_invocations). Entering `skip_macro_invocations=[\"*\", \"println\"]` in `rustfmt.toml` produces:\n\n```\nError: Decoding config file failed:\nunknown variant `*`, expected `Name` or `All`\nin `skip_macro_invocations`\n\nPlease check your config file.\n```\n\n\n### Apparent parsing discrepancy\n\nThe parser appears to expect a tagged serde enum rather than the intended `*` or a macro name. The following configurations work:\n\n```toml\n[[skip_macro_invocations]]\nName=\"aboba\"\n```\n\n\n```toml\nskip_macro_invocations = [\"All\"]\n```",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "8c9455fb5de4f031d5df50a540cc1c76d26a85d2c26e5809ac4fbee0cf680680",
+      "task_id": "rust-lang__rustfmt-5817"
+    }
+  ]
+}

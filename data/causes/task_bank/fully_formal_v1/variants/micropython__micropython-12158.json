@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 139625,
+    "path": "data/causes/task_bank/v1/variants/main60/micropython__micropython-12158.json",
+    "sha256": "fdcc5fecd70fedf6309d8c6fa4e73050071adb223e26a764b7d4a50c548f7c3f",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:micropython__micropython-12158",
+  "source_sha256": "82fd11f3faf558533f3ef8fb61a6527eb96d8e2fc66140bed8e5736864af54c1",
+  "task_id": "micropython__micropython-12158",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/micropython__micropython-12158.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "a2a39cae9402fbd8ec00eda1fb92f275caa871d17d17539ecde5809e0dc87d46",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Add Thread ID return to _thread.start_new_thread function\nDescription:\r\nCurrently, in MicroPython, the `_thread.start_new_thread` function allows starting a new thread but does not provide a direct way to obtain the ID of the newly created thread. This feature request aims to add Thread ID return to the `start_new_thread` function, similar to CPython, to facilitate tracking and managing the created threads.\r\n\r\nProposal:\r\nModify the `_thread.start_new_thread` function to return the ID of the newly created thread. This would allow developers to have a more effective way of tracking threads in execution and overall improve the threading experience in MicroPython.\r\n\r\nExample of usage:\r\n```python\r\nimport _thread\r\n\r\ndef my_thread_func():\r\n    # Thread's code here\r\n    pass\r\n\r\n# Start the thread and get the thread ID\r\nthread_id = _thread.start_new_thread(my_thread_func, ())\r\n\r\n# Print the thread ID\r\nprint(\"Thread ID:\", thread_id)\r\n```\r\n\r\nBenefits:\r\n\r\nEases identification and management of threads created using start_new_thread.\r\nAllows better control and monitoring of running threads.\r\nImproves compatibility with existing code that utilizes this functionality in CPython.\r\n\r\nConsiderations:\r\nIt is essential to consider the performance implications and backward compatibility while implementing this feature. However, since CPython already provides this functionality, adding it to MicroPython would be beneficial for users who work with threads and desire to maintain common code between both implementations.\r\n\r\nI am willing to implement this improvement and work on a pull request for the MicroPython repository if you find it useful.\r\n\r\nThank you.\n",
+      "stimulus_sha256": "480eaf487625ede3fb93605e54aa0b71d31731e227dda077078be67ea2a02b37",
+      "task_id": "micropython__micropython-12158"
+    },
+    {
+      "definition_sha256": "f2de66b3703e717c66b786547faa4769e6aac55007da1de373ce49d124a838d8",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Requested feature\n\nReturn the newly created thread's ID from _thread.start_new_thread.\n\n### Current behavior and proposed change\n\nIn MicroPython, `_thread.start_new_thread` starts a thread without providing a direct way to obtain its ID. Add a thread ID return value to `start_new_thread`, following CPython's behavior, to support tracking and management of created threads.\n\nModify `_thread.start_new_thread` to return the new thread's ID. This is intended to make thread tracking and management more effective in MicroPython.\n\n### Usage example\n\n```python\nimport _thread\n\ndef my_thread_func():\n    # Thread's code here\n    pass\n\n# Start the thread and get the thread ID\nthread_id = _thread.start_new_thread(my_thread_func, ())\n\n# Print the thread ID\nprint(\"Thread ID:\", thread_id)\n```\n\n### Intended benefits and considerations\n\nThe change would simplify identification and management of threads created through start_new_thread, improve control and monitoring of running threads, and increase compatibility with existing CPython code using this functionality.\n\nConsider performance implications and backward compatibility during implementation. Since CPython already exposes this functionality, adding it to MicroPython would help maintain common threading code across the two implementations.\n\nThe reporter is willing to implement the improvement and prepare a pull request for the MicroPython repository if the feature is considered useful.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "1b86a1eea55c455f9690114c52fdc835aa5ff79af5b767947411e3d80f132edb",
+      "task_id": "micropython__micropython-12158"
+    }
+  ]
+}

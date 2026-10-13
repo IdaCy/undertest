@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 95206,
+    "path": "data/causes/task_bank/v1/variants/main60/google__gson-2024.json",
+    "sha256": "0bccc0b4bf9f927cd2b360c477adb497653e4261bfe1232871cb2dd7b5b1e486",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:google__gson-2024",
+  "source_sha256": "7b3a51f7d20d0f976a698f108bb44ea498fc2b3587c6c30cf86c7f7dfbba8b50",
+  "task_id": "google__gson-2024",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/google__gson-2024.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "b8f8ff0035baa99d3d02ab70d4abe3e652fb6569af9ffc91385c2b2fbc9cdb20",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "New FieldNamingPolicy: UPPER_CASE_WITH_UNDERSCORES\nHi,\r\n\r\ncurrently, I do try to integrate a service that uses a UPPER_CASE_WITH_UNDERSCORES naming scheme for their field names, e.g.:\r\n\r\n```\r\n{\r\n  \"PRODUCT_LIST\" : {\r\n    \"PRODUCT\" : [\r\n      {\r\n      \"APPLICATION_CODE\" : \"secret application code\",\r\n      \"PRODUCT_TYPE\" : \"product type value\",\r\n      \"PRODUCT_NAME\" : \"product name\"\r\n      }\r\n    ]\r\n  }\r\n}\r\n```\r\n\r\nCurrently, GSON only supports LOWER_CASE_WITH_UNDERSCORES by default, so I would have to implement my own FieldNamingStategy class and possibly duplicate some code, like this:\r\n\r\n```\r\nthis.gson = new GsonBuilder()\r\n                .setFieldNamingStrategy(\r\n                        f -> FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES.translateName(f).toUpperCase(Locale.ENGLISH))\r\n                .create();\r\n```\r\n\r\nSo, ideally, something like this would be supported by GSON itself and I could use a new enum value.\n",
+      "stimulus_sha256": "a0ec45409bebc3089892b28681344e88bc84458c2b5f8cd44707bf4465fcc1b5",
+      "task_id": "google__gson-2024"
+    },
+    {
+      "definition_sha256": "db1b1b7c1305af9b7dfe095cbc32d6cad91d5db9be3b69f07e835842c510f81e",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Requested feature\n\nAdd a FieldNamingPolicy enum value for UPPER_CASE_WITH_UNDERSCORES.\n\n### Integration requirement\n\nThe service being integrated uses the UPPER_CASE_WITH_UNDERSCORES field-naming scheme, e.g.:\n\n\n```\n{\n  \"PRODUCT_LIST\" : {\n    \"PRODUCT\" : [\n      {\n      \"APPLICATION_CODE\" : \"secret application code\",\n      \"PRODUCT_TYPE\" : \"product type value\",\n      \"PRODUCT_NAME\" : \"product name\"\n      }\n    ]\n  }\n}\n```\n\n### Existing workaround\n\nGSON currently provides only LOWER_CASE_WITH_UNDERSCORES by default. Supporting the required scheme therefore requires a custom FieldNamingStategy implementation and may duplicate existing code, as illustrated below:\n\n\n```\nthis.gson = new GsonBuilder()\n                .setFieldNamingStrategy(\n                        f -> FieldNamingPolicy.LOWER_CASE_WITH_UNDERSCORES.translateName(f).toUpperCase(Locale.ENGLISH))\n                .create();\n```\n\nProvide equivalent support directly in GSON through a new enum value.",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "593ed6bf3718329d33368a0ec5e2eb390947994d2d6f9ec8450c61ebe7a51e28",
+      "task_id": "google__gson-2024"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 53845,
+    "path": "data/causes/task_bank/v1/variants/main60/caddyserver__caddy-6345.json",
+    "sha256": "b7ba19607c8d4da02d3e4d5a32f4446132a8b9e639d3a4bcdcfa563550d18d24",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:caddyserver__caddy-6345",
+  "source_sha256": "819dbfad5e339301fe3ae323d3e64de0c112f9a0bda438f3e4e7c2e14348264b",
+  "task_id": "caddyserver__caddy-6345",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/caddyserver__caddy-6345.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "bc219bb55cec27c016d98d969d6fd54b2dedd197ab130779ff6509a8c5dd13f4",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Set `sign_with_root` via Caddyfile\nPlease make the `sign_with_root` option [from the JSON config](https://caddyserver.com/docs/json/apps/tls/automation/policies/issuers/internal/#sign_with_root) available in the Caddyfile  \r\nMaybe related: https://github.com/caddyserver/caddy/issues/6290#issuecomment-2090785745\n",
+      "stimulus_sha256": "a7fb54332448106042143f2139bbedf3f150588f8cdcc6fad13e622321a3574b",
+      "task_id": "caddyserver__caddy-6345"
+    },
+    {
+      "definition_sha256": "1379d2e608108be3e633dc67ae5ab55335b727772fb93d2fd440ffdef7470a8c",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Requested capability\n\nAllow `sign_with_root` to be configured through the Caddyfile by exposing the `sign_with_root` option currently available in the [JSON configuration](https://caddyserver.com/docs/json/apps/tls/automation/policies/issuers/internal/#sign_with_root).\n\nThe following discussion may be related: https://github.com/caddyserver/caddy/issues/6290#issuecomment-2090785745.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "1c51126b835960226adcff10048cee1466ecacef9e1d39bd5283953cb0c8b262",
+      "task_id": "caddyserver__caddy-6345"
+    }
+  ]
+}

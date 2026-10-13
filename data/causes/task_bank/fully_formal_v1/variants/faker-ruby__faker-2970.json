@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 86985,
+    "path": "data/causes/task_bank/v1/variants/native12/faker-ruby__faker-2970.json",
+    "sha256": "7173a57e3a5a4934469bf846b3b8a9970dce742c2d6481b9919da428f84f1f9d",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:faker-ruby__faker-2970",
+  "source_sha256": "c51ac2e5ea695404eb57f0ed854871dc63019ea6de4aac4ea14518380bcacf15",
+  "task_id": "faker-ruby__faker-2970",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/faker-ruby__faker-2970.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "c6c132f1481d8d3f2278873a5c9b01d8e237e4f0ac32c949b0578735ad534fdf",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Latest version generates invalid email addresses\n## Describe the bug\r\n\r\nWhen letting faker generate email addresses based on names, it now generates invalid email addresses, where older versions did not.\r\n\r\nExample:\r\n\r\n```ruby\r\n# Faker 3.4.1\r\nFaker::Internet.unique.email(name: \" Msgr. Titus Harvey\")\r\n# => \"harvey.msgr..titus@russel-von.example\"\r\n```\r\n\r\nThe email is invalid as two sequential dots appear.\r\n\r\n```ruby\r\n# Faker 3.3.1\r\nFaker::Internet.unique.email(name: \" Msgr. Titus Harvey\")\r\n# => \"harvey_msgr_titus@corwin.example\"\r\n```\r\n\r\n## To Reproduce\r\n\r\nSee code samples above\r\n\r\n## Expected behavior\r\n\r\nFactory should keep generating valid email addresses, as a major escape is to populate databases with valid looking data.\r\n\r\n## Additional context\r\n\r\nNone\r\n\n",
+      "stimulus_sha256": "33dd8c2efad19125a79c34edeccdaa405351c11e454fdb86409b266fa8179068",
+      "task_id": "faker-ruby__faker-2970"
+    },
+    {
+      "definition_sha256": "3144266ddb7a265b93833d592465d7d232f2d1e17530c63276ff1773f19066a9",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Reported regression\n\nAddress invalid email addresses generated from names by the latest version of faker, where earlier versions generated valid addresses.\n\n## Reproduction and version comparison\n\nThe following current-version example produces an invalid address containing two consecutive dots:\n\n```ruby\n# Faker 3.4.1\nFaker::Internet.unique.email(name: \" Msgr. Titus Harvey\")\n# => \"harvey.msgr..titus@russel-von.example\"\n```\n\n\nThe earlier-version example produces:\n\n```ruby\n# Faker 3.3.1\nFaker::Internet.unique.email(name: \" Msgr. Titus Harvey\")\n# => \"harvey_msgr_titus@corwin.example\"\n```\n\n\nThese code samples provide the reproduction steps.\n\n## Expected behavior\n\nFactory should continue to generate valid email addresses for uses such as populating databases with plausible data.\n\nNo additional context was provided.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "e6731b327c4c6a1e4d4dfce956016d8ed58f7ddf1cc8b469a9aa87c896206ba1",
+      "task_id": "faker-ruby__faker-2970"
+    }
+  ]
+}

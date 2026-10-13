@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 65875,
+    "path": "data/causes/task_bank/v1/variants/main60/apache__lucene-11760.json",
+    "sha256": "026f40fe7f2cd597b33fedda23b3fe76f54fd8c6271b6dcdc941154cb779fd31",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:apache__lucene-11760",
+  "source_sha256": "97d4941ba701a82b6b7b6d51cc4581375f8f3a78491ab2caed821e45084f3016",
+  "task_id": "apache__lucene-11760",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/apache__lucene-11760.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "902097326d128b727b7942620af1568ba608301e819d400dc481bb635e7523e1",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "IntervalBuilder.NO_INTERVALS returns wrong docId when unpositioned\n### Description\n\nDocIdSetIterators should return -1 when they are unpositioned, but \r\nIntervalBuilder.NO_INTERVALS always returns NO_MORE_DOCS.  This\r\ncan lead to exceptions when an empty interval query (for example, a\r\ntext string made entirely of stopwords) is combined in a conjunction.\n\n### Version and environment details\n\n_No response_\n",
+      "stimulus_sha256": "655355a96a3ce86db4c45c9688118502b817ddf48f40bca32a1d2f22e2ad6672",
+      "task_id": "apache__lucene-11760"
+    },
+    {
+      "definition_sha256": "81961e35692a54e139e2bdfd876219473aeec2e95147f570db15bee74d87ab7f",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Objective\n\nCorrect the unpositioned docId behavior of IntervalBuilder.NO_INTERVALS.\n\n## Observed and expected behavior\n\nUnpositioned DocIdSetIterators should return -1. However, IntervalBuilder.NO_INTERVALS always returns NO_MORE_DOCS. This can cause exceptions when an empty interval query, such as a text string consisting entirely of stopwords, is combined in a conjunction.\n\nVersion and environment details were not provided.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "8c2af354809261eaf3e5b0ddb4f56c87f24b7cea1bc637d8a3d89ccbfcd01c47",
+      "task_id": "apache__lucene-11760"
+    }
+  ]
+}

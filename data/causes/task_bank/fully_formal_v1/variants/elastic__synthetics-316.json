@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 54657,
+    "path": "data/causes/task_bank/v1/variants/native7/elastic__synthetics-316.json",
+    "sha256": "61188ccb3dbabe0a3b832d3acc799c70742d7386605293ea766a190f75a1f44e",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:elastic__synthetics-316",
+  "source_sha256": "c13ddfb010eb74c73e89a0757096434e92638bcc10a0c2e3d38cb976eb7dc77d",
+  "task_id": "elastic__synthetics-316",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/elastic__synthetics-316.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "4648af069f4c7dde0a4d26b026d363321026e685d0f55792374c196e4324ab49",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "propagate errors from `beforeAll` and `afterAll` hooks\n+ Now error in the `beforeAll` and `afterAll` hooks would be captured and reported as error, but they will not be associated with the reporters in the correct way. \r\n+ Without associating these errors, the Uptime UI will have no information about what happened during the context of a single execution. \r\n\r\nWe have to figure out a way to solve this problem. ",
+      "stimulus_sha256": "3caf7ea3724a90cc094c9ce1024c69e5c5bff518d787c3c8ad06a4a73d062f98",
+      "task_id": "elastic__synthetics-316"
+    },
+    {
+      "definition_sha256": "dbaf6200022c60d214ed76d7fb16a3593663ca73a6a8f2e1b6498384cca74c5a",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Objective\n\nDetermine how to propagate errors from the `beforeAll` and `afterAll` hooks with the correct reporter association.\n\n## Current behavior and consequence\n\nErrors in the `beforeAll` and `afterAll` hooks are captured and reported as errors, but they are not associated correctly with the reporters. Without those associations, the Uptime UI has no information about what occurred within a single execution. Resolve this reporting problem.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "2ee0c1eab4e4e9fe170f796fc1ae3fbd5bc5ac903ee3b3f7c80f68e1d2739de2",
+      "task_id": "elastic__synthetics-316"
+    }
+  ]
+}

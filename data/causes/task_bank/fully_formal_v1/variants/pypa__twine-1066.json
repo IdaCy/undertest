@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 137007,
+    "path": "data/causes/task_bank/v1/variants/native12/pypa__twine-1066.json",
+    "sha256": "f5379736948be2d312a87918ad7b4998fb7d2af75faa21ffd935c0a0c3ea1ad0",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:pypa__twine-1066",
+  "source_sha256": "f725000be5e763393bb65e430ffc36b78fa46d249f4c1d9c994a68d01c72b24e",
+  "task_id": "pypa__twine-1066",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/pypa__twine-1066.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "349cdb4e42a635066626785b450b949752afb613e8946d5324063e416d0b8d86",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Twine uploads with `provides_extras` field, not `provides_extra`\n### Is there an existing issue for this?\n\n- [X] I have searched the existing issues (open and closed), and could not find an existing issue\n\n### What keywords did you use to search existing issues?\n\nprovides_extra, provides_extras\n\n### What operating system are you using?\n\nOther\n\n### If you selected 'Other', describe your Operating System here\n\n_No response_\n\n### What version of Python are you running?\n\n```console\n$ python --version\r\nPython 3.11.8\n```\n\n\n### How did you install twine? Did you use your operating system's package manager or pip or something else?\n\n```console\n$ python -m pip install twine\n```\n\n\n### What version of twine do you have installed (include the complete output)\n\n```console\n$ twine --version\r\ntwine version 5.0.0 (importlib-metadata: 7.0.1, keyring: 24.3.0, pkginfo: 1.10.0, requests: 2.31.0, requests-toolbelt: 1.0.0, urllib3: 2.1.0)\n```\n\n\n### Which package repository are you using?\n\nPyPI\n\n### Please describe the issue that you are experiencing\n\nTwine does not correctly `POST` the `Provides-Extra` field when it is present in package metadata.\n\n### Please list the steps required to reproduce this behaviour\n\n1. Build a package with [`Provides-Extra`](https://packaging.python.org/en/latest/specifications/core-metadata/#provides-extra-multiple-use) metadata field ([example](https://files.pythonhosted.org/packages/57/90/4bcbd9d539d1b92cf38accb9e910ffa770ea4d28e7b4afce3b398f79cae6/pyroblack-2.3.48-py3-none-any.whl));\r\n2. Upload it with `twine`;\r\n3. Observe that twine `POST`s the field `provides_extras`, and not `provides_extra`;\r\n4. Observe that PyPI does not record the `Provides-Extra` values.\n\n### Anything else you'd like to mention?\n\nI introduced this bug [six years ago](https://github.com/pypa/twine/commit/7369e6219af6b61c82bfb68afac57250f5664577), so my apologies 🙂.",
+      "stimulus_sha256": "29b506f76ce655276d395ee684e76d807122e8d1a9e04c34199d0dae130c38c9",
+      "task_id": "pypa__twine-1066"
+    },
+    {
+      "definition_sha256": "4dd8d3132e282f29871a2d13e5521cf52ed40819ec62a90f86fa5c03d00f8391",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Issue\n\nCorrect Twine uploads that use the `provides_extras` field instead of `provides_extra`. When package metadata includes `Provides-Extra`, Twine does not `POST` it correctly.\n\n## Reproduction\n\n1. Build a package containing the [`Provides-Extra`](https://packaging.python.org/en/latest/specifications/core-metadata/#provides-extra-multiple-use) metadata field, such as this [example](https://files.pythonhosted.org/packages/57/90/4bcbd9d539d1b92cf38accb9e910ffa770ea4d28e7b4afce3b398f79cae6/pyroblack-2.3.48-py3-none-any.whl));\n2. Upload the package with `twine`.\n3. Observe that twine `POST`s the field as `provides_extras` instead of `provides_extra`.\n4. Observe that PyPI does not record the `Provides-Extra` values.\n\n## Environment\n\nThe package repository is PyPI. The operating-system selection was 'Other', with details recorded as _No response_.\n\nPython version:\n\n```console\n$ python --version\nPython 3.11.8\n```\n\n\ntwine was installed using pip:\n\n```console\n$ python -m pip install twine\n```\n\n\nComplete twine version output:\n\n```console\n$ twine --version\ntwine version 5.0.0 (importlib-metadata: 7.0.1, keyring: 24.3.0, pkginfo: 1.10.0, requests: 2.31.0, requests-toolbelt: 1.0.0, urllib3: 2.1.0)\n```\n\n\n## Prior search and history\n\n- [X] Open and closed issues were searched using provides_extra and provides_extras; no existing issue was found.\n\nThe reporter introduced the bug in the [commit from six years earlier](https://github.com/pypa/twine/commit/7369e6219af6b61c82bfb68afac57250f5664577), as identified in the report.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "e3e1ed05b2ed1579d026b9a414746f228669ee058aa8b3b5fc6c1a432de79505",
+      "task_id": "pypa__twine-1066"
+    }
+  ]
+}

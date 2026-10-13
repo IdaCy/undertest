@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 96071,
+    "path": "data/causes/task_bank/v1/variants/main60/gohugoio__hugo-12768.json",
+    "sha256": "0dcde9b99e1841c7699143cbd92faaf83fc0ffb22a3a2b577eea00a9606f0e79",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:gohugoio__hugo-12768",
+  "source_sha256": "a8fb34d21c12575dd13f97cfef10ac2cc711cc20afff9aab59383d59c9da640c",
+  "task_id": "gohugoio__hugo-12768",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/gohugoio__hugo-12768.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "7d16e4b975dac5ca55c36429adf3f6889e961e1e2e6b38e6722b64f9c63d95fa",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Hugo alert heading is case-sensitive and upper case only ([!NOTE]), but GitHub Alert Markdown extension is case-insensitive ([!note])\n### What version of Hugo are you using (`hugo version`)?\r\n\r\n<pre>\r\n$ hugo version\r\nhugo v0.132.1+extended linux/amd64 BuildDate=unknown\r\n</pre>\r\n\r\n### Does this issue reproduce with the latest release?\r\nYes\r\n\r\n---\r\n\r\n[Alerts](https://gohugo.io/render-hooks/blockquotes/#alerts) are introduced in Hugo v0.132.0. Documentation says that syntax is compatible with GitHub Alert Markdown extension. However, GitHub allows writing alert heading in lower case, while Hugo doesn't.\r\n\r\n```markdown\r\n> [!note]\r\n> Example\r\n```\r\n\r\n> [!note]\r\n> Example\r\n\r\nHugo won't render `[!note]`, or `[!Note]`, or `[!nOtE]` as alert while GitHub will.\r\n\r\nProbably need to change this regex filter:\r\nhttps://github.com/gohugoio/hugo/blob/665ac949bdc2e54d378ef5c00778c830440a1a9d/markup/goldmark/blockquotes/blockquotes.go#L238\r\n\n",
+      "stimulus_sha256": "5d017171c333d7e0ec4e07a23556b24ae62f1ecdeb64ac89a968ec36ba294cb3",
+      "task_id": "gohugoio__hugo-12768"
+    },
+    {
+      "definition_sha256": "de67df1f67ed19a2dacf21384c9395cdf0ea0ebfd981bd79e2bf3f1b5d8deef3",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nInvestigate the case-sensitivity difference between Hugo alert headings, which accept only uppercase forms such as [!NOTE], and the case-insensitive GitHub Alert Markdown extension, which accepts [!note].\n\n### Version and reproduction status\n\nOutput of `hugo version`:\n\n<pre>\n$ hugo version\nhugo v0.132.1+extended linux/amd64 BuildDate=unknown\n</pre>\n\nThe issue also reproduces with the latest release.\n\n### Observed incompatibility\n\n[Alerts](https://gohugo.io/render-hooks/blockquotes/#alerts) were introduced in Hugo v0.132.0. The documentation states that the syntax is compatible with the GitHub Alert Markdown extension. However, GitHub permits lowercase alert headings, while Hugo does not:\n\n\n```markdown\n> [!note]\n> Example\n```\n\n> [!note]\n> Example\n\nHugo does not render `[!note]`, `[!Note]` or `[!nOtE]` as alerts, whereas GitHub does.\n\n### Possible correction\n\nThe following regular-expression filter may require a change:\n\nhttps://github.com/gohugoio/hugo/blob/665ac949bdc2e54d378ef5c00778c830440a1a9d/markup/goldmark/blockquotes/blockquotes.go#L238",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "86a346fc9dd5b5f8d5bf4ba8140357963bf1eb3ad17890d1c8b807210cec862c",
+      "task_id": "gohugoio__hugo-12768"
+    }
+  ]
+}

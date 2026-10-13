@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 84725,
+    "path": "data/causes/task_bank/v1/variants/main60/hashicorp__terraform-34580.json",
+    "sha256": "6f36361d93d5fb7abe21ba63135055eddfb266ec09db681ef334d01d69a54dfe",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:hashicorp__terraform-34580",
+  "source_sha256": "2e461b00d33f79f8767f1d2094412d19440c56bc4af93bbb4f9529597ffa381c",
+  "task_id": "hashicorp__terraform-34580",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/hashicorp__terraform-34580.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "1ea1bf272a95ea6a6317436603c8da41af888f81121c503e954d92d03c403525",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "`terraform fmt` does not handle `.tfmock.hcl` files\n### Terraform Version\r\n\r\n```shell\r\nTerraform v1.7.1\r\n```\r\n\r\n\r\n### Use Cases\r\n\r\nWhen using the Terraform 1.7 mocks feature as suggested in the official tutorial: https://developer.hashicorp.com/terraform/language/tests/mocking#mock-provider-data\r\n\r\nTerraform formatting does not apply to the `.tfmock.hcl` files\r\n\r\n```shell\r\nterraform fmt tests/aws/data.tfmock.hcl\r\n╷\r\n│ Error: Only .tf, .tfvars, and .tftest.hcl files can be processed with terraform fmt\r\n│ \r\n│ \r\n╵\r\n```\r\n\r\n### Attempted Solutions\r\n\r\nRenaming the file with `.tftest.hcl` extension before formatting is a workaround to get it formatted with:\r\n`terraform fmt tests/aws/data.tftest.hcl`\r\n\r\n### Proposal\r\n\r\nExtending `fmt` subcommand to `.tfmock.hcl` files\r\n\r\n### References\r\n\r\n_No response_\n",
+      "stimulus_sha256": "96eac60764bf9f8d6e78ecb82dff6968fe6986e938d5ee2e454aaaac9b3c9d68",
+      "task_id": "hashicorp__terraform-34580"
+    },
+    {
+      "definition_sha256": "c9f561770e1dab8f72f28339ef1305aed61e356ee4a8459e610fca45754090cb",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Requested change\n\nExtend `terraform fmt` to handle `.tfmock.hcl` files.\n\n## Use case and current behavior\n\nWhen using the Terraform 1.7 mocks feature as described in the official tutorial, https://developer.hashicorp.com/terraform/language/tests/mocking#mock-provider-data, formatting does not apply to `.tfmock.hcl` files. The command fails as follows:\n\n\n```shell\nterraform fmt tests/aws/data.tfmock.hcl\n╷\n│ Error: Only .tf, .tfvars, and .tftest.hcl files can be processed with terraform fmt\n│ \n│ \n╵\n```\n\n## Existing workaround and proposal\n\nRenaming the file to use the `.tftest.hcl` extension allows it to be formatted with `terraform fmt tests/aws/data.tftest.hcl`. Extend the `fmt` subcommand to support `.tfmock.hcl` files directly.\n\n## Environment\n\n\n```shell\nTerraform v1.7.1\n```\n\nNo additional references were provided.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "d075da6c9a4638230a5d25d4f80a7f83aea7d11f8017b4bea531867b797c059c",
+      "task_id": "hashicorp__terraform-34580"
+    }
+  ]
+}

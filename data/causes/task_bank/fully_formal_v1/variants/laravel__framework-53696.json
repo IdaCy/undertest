@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 143493,
+    "path": "data/causes/task_bank/v1/variants/main60/laravel__framework-53696.json",
+    "sha256": "e4f6e0271417f384a266aeaea664916166769ca68a602b70d01f16983e2e7a7d",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:laravel__framework-53696",
+  "source_sha256": "c9f9bcc91f2106fe6054032ba9a3e979a3ee04bec34488c8d590f10eb8a7fd2c",
+  "task_id": "laravel__framework-53696",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/laravel__framework-53696.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "649067bb3f1d25358a2d12f5ac6dcab2a0979ee4a3a1de9702ad2cb643fbff46",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Error when using foreignIdFor with bigInt primary key without auto increment\n<!-- DO NOT THROW THIS AWAY -->\r\n<!-- Fill out the FULL versions with patch versions -->\r\n\r\n- Laravel Version: 10.0.3\r\n- PHP Version: 8.2.3\r\n- Database Driver & Version: MySQL 8.0.32\r\n\r\n### Description:\r\nThe `foreignIdFor` method when used with a bigInt primary key that is not `AUTO INCREMENT` produces a column of type char in the database, so the constraint does not work correctly.\r\n\r\nProbably the error happens due to validation of the value of incrementing inside the method:\r\n\r\n![image](https://user-images.githubusercontent.com/4511733/220411925-c50431ad-c2a3-4674-aeb8-fd38034181d2.png)\r\n\r\n\r\n### Steps To Reproduce:\r\n\r\n1. Creates a main migration and sets `unsignedBigInteger` and `primary`:\r\n\r\n```php\r\nSchema::create('my_tables', function (Blueprint $table) {\r\n    $table->unsignedBigInteger('id')->primary();\r\n    $table->string('some_another_field');        \r\n    $table->timestamps();        \r\n});\r\n```\r\n\r\n2. Create a second migration and adds `foreignIdFor`.\r\n\r\n```php\r\nSchema::create('your_tables', function (Blueprint $table) {\r\n    $table->foreignIdFor(MyTable::class)->constrained();\r\n    $table->string('another_field');        \r\n    $table->timestamps();\r\n});\r\n```\r\n\r\n4. Define `public $incrementing = false;` in `MyTable` model class.\r\n\r\n3. Runs `php artisan migrate` or `php artisan migrate:fresh` to verify error:\r\n```\r\nReferencing column 'my_table_id' and referenced column 'id' in foreign key constraint \r\n'your_tables_my_table_id_foreign' are incompatible.\r\n```\r\n\r\n\r\n<!-- If possible, please provide a GitHub repository to demonstrate your issue -->\r\n<!-- laravel new bug-report --github=\"--public\" -->\r\n\n",
+      "stimulus_sha256": "1a3cbcf7489474f4b68e9b73a240d73b27b36a6837b389e4025528e90b1d43d1",
+      "task_id": "laravel__framework-53696"
+    },
+    {
+      "definition_sha256": "00fe03a8c79a1c8f09c88afc675bcc5e562a587a7786f5309959343ec20181ea",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "### Objective\n\nInvestigate the incompatible foreign-key column created by foreignIdFor for a non-auto-incrementing bigInt primary key.\n\n<!-- DO NOT THROW THIS AWAY -->\n<!-- Fill out the FULL versions with patch versions -->\n\n### Observed behavior and suspected cause\n\nWhen `foreignIdFor` is used with a bigInt primary key that is not `AUTO INCREMENT`, it creates a char column, preventing the constraint from working correctly. Validation of the incrementing value inside the method is suspected to cause the problem:\n\n![image](https://user-images.githubusercontent.com/4511733/220411925-c50431ad-c2a3-4674-aeb8-fd38034181d2.png)\n\n### Reproduction\n\n1. Create the main migration with `unsignedBigInteger` and `primary`:\n\n\n```php\nSchema::create('my_tables', function (Blueprint $table) {\n    $table->unsignedBigInteger('id')->primary();\n    $table->string('some_another_field');        \n    $table->timestamps();        \n});\n```\n\n2. Create a second migration that adds `foreignIdFor`:\n\n\n```php\nSchema::create('your_tables', function (Blueprint $table) {\n    $table->foreignIdFor(MyTable::class)->constrained();\n    $table->string('another_field');        \n    $table->timestamps();\n});\n```\n\n3. Define `public $incrementing = false;` in the `MyTable` model class.\n4. Run `php artisan migrate` or `php artisan migrate:fresh` to reproduce the error:\n\n```\nReferencing column 'my_table_id' and referenced column 'id' in foreign key constraint \n'your_tables_my_table_id_foreign' are incompatible.\n```\n\n### Environment\n\n- Laravel: 10.0.3.\n- PHP: 8.2.3.\n- Database driver and version: MySQL 8.0.32.\n\n<!-- If possible, please provide a GitHub repository to demonstrate your issue -->\n<!-- laravel new bug-report --github=\"--public\" -->",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "ef45ac3969615655e80efcf58377d56eb41c7a12b58a53306b5ed5436f92d766",
+      "task_id": "laravel__framework-53696"
+    }
+  ]
+}

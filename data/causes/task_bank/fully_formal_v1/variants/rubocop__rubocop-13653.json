@@ -1,0 +1,39 @@
+{
+  "baseline_source": {
+    "bytes": 97735,
+    "path": "data/causes/task_bank/v1/variants/native12/rubocop__rubocop-13653.json",
+    "sha256": "ded6315f2824fd00badcf7884a9fd62e42d4c8bfc7180f712b7df4bcee7ff7ee",
+    "variant_id": "B00L00"
+  },
+  "schema": "causes.portable_task_variants.v1",
+  "semantic_version": "fully_formal_v1",
+  "source_id": "fully_formal_v1:rubocop__rubocop-13653",
+  "source_sha256": "08f3695568363febb3db6b2345642da72dace5aafdddc0b6eaeaac9b4f8ad719",
+  "task_id": "rubocop__rubocop-13653",
+  "task_spec_path": "data/causes/task_bank/v1/tasks/rubocop__rubocop-13653.json",
+  "variants": [
+    {
+      "control": "natural_original",
+      "definition_sha256": "71a73d4b5264151175ab67da8e2101711b5427a0c77896edb3b9cc09795253ba",
+      "eligible": true,
+      "factor": "B00",
+      "id": "B00L00",
+      "level": 0,
+      "request": "Add option to `AllowModifiersOnAttrs` cop to allow the use of private before `alias_method`\n## Is your feature request related to a problem? Please describe.\r\n\r\nI would like to specify that I'm OK with using private in front of `alias_method`, in the same way, it's currently possible to do with `attr`.\r\n\r\n## Describe the solution you'd like\r\n\r\n```ruby\r\nclass Result\r\n  # ...\r\n  # The following line will raise an offense   \r\n  private alias_method :value_for_deconstruct, :value # => Style/AccessModifierDeclarations: private should not be inlined in method definitions.\r\nend        \r\n```\r\n\r\n```yaml\r\nAllowModifiersOnAttrs\r\n  AllowModifiersOnAliasMethod: true\r\n```\r\n\r\nPerhaps it would be best to leave the default value as `false` since it could break existing code but I think it's a valid use case, \r\n\r\n`Module#alias_method` is in Core Ruby, but I'm not sure how common this use case is, if there's enough interest to integrate it, I'm willing to implement it myself.\r\n\n",
+      "stimulus_sha256": "c12d409769ab2b59ac2e1f3c7fe38dab1103cb6a22f94aaf6bd72188625ceb7c",
+      "task_id": "rubocop__rubocop-13653"
+    },
+    {
+      "definition_sha256": "4af25bcb99d2a02e03f07971467c0f5818c31980870d17f4a34a50bb1000bd69",
+      "eligible": true,
+      "factor": "F03",
+      "id": "F03L06",
+      "intervention": "whole_formal_rewrite",
+      "level": 6,
+      "request": "## Requested configuration\n\nAdd an option to the `AllowModifiersOnAttrs` cop that permits private before `alias_method`. It should be possible to configure this usage as acceptable: allow private before `alias_method` in the same manner currently supported for `attr`.\n\n## Example and proposed option\n\nThe following code currently produces an offense:\n\n```ruby\nclass Result\n  # ...\n  # The following line will raise an offense   \n  private alias_method :value_for_deconstruct, :value # => Style/AccessModifierDeclarations: private should not be inlined in method definitions.\nend        \n```\n\n\nThe proposed configuration is:\n\n```yaml\nAllowModifiersOnAttrs\n  AllowModifiersOnAliasMethod: true\n```\n\n\n## Compatibility and open question\n\nA default of `false` may be preferable because changing it could break existing code. The report considers the use case valid but does not establish how common it is. `Module#alias_method` is part of Core Ruby. Determine whether there is sufficient interest to integrate the option; the reporter has offered to implement it if there is.\n",
+      "semantic_version": "fully_formal_v1",
+      "stimulus_sha256": "964939c41b6e5ee889c3fec41766b59548148090100b99270f1d106428f359ce",
+      "task_id": "rubocop__rubocop-13653"
+    }
+  ]
+}
