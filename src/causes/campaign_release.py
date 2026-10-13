@@ -104,7 +104,8 @@ def release_native_lineage(policy, registration, reader=h.checked, *, allocation
                     and ((allocation['max_full'] > 0) == bool(full_selection)),
                     'native_continuation_workload_changed')
         else:
-            require(allocation['workload'] == 'mixed' and allocation['max_full'] > 0,
+            require((allocation['workload'] == 'mixed' and allocation['max_full'] > 0)
+                    or (allocation['workload'] == 'prefix_only' and allocation['max_full'] == 0),
                     'native_qualification_workload_changed')
         if index == len(phases) - 1:
             argv = registration['controller']['process']['argv']

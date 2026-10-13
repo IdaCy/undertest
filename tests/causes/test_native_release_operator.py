@@ -45,8 +45,8 @@ class ReleaseFixture:
             value['control'] = value['allocation_control']
         return value
 
-    def lineage(self):
-        policy, registration, objects, _ = native.NativeMonitorTests.lineage(self)
+    def lineage(self, prefix=False):
+        policy, registration, objects, _ = native.NativeMonitorTests.lineage(self, prefix=prefix)
         for index, donor in enumerate(registration['donor_histories']):
             path = Path(donor['output_root']) / '.dispatcher/journal.jsonl'
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,9 +82,9 @@ class ReleaseFixture:
         inputs['policy'] = pref
         return r.ReleaseOnlyNativeAdmission(pref, self.save('release-inputs.json', inputs), {})
 
-    def operator(self):
-        original, _ = native.NativeAdmissionTests.operator(self)
-        monitor, registration = self.lineage()
+    def operator(self, prefix=False):
+        original, _ = native.NativeAdmissionTests.operator(self, prefix=prefix, finite=True)
+        monitor, registration = self.lineage(prefix=True) if prefix else self.lineage()
         p, x = copy.deepcopy(original.policy), copy.deepcopy(original.inputs)
         base_ref = monitor['native_successions']['base_policy']; base = h.checked(base_ref)
         base_peer = self.save('base-native-review.json', dict(accepted_native_predecessor_monitor=True, policy=base_ref))
@@ -160,6 +160,39 @@ class ReleaseOperatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'native_full_capacity_changed'):
             r.validate_release_registration(registration, policy, h.checked,
                 allocation_ref=operator.policy['allocation'], allocation_cache=operator._allocation_cache())
+
+    def test_finite_prefix_registration_static_and_release_evidence(self):
+        operator, policy, registration, foundation = self.fixture.operator(prefix=True)
+        _, jobs = operator.static()
+        self.assertTrue(jobs)
+        self.assertFalse(any(job['allocation']['continue_to_end'] for job in jobs))
+        expected = m.validate_registration(registration, policy, h.checked)
+        for _ in range(2):
+            self.assertEqual(r.validate_release_registration(registration, policy, h.checked,
+                allocation_ref=operator.policy['allocation'],
+                allocation_cache=operator._allocation_cache()), expected)
+            self.assertEqual(operator.evidence(operator.release_action), foundation)
+        self.assertEqual(expected['mode'], 'finite')
+        self.assertIsNone(registration['continuation'])
+        self.assertEqual(operator.policy['max_full'], 0)
+
+    def test_finite_prefix_registration_preserves_capacity_and_provider_gates(self):
+        policy, registration = self.fixture.lineage(prefix=True)
+        ref = policy['native_successions']['links'][-1]['allocation']['evidence']
+        changes = [lambda p,reg:reg['controller'].update(workers=9),
+                   lambda p,reg:reg['controller']['process']['argv'].__setitem__(
+                       reg['controller']['process']['argv'].index('--max-full')+1, '1'),
+                   lambda p,reg:p.update(provider={'changed': True}),
+                   lambda p,reg:reg.update(donor_histories=[])]
+        for change in changes:
+            p, reg = copy.deepcopy(policy), copy.deepcopy(registration); change(p, reg)
+            errors = []
+            for validate in (lambda:m.validate_registration(reg, p, h.checked),
+                             lambda:r.validate_release_registration(reg, p, h.checked,
+                                 allocation_ref=ref, allocation_cache=s.NativeAllocationCache())):
+                with self.assertRaises(ValueError) as caught: validate()
+                errors.append(str(caught.exception))
+            self.assertEqual(*errors)
 
     def test_original_and_derivative_refuse_same_registration_mutations(self):
         policy, registration = self.fixture.lineage()

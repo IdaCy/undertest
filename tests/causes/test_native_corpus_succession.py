@@ -189,6 +189,47 @@ class NativeAllocationTests(unittest.TestCase):
         prefix['max_full'] = 1
         with self.assertRaisesRegex(ValueError, 'workload_changed'): s.native_allocation(prefix)
 
+    def test_finite_prefix_qualification_preserves_exact_allocator_jobs(self):
+        value = self.allocation(prefix=True)
+        jobs, _, extensions, allocator = s.native_allocation(value)
+        self.assertEqual(h.encoded(jobs), h.encoded(allocator.block(0)['jobs']))
+        self.assertEqual(value['selection']['run_ids'],
+                         [job['allocation']['run_id'] for job in jobs])
+        self.assertTrue(jobs)
+        self.assertFalse(any(job['allocation']['continue_to_end'] for job in jobs))
+        self.assertEqual(extensions, [])
+        self.assertIsNone(value['control'])
+
+    def test_finite_prefix_scope_and_exact_selected_bytes_cannot_drift(self):
+        value = self.allocation(prefix=True)
+        changes = [lambda v:v.update(max_full=1), lambda v:v.update(workload='mixed'),
+                   lambda v:v.update(control=v['allocation_control']),
+                   lambda v:v.update(extensions=h.checked(v['allocation_control'])['prototypes']),
+                   lambda v:v['selection'].update(block_index=1),
+                   lambda v:v['selection'].update(run_ids=[]),
+                   lambda v:v['selection']['run_ids'].append(v['selection']['run_ids'][0]),
+                   lambda v:v['selection']['run_ids'].reverse()]
+        for change in changes:
+            bad = copy.deepcopy(value); change(bad)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                s.native_allocation(bad)
+        for field, changed in [('seed', 999999), ('continue_to_end', True)]:
+            jobs = h.checked(value['jobs']); jobs[0]['allocation'][field] = changed
+            bad = copy.deepcopy(value); bad['jobs'] = self.save('changed-'+field+'.json', jobs)
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'selection_changed'):
+                s.native_allocation(bad)
+
+    def test_mixed_finite_qualification_still_requires_both_exposure_modes(self):
+        value = self.allocation()
+        for full in (False, True):
+            jobs = [job for job in h.checked(value['jobs'])
+                    if job['allocation']['continue_to_end'] is full]
+            bad = copy.deepcopy(value)
+            bad['jobs'] = self.save('only-'+str(full)+'.json', jobs)
+            bad['selection']['run_ids'] = [job['allocation']['run_id'] for job in jobs]
+            with self.subTest(full=full), self.assertRaisesRegex(ValueError, 'exposure_scope_empty'):
+                s.native_allocation(bad)
+
     def runtime(self, finite=True, prefix=False):
         from causes import campaign_admission as a
         value = self.allocation(finite, prefix)
@@ -220,7 +261,7 @@ class NativeAllocationTests(unittest.TestCase):
 
     def test_runtime_queue_and_exact_caps_match_finite_and_prefix_dispatcher_contracts(self):
         from causes import campaign_admission as a
-        for finite, prefix in ((True,False),(False,False),(False,True)):
+        for finite, prefix in ((True,False),(True,True),(False,False),(False,True)):
             with self.subTest(finite=finite,prefix=prefix):
                 value, template, common, runtime = self.runtime(finite,prefix)
                 self.assertEqual(runtime['expected_controller_fields']['max_full'], value['max_full'])
@@ -259,10 +300,11 @@ class NativeAdmissionTests(unittest.TestCase):
     allocation = NativeAllocationTests.allocation
     runtime = NativeAllocationTests.runtime
 
-    def operator(self, prefix=False):
+    def operator(self, prefix=False, finite=None):
         from causes import campaign_admission as a, campaign_monitor as m, corpus_allocation as ca
         import sys
-        value, template, common, runtime = self.runtime(finite=not prefix, prefix=prefix)
+        value, template, common, runtime = self.runtime(
+            finite=not prefix if finite is None else finite, prefix=prefix)
         predecessor, _ = self.closure()
         predecessor['phase'] = 'previous'
         config = h.checked(value['config'])
@@ -321,6 +363,15 @@ class NativeAdmissionTests(unittest.TestCase):
                 self.assertEqual(operator.policy['max_full'],0 if prefix else 1)
                 self.assertEqual(operator.policy['workers'],8 if prefix else 4)
 
+    def test_whole_native_static_contract_accepts_finite_prefix_qualification(self):
+        operator, _ = self.operator(prefix=True, finite=True)
+        _, jobs = operator.static()
+        self.assertEqual(operator.policy['target_mode'], 'finite_qualification')
+        self.assertEqual(operator.policy['max_full'], 0)
+        self.assertIsNone(operator.policy['continuation'])
+        self.assertTrue(jobs)
+        self.assertFalse(any(job['allocation']['continue_to_end'] for job in jobs))
+
     def test_reviewed_native_fixed_scope_and_dynamic_queue_tampering_refuse(self):
         operator,_=self.operator()
         for key,value in [('max_full',2),('workers',8),('host_transfer',{'target_output_roots':['invented']}),
@@ -363,12 +414,12 @@ class NativeMonitorTests(unittest.TestCase):
     allocation = NativeAllocationTests.allocation
     runtime = NativeAllocationTests.runtime
 
-    def lineage(self):
+    def lineage(self, prefix=False):
         from causes import campaign_monitor as m
         from tests.causes.test_campaign_monitor import fixture as monitor_fixture, add_continuation
         base, reg, objects, ref = monitor_fixture()
         add_continuation(base, reg, objects, ref)
-        value, template, common, runtime = self.runtime()
+        value, template, common, runtime = self.runtime(prefix=prefix)
         # The real allocator pins reside on disk; the old monitor metadata is
         # the existing synthetic fixture with a whole accepted base reference.
         base['remote_base'] = str(self.root)
@@ -422,14 +473,15 @@ class NativeMonitorTests(unittest.TestCase):
         policy['history']['task_routes']=sorted({'task:'+s.digest([job['spec'].get('task_id'),job['spec'].get('image')]) for job in jobs})
         cap=ref('capacity.json',{})
         capacity=dict(evidence=cap,independent_review=ref('capacity-review.json',dict(accepted_native_capacity_admission=True,
-            evidence=cap,next_phase='native',next_worker_cap=4,max_full=1,workload='mixed',resident_config=value['config'])))
+            evidence=cap,next_phase='native',next_worker_cap=value['workers'],max_full=value['max_full'],
+            workload=value['workload'],resident_config=value['config'])))
         bundle=h.checked(template['bundle'])
         registration=dict(schema='caus.jp_companion_registration.v1',status='active',root_authorized=True,phase='native',
             runtime_cohort=value['family'],controller_host='fixture',controller_jobs=value['jobs'],controller_config=value['config'],
             controller_templates=common['controller_template'],prior_local_owners=[{k:p[k] for k in ('output_root','process')} for p in base['phases']],
             capacity_qualification=capacity,host_transfer=copy.deepcopy(policy['host_transfer']),provider=policy['provider'],tunnels=policy['tunnels'],
             reverse_listener_process=policy['reverse_listener_process'],continuation=None,donor_histories=donors,
-            controller=dict(model='mi27',workers=4,output_root=value['output_root'],process=phase['process'],pythonpath=common['pythonpath'],
+            controller=dict(model='mi27',workers=value['workers'],output_root=value['output_root'],process=phase['process'],pythonpath=common['pythonpath'],
                 source_pins=[{k:row[k] for k in ('path','bytes','sha256')} for row in bundle['files']],input_pins=runtime['runtime_input_pins'],
                 queue_identity={'path':value['output_root']+'/.dispatcher/queue_identity.json'},
                 admission_control={'path':value['output_root']+'/.dispatcher/admission_control.json'}))
