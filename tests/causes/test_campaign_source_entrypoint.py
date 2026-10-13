@@ -150,6 +150,44 @@ def main():
         self.assertEqual(result['argv'][0], fresh['path'])
         self.assertEqual(result['source'], self.native['path'])
 
+    def test_v2_dependency_copy_uses_unchanged_entrypoint_and_native_main(self):
+        actor = self.write('actor.py', 'VALUE = 7\n')
+        actor_copy = self.write('actor_copy.py', 'VALUE = 7\n')
+        source = Path(self.native['path']).read_text()
+        source = source.replace("KNOWN = {'core':", "ACTOR = " + repr(actor) + "\nKNOWN = {'core':")
+        source = source.replace("core = module(KNOWN['core'], 'original_native_core')",
+                                "core = module(KNOWN['core'], 'original_native_core')\n"
+                                "    actor = module(ACTOR, 'original_native_actor')\n"
+                                "    assert actor.VALUE == 7 and actor.__file__ == " + repr(actor_copy['path']))
+        native = self.write('native_v2.py', source)
+        binding = self.save('binding_v2.json', {
+            'schema': 'causes.native_constructor_source_binding.v2',
+            'materializer': native, 'constructors': [native],
+            'relocation': {'original': self.old, 'physical': self.physical},
+            'dependency_relocations': [{'constructor': native,
+                                        'relocation': {'original': actor, 'physical': actor_copy}}],
+        })
+        self.descriptor.update(source=native, binding=binding,
+            source_review=self.save('native_v2_peer.json', {
+                'accepted_test_native_source': True, 'source': native, 'findings': []}),
+            loader_review=self.save('loader_v2_peer.json', {
+                'accepted_constructor_source_binding_helper': True,
+                'source': self.descriptor['loader_source'], 'binding': binding, 'findings': []}))
+        self.descriptor['native_argv'][2] = native['path']
+        Path(actor['path']).unlink()
+        Path(self.old['path']).write_text('VALUE = 16\n')
+        previous, bytecode = sys.argv, sys.dont_write_bytecode
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            entry.run_native(self.reference())
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(result['value'], 3)
+        self.assertEqual(result['source'], native['path'])
+        self.assertEqual(result['argv'], self.descriptor['native_argv'][2:])
+        self.assertIs(sys.argv, previous)
+        self.assertEqual(sys.dont_write_bytecode, bytecode)
+        self.assertFalse(Path(actor['path']).exists())
+
 
 if __name__ == '__main__':
     unittest.main()

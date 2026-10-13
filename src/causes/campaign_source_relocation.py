@@ -68,11 +68,42 @@ def context_modules(binding, binding_reference, relocation):
     return modules
 
 
+def constructor_dependencies(declaration, constructors):
+    """Validate v2 copies scoped to exact native constructor/dependency pairs."""
+    rows = declaration['dependency_relocations']
+    require(type(rows) is list and bool(rows), 'dependency_relocations_required')
+    selected = {}
+    for row in rows:
+        require(type(row) is dict and set(row) == {'constructor', 'relocation'},
+                'dependency_relocation_fields')
+        constructor, copy = row['constructor'], row['relocation']
+        require(type(constructor) is dict and set(constructor) == {'path', 'bytes', 'sha256'}
+                and type(constructor['bytes']) is int
+                and constructors.get(constructor['path']) == constructor,
+                'exact_dependency_constructor')
+        checked_pin(constructor)
+        physical_source(copy['original'], copy)
+        require(type(copy['physical']['bytes']) is int, 'dependency_pin_type')
+        key = (constructor['path'], copy['original']['path'])
+        require(key not in selected, 'duplicate_dependency_relocation')
+        require(copy['original']['path'] not in constructors, 'dependency_is_constructor')
+        require(not (constructor == declaration['materializer']
+                     and copy['original']['path'] == declaration['relocation']['original']['path']),
+                'dependency_overlaps_native_core')
+        selected[key] = {name: dict(copy[name]) for name in ('original', 'physical')}
+    return selected
+
+
 @contextmanager
 def bind_constructor(root, root_reference, declaration):
-    require(set(declaration) == {'schema', 'materializer', 'relocation', 'constructors'},
+    schema = declaration.get('schema')
+    fields = {'schema', 'materializer', 'relocation', 'constructors'}
+    if schema == 'causes.native_constructor_source_binding.v2':
+        fields = fields | {'dependency_relocations'}
+    require(set(declaration) == fields,
             'constructor_binding_fields')
-    require(declaration['schema'] == 'causes.native_constructor_source_binding.v1',
+    require(schema in ('causes.native_constructor_source_binding.v1',
+                       'causes.native_constructor_source_binding.v2'),
             'constructor_binding_schema')
     materializer = declaration['materializer']
     relocation = declaration['relocation']
@@ -82,6 +113,8 @@ def bind_constructor(root, root_reference, declaration):
             and constructors.get(materializer['path']) == materializer
             and constructors.get(root_reference['path']) == root_reference,
             'exact_constructor_scope')
+    dependencies = (constructor_dependencies(declaration, constructors)
+                    if schema == 'causes.native_constructor_source_binding.v2' else {})
     changes = []
     resolved = []
 
@@ -105,6 +138,18 @@ def bind_constructor(root, root_reference, declaration):
                 require(canonical(loaded.__file__) == Path(physical['path']),
                         'physical_module_identity')
                 resolved.append({'original': dict(ref), 'physical': dict(selected)})
+                return loaded
+            copy = dependencies.get((reference['path'], ref['path'])) if dependencies else None
+            if copy is not None:
+                require(type(ref.get('bytes')) is int and ref == copy['original'],
+                        'dependency_original_mismatch')
+                selected = physical_source(ref, copy)
+                loaded = original(selected, name)
+                require(canonical(loaded.__file__) == Path(selected['path']),
+                        'physical_module_identity')
+                checked_pin(selected)
+                resolved.append({'constructor': dict(reference),
+                                 'original': dict(ref), 'physical': dict(selected)})
                 return loaded
             loaded = original(ref, name)
             if constructors.get(ref['path']) == ref:
