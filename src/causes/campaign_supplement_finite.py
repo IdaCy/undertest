@@ -170,7 +170,7 @@ def _argument_pin(argument):
 def run_finite_queue(partition_reference, role, pilot_descriptors, output,
                      policy, contract, *, worker, observation, source_check,
                      request_check, replay_history, callback_sources, required_pins,
-                     pause_paths):
+                     pause_paths, capture_reader=None):
     """Run exactly one finite role under the caller's held lock and authority.
 
     The caller must bind this invocation/partition/role to its exact root
@@ -196,6 +196,8 @@ def run_finite_queue(partition_reference, role, pilot_descriptors, output,
             'finite_executor_lock_not_owned')
     callbacks = dict(worker=worker, observation=observation, source_check=source_check,
                      request_check=request_check, replay_history=replay_history)
+    if capture_reader is not None:
+        callbacks['capture_reader'] = capture_reader
     require(set(callback_sources) == set(callbacks), 'finite_callback_roster')
     immutable = [partition_reference, partition['source_jobs'], *required_pins]
     for part in partition['roles'].values():
@@ -232,7 +234,8 @@ def run_finite_queue(partition_reference, role, pilot_descriptors, output,
             observations += 1
             return residency.qualify_observation(value, policy, contract,
                                                   cached_replay,
-                                                  initial=observations == 1)
+                                                  initial=observations == 1,
+                                                  capture_reader=capture_reader)
         except Exception as error:
             raise core.AdmissionHold(str(error)) from error
 

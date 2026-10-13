@@ -54,14 +54,16 @@ def request_source_check(job, contexts, original, transport, runner):
     return context, question
 
 
-def shared_histories(scopes, current, replay):
+def shared_histories(scopes, current, replay, *, capture_reader=None, observation=None):
     require(scopes and len({s['id'] for s in scopes}) == len(scopes), 'unique_donor_scopes_required')
     require([r['id'] for r in current] == [s['id'] for s in scopes], 'donor_scope_changed')
     inherited = 0
     for scope, row in zip(scopes, current):
         require(core.encoded(row['identity']) == core.encoded(scope['identity']), 'donor_route_identity_changed')
         baseline = core.pinned(scope['baseline'])
-        raw = core.pinned(row['capture'])
+        raw = (core.pinned(row['capture']) if capture_reader is None else
+               capture_reader(scope, row['capture'], observation))
+        require(type(raw) is bytes, 'donor_capture_bytes_required')
         require(raw and raw.endswith(b'\n') and baseline and baseline.endswith(b'\n')
                 and raw.startswith(baseline), 'donor_journal_prefix_changed')
         require(scope['mode'] in ('sealed', 'live_prefix'), 'donor_mode')
@@ -95,7 +97,7 @@ def shared_histories(scopes, current, replay):
     return inherited
 
 
-def qualify_observation(value, policy, replay, *, initial=False, at=None):
+def qualify_observation(value, policy, replay, *, initial=False, at=None, capture_reader=None):
     require(value['schema'] == 'causes.supplement_admission_observation.v1', 'observation_schema')
     maximum = 180 if initial else 240
     recent(value['observed_from'], maximum, at=at)
@@ -119,7 +121,8 @@ def qualify_observation(value, policy, replay, *, initial=False, at=None):
             'retained_observation_evidence_required')
     for reference in value['evidence']:
         core.pinned(reference)
-    inherited = shared_histories(policy['donors'], value['donors'], replay)
+    inherited = shared_histories(policy['donors'], value['donors'], replay,
+                                 capture_reader=capture_reader, observation=value)
     require(inherited == policy['initial_failures'], 'inherited_failure_baseline_changed')
     return value
 

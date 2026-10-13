@@ -149,7 +149,8 @@ def validate_contract(contract, policy):
     return contract
 
 
-def qualify_observation(value, policy, contract, replay, *, initial=False, at=None):
+def qualify_observation(value, policy, contract, replay, *, initial=False, at=None,
+                        capture_reader=None):
     """Return the unchanged native observation, or hold new supplement claims.
 
     Policy/source adoption and observer provenance remain the caller's job. The
@@ -231,5 +232,6 @@ def qualify_observation(value, policy, contract, replay, *, initial=False, at=No
     memory = _integer(client['available_memory_bytes'], 0, 'co_resident_client_memory_measurement')
     if free_cpus < limits['minimum_free_cpu_count'] or memory < limits['minimum_available_memory_bytes']:
         raise core.AdmissionHold('co_resident_client_resource_headroom')
-    launch.qualify_observation(value, policy, replay, initial=initial, at=at)
+    launch.qualify_observation(value, policy, replay, initial=initial, at=at,
+                               capture_reader=capture_reader)
     return value
