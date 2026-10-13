@@ -103,6 +103,27 @@ class FreshSelfMetadataTests(unittest.TestCase):
             self.assertFalse(q['root_materialization_authorized'])
         self.assertEqual(p['requests']['ny']['previous_readout_required'],self.descriptor['base_result']['path'])
 
+    def test_dated_self_status_keeps_membership_without_startup_claim(self):
+        pair = self.pairs[3]
+        pair['self']['review'] = self.put(dict(
+            accepted_individual_variant_self_probe_feed_index_cut=True,
+            actual=pair['self']['actual'], findings=[], new_startup_claimed=False))
+        self.refresh()
+        result = planner.plan(self.descriptor_ref)
+        view = result['moved_ny/self.ACTUAL.v1.json']
+        self.assertFalse(view['new_startup_claimed'])
+        self.assertEqual(view['accepted'], 1)
+        self.assertEqual(result['PREPARATION.v1.json']['new_measurement_slots'], 12)
+
+    def test_dated_self_status_rejects_wrong_peer_identity(self):
+        pair = self.pairs[3]
+        pair['self']['review'] = self.put(dict(
+            accepted_individual_variant_self_probe_feed_index_cut=True,
+            actual=self.pairs[4]['self']['actual'], findings=[]))
+        self.refresh()
+        with self.assertRaisesRegex(ValueError, 'feed_peer_join'):
+            planner.plan(self.descriptor_ref)
+
     def test_exclusive_metadata_write_preserves_no_native_outputs(self):
         result=planner.write(self.descriptor_ref);self.assertTrue(Path(result['path']).is_file())
         self.assertFalse(any(Path(p['manifest_output']).exists()for p in self.pairs))
