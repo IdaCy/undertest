@@ -52,6 +52,63 @@ def identity(pid):
             "argv": (proc / "cmdline").read_bytes().rstrip(b"\0").decode().split("\0")}
 
 
+def observe_process(child, expected_argv, intent):
+    """Keep dated observations and select only the same child's identity.
+
+    Observation failures do not change the child's recorded execution outcome.
+    """
+    started = time.monotonic()
+    deadline = started + 0.5
+    observations = []
+    initial = selected = None
+    returncode = None
+    while True:
+        try:
+            process = identity(child.pid)
+        except OSError as error:
+            observations.append({"at": now(), "error": repr(error)})
+            returncode = child.poll()
+            status = "exited" if returncode is not None else "unavailable"
+            break
+        observation = {"at": now(), "identity": process}
+        observations.append(observation)
+        if initial is None:
+            initial = process
+        if process["pid"] != child.pid or process["start_ticks"] != initial["start_ticks"]:
+            status = "identity_changed"
+            break
+        selected = observation
+        returncode = child.poll()
+        if returncode is not None:
+            status = "exited"
+            break
+        if process["argv"] == expected_argv:
+            status = "matched"
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            status = "timeout"
+            break
+        time.sleep(min(0.01, remaining))
+        # Re-observe only while the same child is still live.
+        returncode = child.poll()
+        if returncode is not None:
+            status = "exited"
+            break
+    if selected is None:
+        selected = {"at": observations[0]["at"], "identity": {
+            "pid": child.pid, "already_exited": returncode is not None}}
+    argv = selected["identity"].get("argv")
+    argv_status = ("matched" if argv == expected_argv else
+                   "unavailable" if argv is None else
+                   "empty" if argv in ([], [""]) else "mismatch")
+    return {**selected, "intent": intent, "identity_status": status,
+            "argv_status": argv_status, "observations": observations,
+            "expected_argv": expected_argv, "returncode_at_observation": returncode,
+            "observation_timeout_seconds": 0.5,
+            "observation_elapsed_seconds": time.monotonic() - started}
+
+
 def validate(packet_ref, adoption_ref):
     packet, adoption = read(packet_ref), read(adoption_ref)
     if adoption.get("root_authorized") is not True or adoption.get("packet") != packet_ref:
@@ -120,11 +177,7 @@ def run(packet_ref, adoption_ref):
             row = {"actor": actor, "directory": actor_dir, "child": child, "intent": intent,
                    "started_at": now(), "clock": time.monotonic()}
             live.append(row)
-            try:
-                process = identity(child.pid)
-            except FileNotFoundError:
-                process = {"pid": child.pid, "already_exited": True}
-            save(actor_dir / "PROCESS.json", {"at": now(), "identity": process, "intent": intent})
+            save(actor_dir / "PROCESS.json", observe_process(child, actor["argv"], intent))
         save(output / "LAUNCHED.json", {"at": now(), "actors": [row["actor"]["name"] for row in live],
                                         "automatic_retry": False, "maximum_invocations_per_actor": 1})
     except BaseException as error:
