@@ -17,6 +17,12 @@ FIELDS = {
     'previous_plan', 'previous_preparation', 'previous_review', 'interpreter',
 }
 OPTIONAL_FIELDS = {'source_binding'}
+EXTENDED_SCHEMA = 'causes.saved_extended_reader_input_audit_descriptor.v1'
+EXTENDED_FIELDS = {
+    'schema', 'request', 'execution', 'preparation', 'pending_request',
+    'source_review', 'previous_plan', 'previous_preparation', 'previous_review',
+    'closed_actual', 'closed_review', 'interpreter',
+}
 
 def require(ok, reason):
     if not ok:
@@ -94,6 +100,8 @@ def review_metadata_template(settings):
 
 def review_saved_inputs(settings):
     """Audit saved input construction with the original pinned native helpers."""
+    if isinstance(settings, dict) and settings.get('schema') == EXTENDED_SCHEMA:
+        return review_extended_inputs(settings)
     require(type(settings) is dict and set(settings) in (FIELDS, FIELDS | OPTIONAL_FIELDS)
             and settings['schema'] == SCHEMA, 'exact_descriptor_required')
     for key in FIELDS - {'schema', 'interpreter'}:
@@ -315,6 +323,203 @@ def review_saved_inputs(settings):
         review['native_invocation_used_source_binding'] = execution.get('source_binding') is not None
         review['original_native_source'] = prep['source']
     return review
+
+
+def exact(left, right):
+    """Preserve JSON types when comparing request or scientific metadata."""
+    encode = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
+    return encode(left) == encode(right)
+
+
+def extended_request_binding(request, pending):
+    inverse = dict(request)
+    require(request.get('root_authorized') is True and pending.get('root_authorized') is False,
+            'extended_request_authority')
+    for key in ('feed_cut', 'feed_cut_review'):
+        require(pending.get(key) is None and isinstance(request.get(key), dict), 'extended_late_cut')
+        inverse[key] = None
+    inverse['root_authorized'] = False
+    require(exact(inverse, pending), 'extended_request_changed_beyond_cut')
+
+
+def preserve_extended_rows(previous, ready, unavailable):
+    """An occupied row is immutable, including its original dated copy custody."""
+    counts = {}
+    for field, rows in (('ready', ready), ('unavailable', unavailable)):
+        require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows),
+                'extended_rows_type')
+        by = {row['run_id']: row for row in rows}
+        require(len(by) == len(rows), 'extended_duplicate_row')
+        old = ck(previous[field])
+        require(len({row['run_id'] for row in old}) == len(old), 'extended_duplicate_previous_row')
+        for row in old:
+            require(row['run_id'] in by and exact(by[row['run_id']], row),
+                    'extended_previous_row_removed_or_changed')
+        counts[field] = len(old)
+    return counts
+
+
+def review_extended_inputs(settings):
+    """Check a same-cohort continuation through an explicitly reviewed extension."""
+    require(type(settings) is dict and set(settings) == EXTENDED_FIELDS
+            and settings['schema'] == EXTENDED_SCHEMA, 'exact_extended_descriptor_required')
+    for key in EXTENDED_FIELDS - {'schema', 'interpreter'}:
+        raw(settings[key])
+    require(Path(settings['interpreter']).is_absolute(), 'absolute_interpreter_required')
+    request, pending, prep, execution = (ck(settings[key]) for key in
+                                       ('request', 'pending_request', 'preparation', 'execution'))
+    extended_request_binding(request, pending)
+    binding = ck(request['binding']); source = request['source']
+    source_peer = ck(settings['source_review'])
+    require(source_peer.get('accepted_reader_cohort_extension_source') is True
+            and source_peer.get('source') == source and source_peer.get('findings') == [],
+            'accepted_extended_input_source')
+    require(request['schema'] == 'causes.extended_reader_materialization_request.v1'
+            and prep['schema'] == 'causes.fresh_candidate_reader_inputs.v1'
+            and source == prep['source'] == binding['source'], 'extended_source_join')
+    require(request['binding'] == prep['cohort_extension']
+            and request['binding_review'] == prep['cohort_extension_review']
+            and request['feed_cut'] == prep['feed_cut']
+            and request['feed_cut_review'] == prep['feed_cut_review'], 'extended_preparation_join')
+    previous = ck(settings['previous_preparation']); prior_plan = ck(settings['previous_plan'])
+    previous_peer = ck(settings['previous_review'])
+    require(request['previous_preparation'] == prep['previous_preparation'] == settings['previous_preparation']
+            and request['previous_review'] == prep['previous_review'] == settings['previous_review']
+            and prior_plan['prepared'] == settings['previous_preparation']
+            and prior_plan['prepared_review'] == settings['previous_review'], 'extended_previous_input_join')
+    require(previous_peer.get('accepted_fresh_candidate_reader_inputs') is True
+            and previous_peer.get('findings') == [] and previous_peer['preparation'] == settings['previous_preparation']
+            and all(previous_peer[key] == previous[key] for key in
+                    ('source', 'cohort', 'ready', 'self_jobs', 'unavailable', 'pending', 'reader_source')),
+            'accepted_extended_previous_inputs')
+    require(prior_plan['source'] == previous['source'] == source
+            and prior_plan['cohort'] == previous['cohort'] == prep['cohort'] == binding['cohort'],
+            'extended_same_source_cohort_required')
+    closed, closed_peer = ck(settings['closed_actual']), ck(settings['closed_review'])
+    require(binding['previous_plan'] == closed['plan'] == settings['previous_plan']
+            and binding['previous_closed'] == settings['closed_actual']
+            and binding['previous_closed_review'] == settings['closed_review'], 'extended_latest_predecessor')
+    require(closed_peer.get('accepted_finite_reader_route_closed_cut') is True
+            and closed_peer.get('findings') == [] and closed_peer['actual'] == settings['closed_actual']
+            and all(closed_peer[key] == closed[key] for key in
+                    ('plan', 'reader_source', 'root', 'journal', 'runtime_result')),
+            'accepted_extended_predecessor')
+    require(closed['all_claims_accounted'] is True and closed['active'] == closed['unclaimed'] == 0
+            and closed['quarantine'] is closed['stop_reason'] is closed['owned_pause'] is None
+            and closed['reader_source'] == source, 'extended_predecessor_not_closed')
+    require(closed['ready'] == closed['claimed'] == closed['finished_or_unresolved']
+            == len(closed['claimed_keys']) == len(set(closed['claimed_keys']))
+            == prior_plan['expected_unclaimed_contexts']
+            and not set(closed['claimed_keys']).intersection(prior_plan['previous_cohort_claimed_keys'])
+            and type(closed['final_consecutive_failed_contexts']) is int
+            and 0 <= closed['final_consecutive_failed_contexts'] < 3, 'extended_predecessor_partition')
+    output = Path(request['output'])
+    require(settings['preparation'] == pin(output / 'PREPARATION.v1.json'), 'extended_output_join')
+    native_intent_ref = pin(output / 'INTENT.v1.json'); native_intent = ck(native_intent_ref)
+    require(native_intent['request'] == settings['request'], 'extended_native_intent')
+    authority_ref = native_intent['authority']; authority = ck(authority_ref)
+    require(authority['action'] == 'prepare_extended_reader_inputs' and authority['root_authorized'] is True
+            and authority['automatic_retry'] is False and authority['request'] == settings['request']
+            and authority['source'] == source and authority['output'] == str(output), 'extended_authority_scope')
+    argv = [settings['interpreter'], '-B', source['path'], '--prepare-request', settings['request']['path'],
+            '--prepare-authority', authority_ref['path']]
+    root_intent_ref = execution.get('intent') or pin(Path(settings['execution']['path']).with_name('INTENT.v1.json'))
+    root_intent = ck(root_intent_ref)
+    require(execution['returncode'] == 0 and execution['error'] is None and raw(execution['stderr']) == b''
+            and ck(execution['stdout']) == settings['preparation'], 'extended_materialization_failed')
+    require(execution['source'] == execution['source_after'] == source
+            and root_intent['source'] == source
+            and root_intent['argv'] == execution['argv'] == argv
+            and root_intent['request'] == execution['request'] == settings['request']
+            and root_intent['authority'] == execution['authority'] == authority_ref
+            and root_intent['maximum_invocations'] == 1 and root_intent['automatic_retry'] is False
+            and execution['automatic_retry'] is False and execution['maximum_invocations'] == 1
+            and execution['host_calls'] == execution['model_calls'] == 0, 'extended_execution_join')
+    clock = datetime.datetime.fromisoformat
+    require(clock(closed['observed_at']) <= clock(closed_peer['at']) <= clock(execution['started_at'])
+            and clock(authority['issued_at']) <= clock(execution['started_at'])
+            <= clock(execution['finished_at']) <= clock(authority['expires_at'])
+            and 0 < (clock(authority['expires_at']) - clock(authority['issued_at'])).total_seconds() <= 180,
+            'extended_dated_authority_or_predecessor')
+    extension = module(source, 'saved_extended_reader_input_source')
+    bound = extension.runtime_namespace(request['binding'], request['binding_review'])
+    modules = bound['native_modules']()
+    old, base_ready, base_missing, selection, jobs = extension.cohort(binding)
+    ready, missing, uncopied = extension.validate_cumulative(binding, prep, previous)
+    prior_counts = preserve_extended_rows(previous, ready, missing)
+    copied = extension.copied_rows(binding, request, selection, jobs)
+    previous_rows = extension.unique(ck(previous['ready']) + ck(previous['unavailable']),
+                                     'run_id', 'duplicate_previous_input')
+    native = extension.module(binding['row_materializer']); known = ck(binding['known'])
+    reader = modules['campaign_reader']; config = ck(prep['checker_config'])
+    require(pin(reader.__file__) == prep['reader_source'] == known['reader_source'], 'extended_native_reader_source')
+    for ref in prep['prompts'].values():
+        raw(ref)
+    expected_ready, expected_missing, expected_pending = list(base_ready), list(base_missing), []
+    payloads = 0; custody = {}; new_counts = Counter()
+    for run in jobs:
+        if run in previous_rows:
+            require(run in copied, 'extended_previous_copy_removed')
+            row = previous_rows[run]
+            require(exact(row['original_binding']['snapshot_receipt'], copied[run]['receipt']),
+                    'extended_previous_copy_changed')
+        elif run not in copied:
+            expected_pending.append(dict(run_id=run, stage='early', measurement_key=extension.measurement_key(run),
+                disposition='pending', reason='no_accepted_reader_input_copy_at_cut'))
+            continue
+        else:
+            feed = copied[run]; receipt = feed['receipt']; manifest = pin(receipt['manifest'])
+            require(manifest['sha256'] == receipt['manifest_sha256'], 'extended_manifest_changed')
+            verified_ref = pin(Path(receipt['manifest']).with_name('VERIFIED.json')); verified = ck(verified_ref)
+            require(verified['schema'] == 'caus.reader_input_verified.v1', 'extended_verified_schema')
+            by = extension.unique(verified['runs'], 'run', 'duplicate_verified_receipt')
+            require(receipt['run'] in by and exact(by[receipt['run']], receipt), 'extended_verified_receipt_changed')
+            custody[manifest['path']] = dict(manifest=manifest, verified=verified_ref)
+            row = native.bind_row(feed, known, modules)
+            require(row['run_id'] == run and row['stage'] == 'early'
+                    and row['native_job_sha256'] == reader.digest(jobs[run]['job']), 'extended_native_job_changed')
+            new_counts[(feed['role'], row['disposition'])] += 1
+            if row['disposition'] == 'prepared':
+                view = extension.prepare_reader(row, prep, config, modules)
+                require(view['phase'] == 'prefix' and view['prefix_context'] is None, 'extended_native_stage')
+                context, targets = reader.prepare_context(view['messages'], len(view['initial_context']),
+                    view['phase'], view['initial_context'], view['prefix_context'])
+                require(reader.digest(context) == row['judge_context_sha256']
+                        and reader.digest(targets) == row['targets_sha256'], 'extended_native_context')
+                for instrument in extension.READERS:
+                    payload, pins = reader.make_payload(config, Path(prep['prompts_directory']), context, instrument)
+                    expected = dict(native.parent().payload_identity(payload, reader.encoded), pins=pins)
+                    require(exact(expected, row['payloads'][instrument]) and payload['store'] is False
+                            and payload['input'][1] == dict(role='user', content=reader.encoded(context).decode()),
+                            'extended_native_payload')
+                    payloads += 1
+            else:
+                require(row['disposition'] == 'unavailable'
+                        and row['reason'] == 'required_stage_or_initial_context_not_captured'
+                        and row['closed_native_snapshot'] is True, 'extended_native_missing_context')
+        (expected_ready if row['disposition'] == 'prepared' else expected_missing).append(row)
+    require(exact(ready, expected_ready) and exact(missing, expected_missing)
+            and exact(uncopied, expected_pending), 'extended_reconstructed_rows_changed')
+    require(prep['runtime_authorized'] is False and prep['model_calls'] == 0
+            and all(prep[key] is True for key in ('original_allocations_unchanged', 'treatments_preserved',
+                'payloads_contain_no_analysis_labels', 'pending_is_not_missing',
+                'cumulative_ready_requires_closed_history_filter')), 'extended_input_guarantees')
+    return dict(schema='causes.extended_reader_inputs_independent_review.v1',
+        accepted_fresh_candidate_reader_inputs=True, accepted_extended_reader_inputs=True,
+        preparation=settings['preparation'], **{key: prep[key] for key in
+            ('source', 'known', 'cohort', 'ready', 'self_jobs', 'unavailable', 'pending', 'reader_source', 'counts')},
+        source_review=settings['source_review'], binding=request['binding'], binding_review=request['binding_review'],
+        request=settings['request'], execution=settings['execution'], root_authority=authority_ref,
+        native_intent=native_intent_ref, root_intent=root_intent_ref,
+        previous_preparation=settings['previous_preparation'], previous_review=settings['previous_review'],
+        preceding_closed_actual=settings['closed_actual'], preceding_closed_review=settings['closed_review'],
+        preserved_previous_counts=prior_counts, prepared_payloads_reconstructed=payloads,
+        whole_snapshot_custody=list(custody.values()),
+        new_role_counts=[dict(role=role, disposition=disposition, count=count)
+                        for (role, disposition), count in sorted(new_counts.items())],
+        findings=[], runtime_authorized=False, model_calls=0, host_calls=0, materializer_invocations=0,
+        response_or_label_reads=0, at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        review_source=pin(__file__))
 
 
 def write_review(descriptor_ref, output):
