@@ -425,6 +425,8 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
                                   else 'local_disk_below_floor:' + str(local_free_space_floor_bytes))
                         raise AdmissionHold(reason)
                     observation = admission_check()
+                    if any(future.done() for future in active):
+                        break  # Harvest outcomes before preparing another unclaimed request.
                     if capacity is not None:
                         pinned(capacity_limit); pinned(capacity['capacity_review'])
                         if observation.get('identity') != capacity['provider_identity']:
