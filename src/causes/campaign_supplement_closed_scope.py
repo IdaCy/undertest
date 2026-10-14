@@ -8,6 +8,7 @@ from causes import campaign_supplement as core
 
 
 EXTENSION_SCHEMA = 'causes.original_supplement_owner_bank_extension.v1'
+DERIVED_EXTENSION_SCHEMA = 'causes.derived_supplement_owner_bank_extension.v1'
 
 
 def require(ok, reason):
@@ -34,7 +35,8 @@ def unique_ids(items):
     return items
 
 
-def resolve(plan, previous, *, original_transfer_jobs=None, read=core.pinned):
+def resolve(plan, previous, *, original_transfer_jobs=None, derived_bank_jobs=None,
+            read=core.pinned):
     """Return exact current jobs and their ordered cumulative owner bank.
 
     A same-bank invocation takes only the next original untouched prefix. An
@@ -43,6 +45,8 @@ def resolve(plan, previous, *, original_transfer_jobs=None, read=core.pinned):
     """
     require(previous['schema'] == 'causes.finite_supplement_tranche_closed.v1',
             'closed_scope_predecessor_schema')
+    require('derived_bank' in plan or not plan['family'].startswith('derived_probe_'),
+            'closed_scope_explicit_derived_bank_required')
     prior = unique_ids(previous['complete_ids'])
     remaining = unique_ids(previous['unstarted_ids'])
     previous_jobs = value(previous['full_jobs'], read)
@@ -52,8 +56,41 @@ def resolve(plan, previous, *, original_transfer_jobs=None, read=core.pinned):
     require(type(plan['maximum_new_requests']) is int and plan['maximum_new_requests'] > 0,
             'closed_scope_request_bound')
     extension = None
+    derived = None
+    carried_derived_extension = None
     required = [previous['full_jobs']]
-    if 'original_reservation_transfer' in plan:
+    if 'derived_bank' in plan:
+        require('original_reservation_transfer' not in plan and callable(derived_bank_jobs),
+                'closed_scope_derived_resolver_required')
+        derived = derived_bank_jobs(plan, previous, read=read)
+        jobs, full_jobs = derived['jobs'], derived['cumulative_jobs']
+        required.extend(derived['required_pins'])
+        bank = value(plan['derived_bank']['actual'], read)
+        base = value(bank['execution_predecessor']['actual'], read)
+        required.extend([plan['derived_bank']['actual'], bank['execution_predecessor']['actual']])
+        owner_jobs, bank_jobs = derived['prior_owner_jobs'], derived['bank_jobs']
+        expected = dict(schema=DERIVED_EXTENSION_SCHEMA, adoption=plan['derived_bank'],
+            execution_predecessor=bank['execution_predecessor'],
+            previous_closed=bank['execution_predecessor'], previous_full_jobs=base['full_jobs'],
+            source_family=plan['family'], model=plan['model'],
+            prior_count=len(owner_jobs), appended_count=len(bank_jobs),
+            appended_jobs_sha256=core.digest(bank_jobs),
+            appended_ids_sha256=core.digest([j['measurement_id'] for j in bank_jobs]),
+            cumulative_count=len(full_jobs), cumulative_jobs_sha256=core.digest(full_jobs),
+            comparisons=derived['comparisons'], source_counts=derived['source_counts'],
+            unique_missing_slots=derived['unique_missing_slots'])
+        if plan['continuation_scope'] == 'adopted_derived_bank':
+            require(not remaining and previous_jobs == owner_jobs,
+                    'closed_scope_derived_initial_history')
+            extension = expected
+        else:
+            require(plan['continuation_scope'] == 'derived_bank_remaining' and
+                    previous_jobs == full_jobs, 'closed_scope_derived_resume_history')
+            carried_derived_extension = previous['derived_bank_extension']
+            expected_scope = dict(extension=expected, full_jobs=full_jobs)
+            require(carried_derived_extension == bind_extension(expected_scope, previous['full_jobs']),
+                    'closed_scope_derived_extension_changed')
+    elif 'original_reservation_transfer' in plan:
         require(callable(original_transfer_jobs), 'closed_scope_transfer_resolver_required')
         transfer = original_transfer_jobs(plan, previous, read=read)
         require(not remaining, 'closed_scope_unfinished_predecessor')
@@ -83,9 +120,12 @@ def resolve(plan, previous, *, original_transfer_jobs=None, read=core.pinned):
         require(type(plan[key]) is int and plan[key] > 0, 'closed_scope_operational_budget')
     require(plan['maximum_captures'] <= plan['maximum_admission_attempts'],
             'closed_scope_capture_budget')
-    return dict(jobs=jobs, full_jobs=full_jobs, prior_ids=prior,
+    result = dict(jobs=jobs, full_jobs=full_jobs, prior_ids=prior,
                 prior_terminal=previous['terminal'], full_jobs_reference=previous['full_jobs'],
                 extension=extension, required_pins=required)
+    if derived is not None:
+        result.update(derived_bank=derived, carried_derived_extension=carried_derived_extension)
+    return result
 
 
 def partition(scope, claimed_ids, terminal_ids):

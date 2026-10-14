@@ -344,7 +344,14 @@ def validate_contract(plan, contract, jobs, *, initial_failures, max_clients, re
             peer['all_original_attempts_retained'] is True and
             peer['qualification_findings'] == previous['qualification_findings'],
             'completed_actor_predecessor_changed')
-    if 'original_reservation_transfer' in plan:
+    if 'derived_bank' in plan:
+        from causes import campaign_supplement_derived_bank
+        require('original_reservation_transfer' not in plan and
+                contract.get('derived_bank') == plan['derived_bank'],
+                'completed_actor_derived_bank_contract')
+        resolved = campaign_supplement_derived_bank.resolve(plan, previous, read=read)
+        require(jobs == resolved['jobs'], 'completed_actor_derived_jobs_changed')
+    elif 'original_reservation_transfer' in plan:
         require(contract.get('original_reservation_transfer') == plan['original_reservation_transfer'],
                 'completed_actor_transfer_contract')
         transfer = original_transfer_jobs(plan, previous, read=read)
