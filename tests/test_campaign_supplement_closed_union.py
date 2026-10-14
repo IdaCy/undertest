@@ -398,5 +398,80 @@ class FullBankEndingTests(unittest.TestCase):
             with self.assertRaises(ValueError): pipeline.verify_partial_ending(actual, rows, f[2], allow_full_bank=True)
 
 
+class CleanSummaryReviewTests(unittest.TestCase):
+    @staticmethod
+    def summary(fixture, count_field='new_qualified'):
+        actual = fixture.docs[fixture.actual['path']]
+        peer = fixture.docs[fixture.peer['path']]
+        actual['current_tranche_qualified'] = True
+        for name in ('qualified_admission_ids', 'invalid_admission_ids', 'invalid_admission_custody'):
+            peer.pop(name)
+        peer.update(schema='causes.completed_actor_saved_closure_review.v1',
+                    current_tranche_qualified=True, new_invalid_ids=[],
+                    current_qualification_findings=[], inherited_qualification_findings=[],
+                    cumulative_invalid_ids=[], partition=dict(active=0, new_invalid=0,
+                    occupied=4, prior_occupied=2, **{count_field: 2}))
+        return actual, peer
+
+    def test_both_saved_summary_formats_preserve_rows_origins_and_inputs(self):
+        for count_field in ('new_qualified', 'new_admission_qualified'):
+            with self.subTest(count_field=count_field):
+                f = Fixture(); expected = f.normalize()
+                self.summary(f, count_field); before = copy.deepcopy(f.docs)
+                self.assertEqual(f.normalize(), expected)
+                self.assertEqual(f.docs, before)
+
+    def test_summary_requires_exact_explicit_clean_current_qualification(self):
+        changes = [
+            ('schema', 'unknown'), ('current_tranche_qualified', False),
+            ('new_invalid_ids', ['bad']), ('current_qualification_findings', ['bad']),
+            ('inherited_qualification_findings', ['changed']), ('cumulative_invalid_ids', ['changed']),
+        ]
+        for field, value in changes:
+            with self.subTest(field=field):
+                f = Fixture(); _, peer = self.summary(f); peer[field] = value
+                with self.assertRaises(ValueError): f.normalize()
+        f = Fixture(); actual, _ = self.summary(f); actual['current_tranche_qualified'] = False
+        with self.assertRaises(ValueError): f.normalize()
+
+    def test_summary_rejects_missing_boolean_and_conflicting_counts(self):
+        for field in ('active', 'new_invalid', 'occupied', 'prior_occupied', 'new_qualified'):
+            for value in (None, False, -1, 999):
+                with self.subTest(field=field, value=value):
+                    f = Fixture(); _, peer = self.summary(f); peer['partition'][field] = value
+                    with self.assertRaises(ValueError): f.normalize()
+        f = Fixture(); _, peer = self.summary(f)
+        peer['partition']['new_admission_qualified'] = 2
+        with self.assertRaises(ValueError): f.normalize()
+        for field in ('scientifically_qualified_total', 'qualified_custody_total'):
+            f = Fixture(); _, peer = self.summary(f); peer['partition'][field] = 999
+            with self.assertRaises(ValueError): f.normalize()
+
+    def test_partial_typed_review_never_falls_back_to_summary(self):
+        for field in ('qualified_admission_ids', 'invalid_admission_ids', 'invalid_admission_custody'):
+            for value in ([], None):
+                f = Fixture(); _, peer = self.summary(f); peer[field] = value
+                with self.assertRaisesRegex(ValueError, 'closed_admission_review_fields'):
+                    f.normalize()
+
+    def test_summary_cannot_promote_invalid_or_reorder_qualified_measurements(self):
+        f = Fixture(); actual, _ = self.summary(f)
+        actual['new_scientifically_qualified_ids'].reverse()
+        with self.assertRaises(ValueError): f.normalize()
+        f = Fixture(); f.invalid_admission(); self.summary(f)
+        with self.assertRaises(ValueError): f.normalize()
+
+    def test_inherited_invalids_remain_literal_in_clean_delta(self):
+        f = Fixture(); actual, peer = self.summary(f)
+        actual['inherited_qualification_findings'] = peer['inherited_qualification_findings'] = ['historical']
+        actual['cumulative_invalid_ids'] = peer['cumulative_invalid_ids'] = ['historical-id']
+        actual['scientifically_qualified_total'] = 3
+        peer['partition']['scientifically_qualified_total'] = 3
+        before = copy.deepcopy((actual, peer))
+        ids = actual['new_scientifically_qualified_ids']
+        self.assertEqual(union.admission_review_partition(actual, peer, ids, 2), (ids, [], []))
+        self.assertEqual((actual, peer), before)
+
+
 if __name__ == '__main__':
     unittest.main()
