@@ -583,6 +583,31 @@ def invalid_admission_proofs(verified, origins):
     return invalid
 
 
+def saved_source_relocations(binding, allowlist, get=checked, load=module):
+    """Load an independently accepted, source-only saved-read declaration."""
+    if 'source_relocation' not in binding:
+        return None
+    require('normalization' in binding, 'source_relocation_requires_normalization')
+    spec = binding['source_relocation']
+    require(type(spec) is dict and set(spec) == {'source', 'source_review', 'declaration', 'review'},
+            'saved_source_relocation_binding')
+    accepted(get, spec['source_review'], 'accepted_saved_source_read_relocation_source',
+             relocation_source=spec['source'])
+    helper = load(spec['source'], 'supplement_saved_source_relocation')
+    return helper.SavedSourceRelocations(spec['declaration'], spec['review'], get,
+                                        allowlist['files'] + allowlist['source_files'])
+
+
+def guarded_raw_reader(guard, relocations=None):
+    """Record the path actually opened while keeping the caller's pin literal."""
+    def raw(reference):
+        guard.record(reference)
+        return Path(reference['path']).read_bytes()
+    if relocations is None:
+        return raw
+    return lambda reference: relocations.read(reference, raw)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--request', required=True)
@@ -641,13 +666,21 @@ def main():
         require(same(pin(sys.modules['shared.evidence_bytes'].__file__), binding['exact_bytes_source']),
                 'normalization_codec_source')
     allowlist = checked(binding['allowlist'])
+    relocations = saved_source_relocations(binding, allowlist)
+    copied_sources = [] if relocations is None else relocations.physical_sources
+    relocation_sources = ([] if relocations is None else
+                          [binding['source_relocation']['source']] + copied_sources)
     guard = reader.ReadGuard(allowlist['files'] + list(references([request, authority, binding, data]))
-        + [request_ref, authority_ref], output, allowlist['source_files'], [],
+        + [request_ref, authority_ref] + copied_sources, output,
+        allowlist['source_files'] + relocation_sources, [],
         json_cache_bytes=64 * 1024 * 1024, json_cache_entries=64)
     sys.addaudithook(guard.audit)
     get = guard.checked_json
     for reference in (request_ref, authority_ref, request['bindings'], binding['data']):
         guard.record(reference)
+    if relocations is not None:
+        for reference in list(binding['source_relocation'].values()) + copied_sources:
+            guard.record(reference)
     if normalizer is None:
         jobs, membership, assignments, _ = validate_membership(data, get)
         verified, origins = combine_verified(data, membership, get, binding['verification'],
@@ -655,9 +688,7 @@ def main():
             allow_closed_lineage=mode == 'continue',
             qualification_reviews=binding.get('qualification_reviews'))
     else:
-        def raw(reference):
-            guard.record(reference)
-            return Path(reference['path']).read_bytes()
+        raw = guarded_raw_reader(guard, relocations)
         union = normalizer.normalize_closed_union(get(binding['normalization']), get, raw,
                                                   closed_lineage_rows)
         jobs, membership, assignments, verified, origins = normalizer.validate_membership(data, union, get)

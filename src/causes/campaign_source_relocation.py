@@ -47,6 +47,84 @@ def checked_source(original, relocation):
     return checked_pin(physical_source(original, relocation))
 
 
+def saved_reference(ref):
+    """Validate a reference without opening its possibly retired logical path."""
+    require(type(ref) is dict and set(ref) == {'path', 'bytes', 'sha256'},
+            'saved_source_pin_fields')
+    require(type(ref['path']) is str and type(ref['bytes']) is int and ref['bytes'] >= 0
+            and type(ref['sha256']) is str and len(ref['sha256']) == 64
+            and all(c in '0123456789abcdef' for c in ref['sha256']), 'saved_source_pin_type')
+    canonical(ref['path'])
+    return dict(ref)
+
+
+class SavedSourceRelocations:
+    """Explicit source copies for authenticated saved reads, never data aliases.
+
+    ``get`` must authenticate each JSON reference before returning its value.
+    ``files`` is the original accepted allowlist; it is neither edited nor
+    replaced. Add ``physical_sources`` to the read guard's files AND source
+    roster before installing its audit hook. ``read`` passes only the selected
+    physical pin to the caller's guarded raw reader. ``resolve`` also supports
+    existing streaming pin-verification functions at final rehash boundaries.
+
+    This does not redirect module loaders or unguarded Path/open calls.
+    """
+
+    def __init__(self, declaration_ref, review_ref, get, files):
+        declaration = get(saved_reference(declaration_ref))
+        review = get(saved_reference(review_ref))
+        require(review.get('accepted_saved_source_relocations') is True
+                and review.get('declaration') == declaration_ref
+                and review.get('findings') == [], 'saved_source_relocation_review')
+        require(type(declaration) is dict and set(declaration) == {'schema', 'relocations'}
+                and declaration['schema'] == 'causes.saved_source_relocations.v1',
+                'saved_source_relocation_schema')
+        rows = declaration['relocations']
+        require(type(rows) is list and bool(rows), 'saved_source_relocations_required')
+        known = {}
+        for item in files:
+            ref = saved_reference(item)
+            require(ref['path'] not in known or known[ref['path']] == ref,
+                    'conflicting_original_allowlist')
+            known[ref['path']] = ref
+        self._copies = {}
+        physical = {}
+        for row in rows:
+            require(type(row) is dict and set(row) == {'original', 'physical'},
+                    'relocation_fields')
+            original, copy = saved_reference(row['original']), saved_reference(row['physical'])
+            require(known.get(original['path']) == original, 'unknown_original_source')
+            require(original['path'] not in self._copies and copy['path'] not in physical,
+                    'duplicate_saved_source_relocation')
+            require(copy['path'] not in known or known[copy['path']] == copy,
+                    'conflicting_physical_allowlist')
+            physical_source(original, row)
+            self._copies[original['path']] = {'original': original, 'physical': copy}
+            physical[copy['path']] = copy
+        require(not set(self._copies).intersection(physical), 'overlapping_source_relocations')
+
+    @property
+    def physical_sources(self):
+        return [dict(row['physical']) for row in self._copies.values()]
+
+    def resolve(self, reference):
+        """Keep every unlisted reference literal; refuse a changed mapped pin."""
+        reference = saved_reference(reference)
+        row = self._copies.get(reference['path'])
+        if row is None:
+            return reference
+        return physical_source(reference, row)
+
+    def read(self, reference, raw):
+        """Read through the caller's guard and verify the bytes actually returned."""
+        selected = self.resolve(reference)
+        data = raw(selected)
+        require(type(data) is bytes and len(data) == selected['bytes']
+                and hashlib.sha256(data).hexdigest() == selected['sha256'], 'pin_changed')
+        return data
+
+
 def context_modules(binding, binding_reference, relocation):
     """Construct the pinned saved-context bundle using only an exact core copy.
 
