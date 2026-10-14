@@ -112,12 +112,26 @@ def original_transfer_jobs(plan, previous, *, read=core.pinned):
     owner_jobs = value(previous['full_jobs'])
     require(identifiers([job['measurement_id'] for job in owner_jobs]) ==
             identifiers(previous['complete_ids']), 'original_transfer_owner_partition')
-    owner_physical = {physical(job) for job in owner_jobs}
-    require(len(owner_physical) == len(owner_jobs), 'original_transfer_owner_alias')
+    if 'mixed_owner_partition' in plan:
+        from causes import campaign_supplement_mixed_owner as mixed
+        require(transfer.get('mixed_owner_partition') == plan['mixed_owner_partition'],
+                'original_transfer_mixed_partition_binding')
+        try:
+            partition = mixed.resolve(plan['mixed_owner_partition'],
+                predecessor=plan['predecessor_custody'], source=plan['sources']['mixed_owner'], read=pinned)
+        except mixed.MixedOwnerError as error:
+            raise core.IntegrityError(str(error)) from error
+        require(partition['owner_jobs'] == owner_jobs, 'original_transfer_mixed_owner_changed')
+        owner_original = partition['original_jobs']
+    else:
+        owner_original = owner_jobs
+    owner_physical = {physical(job) for job in owner_original}
+    require(len(owner_physical) == len(owner_original), 'original_transfer_owner_alias')
     donors = transfer['source_reservations']
     require(type(donors) is list and donors and
             len({row['role'] for row in donors}) == len(donors), 'original_transfer_donors')
     source_rows, source_jobs, donor_locks, counters, occupied = {}, {}, [], {}, set()
+    terminal_failures = {}
     all_ids, all_physical = set(), set()
     historical = {
         'mi': ('causes.requested_priority_mi_self_drain.v1',
@@ -167,6 +181,8 @@ def original_transfer_jobs(plan, previous, *, read=core.pinned):
                     actual['counts']['unstarted'] == len(remaining),
                     'original_transfer_historical_counts')
             counters[role] = actual['counts']['consecutive_failures']
+            if transfer['selection']['mode'] == 'saved_complement':
+                terminal_failures[role] = actual['counts']['technical_failures']
             # The accepted snapshot establishes absence; the caller still takes the
             # exact saved lock and keeps the saved journal and pause bytes pinned.
             require(actual['original_process_absence'] and
@@ -231,13 +247,23 @@ def original_transfer_jobs(plan, previous, *, read=core.pinned):
         require(len(donors) == 1 and set(selection) == {'mode'} and
                 donors[0]['kind'] == 'finite_closed', 'original_transfer_entire_scope')
         selected = source_jobs[donors[0]['role']]
-    elif selection['mode'] == 'saved_priority':
+    elif selection['mode'] in ('saved_priority', 'saved_complement'):
         require(set(selection) == {'mode', 'metadata'} and
                 set(source_rows) == {'mi', 'texas', 'ny'} and
                 transfer['family'] == 'candidate_saved_self_v1', 'original_transfer_priority_scope')
         metadata = value(selection['metadata'])
-        require(metadata['schema'] == 'causes.saved_unstarted_priority_subset.v1' and
+        require(metadata['schema'] == ('causes.saved_unstarted_priority_subset.v1'
+                if selection['mode'] == 'saved_priority' else 'causes.saved_unstarted_complement_subset.v1') and
                 metadata['runtime_authorized'] is False, 'original_transfer_priority_metadata')
+        if selection['mode'] == 'saved_complement':
+            from causes import campaign_supplement_mixed_owner as mixed
+            require('mixed_owner_partition' in plan, 'original_complement_mixed_scope_required')
+            try:
+                mixed.validate_complement(metadata, value=value)
+                require(transfer.get('donor_terminal_failures') == terminal_failures ==
+                        metadata['historical_terminal_failures'], 'original_complement_failure_history')
+            except mixed.MixedOwnerError as error:
+                raise core.IntegrityError(str(error)) from error
         value(metadata['assignments']); value(metadata['selection'])
         selected = []
         indexed = {role: {job['measurement_id']: job for job in jobs}
