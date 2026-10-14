@@ -150,6 +150,47 @@ def original_bank_extension(saved, plan, prior, get):
             'original_bank_invocation_identity')
     return copy.deepcopy(extension)
 
+def admission_review_partition(saved, peer, mids, prior_count):
+    """Read an authenticated review without altering its saved representation."""
+    fields = ('qualified_admission_ids', 'invalid_admission_ids', 'invalid_admission_custody')
+    present = [name in peer for name in fields]
+    if any(present):
+        require(all(present) and all(type(peer[name]) is list for name in fields),
+                'closed_admission_review_fields')
+        return tuple(peer[name] for name in fields)
+
+    # Some independently reviewed clean deltas record counts instead of repeating
+    # every ID. The caller has already checked their exact actual/source/flags,
+    # native rows, claims, terminals and ordered complete-ID partition.
+    require(peer.get('schema') == 'causes.completed_actor_saved_closure_review.v1'
+            and peer.get('current_tranche_qualified') is True
+            and saved.get('current_tranche_qualified') is True
+            and peer.get('new_invalid_ids') == saved['new_invalid_ids'] == []
+            and peer.get('current_qualification_findings')
+                == saved['current_qualification_findings'] == []
+            and same(peer.get('inherited_qualification_findings'),
+                     saved['inherited_qualification_findings'])
+            and same(peer.get('cumulative_invalid_ids'), saved['cumulative_invalid_ids'])
+            and saved['new_scientifically_qualified_ids'] == mids,
+            'closed_clean_admission_review')
+    partition = peer.get('partition')
+    require(type(partition) is dict, 'closed_clean_admission_partition')
+    qualified_fields = [name for name in ('new_qualified', 'new_admission_qualified')
+                        if name in partition]
+    require(len(qualified_fields) == 1, 'closed_clean_admission_count_field')
+    expected = dict(active=0, new_invalid=0, occupied=saved['occupied'],
+                    prior_occupied=prior_count)
+    expected[qualified_fields[0]] = len(mids)
+    require(all(type(partition.get(name)) is int and partition[name] == value
+                for name, value in expected.items()), 'closed_clean_admission_counts')
+    for name in ('scientifically_qualified_total', 'qualified_custody_total'):
+        if name in partition:
+            require(type(partition[name]) is int
+                    and partition[name] == saved['scientifically_qualified_total'],
+                    'closed_clean_admission_total')
+    return saved['new_scientifically_qualified_ids'], [], []
+
+
 def normalize_closed_union(descriptor, get, read_bytes, legacy_rows):
     """Return native rows and explicit origins for a disjoint reviewed role union.
 
@@ -323,7 +364,7 @@ ending option. No collector, parser, queue, process check or model is invoked.
                     and terminal['consecutive_failures'] == counter, 'completed_actor_failure_history')
         require(counter == saved['consecutive_failures'], 'completed_actor_ending_counter')
         findings = unique(saved['current_qualification_findings'], 'measurement_id', 'closed_duplicate_finding')
-        valid, invalid = peer['qualified_admission_ids'], peer['invalid_admission_ids']
+        valid, invalid, invalid_custody = admission_review_partition(saved, peer, mids, len(old_ids))
         require(len(set(valid)) == len(valid) and len(set(invalid)) == len(invalid)
                 and not set(valid) & set(invalid) and set(valid) | set(invalid) == set(mids)
                 and set(invalid) == set(findings)
@@ -335,7 +376,7 @@ ending option. No collector, parser, queue, process check or model is invoked.
                 and set(saved['cumulative_invalid_ids']) <= set(saved['complete_ids'])
                 and saved['scientifically_qualified_total'] == len(saved['complete_ids']) - len(saved['cumulative_invalid_ids']),
                 'completed_actor_cumulative_qualification')
-        custody = unique(peer['invalid_admission_custody'], 'measurement_id', 'closed_duplicate_invalid_custody')
+        custody = unique(invalid_custody, 'measurement_id', 'closed_duplicate_invalid_custody')
         require(set(custody) == set(invalid), 'closed_invalid_custody_partition')
         for index, row in enumerate(rows):
             require('qualification_error' not in row, 'closed_row_changed')
