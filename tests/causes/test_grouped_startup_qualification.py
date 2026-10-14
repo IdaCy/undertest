@@ -74,6 +74,14 @@ def states(args):
     return bank('causes.grouped_startup_state_bank.v1', 'accepted_grouped_startup_state_bank', entries)
 
 
+def later_read(args, path='README.md', stdout='file contents\n', returncode=0):
+    later(args, stdout=stdout, returncode=returncode)
+    capture = args[2][-1]
+    capture['call']['function'] = dict(name='read', arguments=json.dumps({'path': path}))
+    capture['result']['argv'] = capture['result']['argv'][:-3] + ['cat', '--', path]
+    args[1]['state']['operations'][-1]['argv'] = copy.deepcopy(capture['result']['argv'])
+
+
 class GroupedStartupQualificationTests(unittest.TestCase):
     def test_native_first_interval_is_pending_and_never_a_view(self):
         args = setup(); before = reader.encoded(args)
@@ -253,6 +261,91 @@ class GroupedStartupQualificationTests(unittest.TestCase):
             args = setup(); args[2][0]['operation_ordinal'] = ordinal
             with self.subTest(ordinal=ordinal), self.assertRaisesRegex(ValueError, 'native_operation_order'):
                 qualify_run(*args)
+
+    def test_native_read_keeps_even_leading_banner_literal(self):
+        args = setup(); later_read(args, stdout=BANNER + 'file\n' + BANNER)
+        before = reader.encoded(args)
+        proof = qualify_run(*args)
+        row = proof['invocations'][1]
+        self.assertTrue(row['native_execution_established'])
+        self.assertIs(row['startup_invoked'], False)
+        self.assertFalse(row['qualified'])
+        self.assertEqual(row['reason'], 'native_read_does_not_invoke_startup')
+        self.assertEqual(row['other_literal_banner_occurrences'], 2)
+        self.assertNotIn('start_utf8_byte', row)
+        self.assertNotIn('raw_stdout_start', row)
+        self.assertTrue(proof['all_injected_startup_banner_intervals_qualified'])
+        self.assertFalse(proof['broader_external_cue_neutrality_established'])
+        self.assertEqual(before, reader.encoded(args))
+
+    def test_native_read_path_is_one_literal_argument(self):
+        for path in ('file name', '-n', '$(touch /tmp/no); x', 'a\nb', '../task'):
+            args = setup(); later_read(args, path=path)
+            with self.subTest(path=path):
+                proof = qualify_run(*args)
+                self.assertTrue(proof['all_native_early_invocations_joined'])
+                self.assertFalse(proof['invocations'][1]['startup_invoked'])
+
+    def test_read_native_mapping_matches_original_runner(self):
+        args = setup(); later_read(args, path='literal;name')
+        capture = args[2][-1]
+        class SavedSandbox:
+            def run(inner, command, timeout):
+                self.assertEqual(command, ['cat', '--', 'literal;name'])
+                self.assertEqual(timeout, 90)
+                return capture['result']
+        with tempfile.TemporaryDirectory() as directory:
+            result = runner.execute_tool(SavedSandbox(), capture['call'], Path(directory) / 'capture.json', 32000)
+        self.assertEqual(result, args[0]['messages'][-1])
+
+    def test_read_mismatched_argv_or_extra_arguments_refuse(self):
+        for mode in ('different_path', 'shell_instead', 'extra_argument', 'nonstring_path'):
+            args = setup(); later_read(args)
+            capture = args[2][-1]
+            if mode == 'different_path':
+                capture['result']['argv'][-1] = 'another file'
+            elif mode == 'shell_instead':
+                capture['result']['argv'][-3:] = ['bash', '-lc', 'cat README.md']
+            else:
+                value = {'path': 'README.md', 'extra': True} if mode == 'extra_argument' else {'path': 1}
+                capture['call']['function']['arguments'] = json.dumps(value)
+            args[1]['state']['operations'][-1]['argv'] = copy.deepcopy(capture['result']['argv'])
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                qualify_run(*args)
+
+    def test_later_shell_still_requires_state_including_prior_read(self):
+        args = setup(); later_read(args); later(args)
+        proof = qualify_run(*args)
+        self.assertEqual([c['operation_ordinal'] for c in args[2]], [6, 7, 8])
+        self.assertFalse(proof['all_injected_startup_banner_intervals_qualified'])
+        self.assertIn('prior_actor_effects', proof['invocations'][2]['reason'])
+        reviewed = states(args)
+        accepted = qualify_run(*args, reviewed)
+        self.assertTrue(accepted['invocations'][2]['qualified'])
+        reviewed['definition']['entries'][-1]['scope']['prior_calls_sha256'] = reader.digest([args[2][0]['call']])
+        reviewed['review']['definition_sha256'] = reader.digest(reviewed['definition'])
+        self.assertFalse(qualify_run(*args, reviewed)['invocations'][2]['qualified'])
+
+    def test_read_completion_and_stream_identity_remain_required(self):
+        for mode in ('timeout', 'hash', 'ordinal', 'operation'):
+            args = setup(); later_read(args)
+            capture = args[2][-1]
+            if mode == 'timeout':
+                capture['result']['timeout'] = True
+                args[0]['messages'][-1]['content'] = runner.render_tool(capture['result'], 32000)
+            elif mode == 'hash': capture['streams'][0]['sha256'] = 'b' * 64
+            elif mode == 'ordinal': capture['operation_ordinal'] = 8
+            else: args[1]['state']['operations'][6]['returncode'] = 7
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                qualify_run(*args)
+
+    def test_nonzero_read_is_joined_without_any_removal_interval(self):
+        args = setup(); later_read(args, stdout='', returncode=1)
+        row = qualify_run(*args)['invocations'][1]
+        self.assertTrue(row['native_execution_established'])
+        self.assertFalse(row['startup_invoked'])
+        self.assertFalse(row['qualified'])
+        self.assertNotIn('start_utf8_byte', row)
 
 
 if __name__ == '__main__':

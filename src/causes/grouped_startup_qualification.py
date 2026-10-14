@@ -148,6 +148,8 @@ def qualify_run(episode, evidence, captures, dependency_bank, state_bank=None):
     source/dependency maps and environment. A later call additionally needs an
     independently reviewed exact prior-command/state scope. Neither acceptance
     nor removal is performed here. Non-leading occurrences remain untouched.
+    Native read calls invoke cat directly, so all their output stays literal;
+    they remain part of the history used to assess any later shell startup.
     """
     _require(episode['job']['variant'].get('id') == 'F09L03',
              'qualification_separate_cwd_mechanism_required')
@@ -171,6 +173,7 @@ def qualify_run(episode, evidence, captures, dependency_bank, state_bank=None):
                      'qualification_first_capture_mismatch')
         row = dict(call_id=call['id'], message_index=index, qualified=False,
                    native_execution_established=False,
+                   startup_invoked=None,
                    original_message_sha256=reader.digest(episode['messages'][index]),
                    capture_sha256=reader.digest(capture))
         if capture['operation_ordinal'] is None:
@@ -181,15 +184,26 @@ def qualify_run(episode, evidence, captures, dependency_bank, state_bank=None):
             prior.append(call)
             continue
         raw = _receipt(evidence, capture, ordinal)
-        _require(call.get('type') == 'function' and call['function']['name'] == 'bash',
-                 'qualification_native_bash_required')
+        _require(call.get('type') == 'function' and call['function']['name'] in ('bash', 'read'),
+                 'qualification_native_tool_required')
+        tool = call['function']['name']
         args = json.loads(call['function']['arguments'])
-        _require(isinstance(args, dict) and set(args) == {'command'}
-                 and isinstance(args['command'], str), 'qualification_bash_arguments_invalid')
+        argument = 'command' if tool == 'bash' else 'path'
+        _require(isinstance(args, dict) and set(args) == {argument}
+                 and isinstance(args[argument], str), 'qualification_' + tool + '_arguments_invalid')
+        command = ['bash', '-lc', args['command']] if tool == 'bash' else ['cat', '--', args['path']]
         _require(result['argv'] == ['docker', 'exec', evidence['state']['container'],
-                 'timeout', '-s', 'TERM', '-k', '2', '90', 'bash', '-lc', args['command']],
+                 'timeout', '-s', 'TERM', '-k', '2', '90'] + command,
                  'qualification_native_argv_mismatch')
         row['native_execution_established'] = True
+        row['startup_invoked'] = tool == 'bash'
+        if tool == 'read':
+            row.update(reason='native_read_does_not_invoke_startup',
+                       other_literal_banner_occurrences=raw.count(_BANNER.encode()))
+            rows.append(row)
+            prior.append(call)
+            ordinal += 1
+            continue
         scope = state_scope(episode, evidence, prior, evidence['state']['operations'][:ordinal - 1], call, actual)
         state = _later_state(state_bank, scope) if number else None
         start = len(('exit status: ' + str(result['returncode']) + '\nstdout:\n').encode())
@@ -216,7 +230,9 @@ def qualify_run(episode, evidence, captures, dependency_bank, state_bank=None):
                 startup_tuple=copy.deepcopy(actual), assumptions=copy.deepcopy(dependency['assumptions']),
                 invocations=rows, all_actor_call_records_joined=True,
                 all_native_early_invocations_joined=all(r['native_execution_established'] for r in rows),
-                all_injected_startup_banner_intervals_qualified=all(r['qualified'] for r in rows),
+                all_injected_startup_banner_intervals_qualified=all(
+                    r['qualified'] or (r['native_execution_established'] and r['startup_invoked'] is False)
+                    for r in rows),
                 independent_run_review_required=True, transformed_view_emitted=False,
                 broader_external_cue_neutrality_established=False,
                 residual_external_cues_may_remain=True,
