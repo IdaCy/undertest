@@ -290,6 +290,46 @@ def buffered_evidence(name,value,destination,outputs,codec,sizes,*,raw_limit=32*
         sizes.append(dict(name=name,raw_bytes=original,stored_bytes=len(data),encoding=encoding))
     return retained(destination/name,data)
 
+def derived_final_verifier(recipe,plan,scope,mods,collector,record):
+    """Bind the accepted derived verifier to its frozen scientific module graph.
+
+    Queue migration remains separately checked by the runtime bridge. Only the
+    execution endpoint may differ; neither frozen jobs nor protocol hashes are
+    relabeled. This setup performs no request, observation or output write.
+    """
+    require('derived_bank' in plan and 'derived_bank' in scope,'explicit_derived_final_scope')
+    peer=checked(recipe['derived_collector_review'])
+    require(peer.get('accepted_derived_probe_collect_source')is True and peer.get('findings')==[]
+        and peer['source']==recipe['derived_collector']and peer['collector']==recipe['native_collector']
+        and peer['input_adapter']==mods['scientific_sources']['derived_probe_inputs']
+        and peer['modules']=={'causes.campaign_supplement_collect':recipe['native_collector'],
+                             'causes.derived_probe_collect':recipe['derived_collector']},'derived_collector_source_peer')
+    integrity_refs=[recipe['derived_collector_review'],recipe['derived_collector'],recipe['native_collector'],
+                    plan['execution_protocol'],*mods['scientific_sources'].values()]
+    for ref in integrity_refs:record(ref)
+    package=sys.modules['causes'];package.campaign_supplement_collect=collector
+    package.derived_probe_inputs=mods['adapter'];sys.modules['causes.derived_probe_inputs']=mods['adapter']
+    derived=module(recipe['derived_collector'],'causes.derived_probe_collect')
+    require(derived.collector is collector and derived.derived is mods['adapter']and
+            collector.core is mods['core'],'derived_collector_module_graph')
+    resolved=scope['derived_bank']
+    def source_check(job):
+        for ref in integrity_refs:record(ref)
+    probe=mods['bridge'].FrozenProbeAdapter(mods['adapter'],mods['core'],resolved['protocol'],
+        resolved['row_by_job'],scientific_source=mods['scientific_sources']['campaign_supplement'],
+        operational_source=plan['sources']['native_queue'],source_check=source_check,
+        operational_review=mods['constructor'].get('operational_queue_review'),
+        execution_protocol=checked(plan['execution_protocol']),read=raw)
+    require(probe.config['endpoint']==plan['endpoint'],'derived_closed_endpoint')
+    def verify(job,terminal):
+        require(job['measurement_id']in resolved['row_by_job'],'derived_closed_unknown_job')
+        source_check(job)
+        try:
+            return derived.verify_final(job,terminal,root=Path(plan['output_root']),
+                row=resolved['row_by_job'][job['measurement_id']],protocol=probe.protocol,record=record)
+        finally:source_check(job)
+    return verify
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--recipe',required=True);parser.add_argument('--authority',required=True);args=parser.parse_args()
     recipe_ref=json.loads(args.recipe);authority_ref=json.loads(args.authority);recipe=checked(recipe_ref);authority=checked(authority_ref)
@@ -314,7 +354,7 @@ def main():
         driver.verify_roster(runtime['execution_pins'],list(driver.references(p['sources'])))
         previous=checked(p['predecessor_custody']['actual'])
         scope_module=module(recipe['closed_scope_source'],'causes.campaign_supplement_closed_scope');require(scope_module.core is core,'closed_scope_native_core')
-        scope=scope_module.resolve(p,previous,original_transfer_jobs=getattr(mods['direct'],'original_transfer_jobs',None),read=raw)
+        scope=scope_module.resolve(p,previous,original_transfer_jobs=getattr(mods['direct'],'original_transfer_jobs',None),derived_bank_jobs=getattr(mods.get('bank'),'resolve',None),read=raw)
         fulljobs=scope['full_jobs'];jobs=scope['jobs']
         mods['direct'].validate_contract(runtime,checked(p['contract']),jobs,initial_failures=p['initial_failures'],max_clients=8,read=raw)
         journal=raw(recipe['journal']);events=[json.loads(x)for x in journal.splitlines()];require(journal.endswith(b'\n'),'closed_journal_lines')
@@ -356,13 +396,17 @@ def main():
         require(all(v==list(range(1,len(v)+1))and len(v)<=p['maximum_capture_uses'] for v in uses.values()),'capture_use_partition')
         verified=[];admissions=[];findings=[];exchanges=[]
         if ambiguous or ending['unresolved_claimed_ids']:findings.append(dict(stage='unresolved_native_attempt',ambiguous=ambiguous,measurement_ids=ending['unresolved_claimed_ids']))
-        contexts={(j['run_id'],j['stage']):dict(original_bindings=j['original_refs'])for j in jobs}
-        prepare=lambda job,ct,cf,ru:mods['adapter'].prepare_request(job,ct,cf,ru,endpoint=p['endpoint'],modules=mods['contexts'])
+        if 'derived_bank' in p:
+            verify_derived=derived_final_verifier(recipe,p,scope,mods,collector,audit.record)
+        else:
+            contexts={(j['run_id'],j['stage']):dict(original_bindings=j['original_refs'])for j in jobs}
+            prepare=lambda job,ct,cf,ru:mods['adapter'].prepare_request(job,ct,cf,ru,endpoint=p['endpoint'],modules=mods['contexts'])
         for job in jobs[:len(claims)]:
             mid=job['measurement_id'];require(claims[mid]['input_sha256']==core.digest(job),'claim_input')
             try:
                 require(mid in terminals,'claimed_attempt_unresolved')
-                row=collector.verify_final(job,terminals[mid],root=out,family=p['family'],model=p['model'],contexts=contexts,config=checked(job['frozen_config']),runner=mods['contexts']['runner'],record=audit.record,prepare_request=prepare)
+                if 'derived_bank' in p:row=verify_derived(job,terminals[mid])
+                else:row=collector.verify_final(job,terminals[mid],root=out,family=p['family'],model=p['model'],contexts=contexts,config=checked(job['frozen_config']),runner=mods['contexts']['runner'],record=audit.record,prepare_request=prepare)
                 row['measurement_id']=mid
             except Exception as error:row=dict(measurement_id=mid,qualification_error=repr(error));findings.append(dict(stage='native_final',measurement_id=mid,error=repr(error)))
             verified.append(row)
@@ -390,6 +434,12 @@ def main():
         sources=buffered('SOURCE_PINS.v1.json',list(audit.pins.values()))
         assessment=buffered('CAPACITY_AND_THROUGHPUT.v1.json',dict(allowed_clients=8,operational_request_cap=p['maximum_new_requests'],capacity_mode=checked(p['capacity_limit'])['mode'],observed_http=overlap,observed_http_peak=peak,controller_elapsed_seconds=elapsed,qualified_new=len(good),useful_request_count=useful,useful_requests_per_hour=None if elapsed<=0 else useful*3600/elapsed,successful_parsed_count=sum(row['event']=='route_success'and row['measurement_id']in qualified for row in events),successful_parsed_per_hour=None if elapsed<=0 else sum(row['event']=='route_success'and row['measurement_id']in qualified for row in events)*3600/elapsed,healthy_http_count=useful,exchanges=exchanges,capacity_demonstrated=False,capacity_requires_separate_independent_assessment=True,new_draws=0))
         actual=dict(schema='causes.finite_supplement_tranche_closed.v1',at=dt.datetime.now(dt.timezone.utc).isoformat(),role='mi',mode='completed_actor_direct_probe',source=pin(__file__),recipe=recipe_ref,plan=recipe['plan'],output=str(out),retention_root=p['retention_root'],prior_closed=p['predecessor_custody']['actual'],prior_closed_review=p['predecessor_custody']['review'],completed_actor_custody=p['completed_actor_custody'],active=0,ambiguous=ambiguous,clean_native_ending=not(ambiguous or ending['quarantined']or ending['unresolved_claimed_ids']),quarantined=ending['quarantined'],native_ending=ending,consecutive_failures=result['consecutive_failures'],stop_reason=result['stop_reason'],complete_ids=partition['complete_ids'],unstarted_ids=partition['unstarted_ids'],terminal=partition['terminal'],occupied=partition['occupied'],unresolved_claimed_ids=ending['unresolved_claimed_ids'],full_jobs=full_jobs_ref,original_bank_extension=bank_extension,journal=journal_ref,original_journal=recipe['journal'],predecessor_journal=p['predecessor_journal'],executor_lock=dict(p['exclusive_locks'][0],acquired_nonblocking=True,released=True),process_absence=previous['process_absence']+absence,all_invocation_pids_absent=previous['all_invocation_pids_absent']+[r['expected']['pid']for r in absence],native_invocations=previous['native_invocations']+[dict(plan=recipe['plan'],source=p['sources']['driver'],result=recipe['driver_result'],pid=owner['process']['pid'],process_absent=True,family=p['family'],model=p['model'],jobs_sha256=p['jobs_sha256'],original_reservation_transfer=p.get('original_reservation_transfer'))],native_result=recipe['driver_result'],durable_complete=recipe['complete'],durable_execution=complete['executions'][0],verified_finals=verified_ref,admission_observations=admission_ref,source_pins=sources,observation_dispositions=dispositions,prior_scientifically_qualified=previous['scientifically_qualified_total'],scientifically_qualified_total=previous['scientifically_qualified_total']+len(good),prior_invalid_ids=previous['cumulative_invalid_ids'],new_scientifically_qualified_ids=good,new_invalid_ids=bad,cumulative_invalid_ids=previous['cumulative_invalid_ids']+bad,current_qualification_findings=findings,inherited_qualification_findings=previous['qualification_findings'],qualification_findings=previous['qualification_findings']+findings,current_tranche_qualified=not findings,full_tranche_qualified=not(previous['qualification_findings']+findings),all_prospective_admission_count=result_wrapper['attempts'],all_prospective_observation_count=result_wrapper['captures'],expired_unclaimed_candidates=len(expired),original_denominator_preserved=True,all_original_attempts_retained=True,capacity_assessment=assessment,capacity_demonstrated=False,scientific_inference=False,further_runtime_authorized=False,host_calls=0,model_calls=0,old_native_final_and_admission_replays=0)
+        if 'derived_bank' in p:
+            actual['original_bank_extension']=None
+            actual['derived_bank_extension']=bank_extension if bank_extension is not None else scope['carried_derived_extension']
+            actual['native_invocations'][-1]['derived_bank']=p['derived_bank']
+            actual['derived_scientific_protocol']=scope['derived_bank']['protocol']
+            actual['derived_execution_protocol']=p['execution_protocol']
         actual_ref=buffered('ACTUAL.v1.json',actual)
         total=sum(map(len,outputs.values()));require(total<=recipe['maximum_output_bytes']and recipe['maximum_output_bytes']<=allocation['maximum_output_bytes'],'buffered_audit_output_bound')
         require(size(allocation_root)+total+allocation['future_margin_bytes']<=allocation['maximum_complete_bytes'],'whole_saved_output_root_bound')
