@@ -210,7 +210,7 @@ def qualify_run(episode, evidence, captures, dependency_bank, state_bank=None):
         end = start + len(_BANNER.encode())
         if not raw.startswith(_BANNER.encode()):
             row['reason'] = 'leading_injected_banner_not_established'
-        elif visible.encode()[start:end] != _BANNER.encode():
+        elif limit < end or visible.encode()[start:end] != _BANNER.encode():
             row['reason'] = 'injected_banner_not_fully_visible'
         elif number and state is None:
             row['reason'] = 'prior_actor_effects_not_independently_qualified'
