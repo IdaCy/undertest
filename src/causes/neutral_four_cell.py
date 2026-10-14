@@ -8,6 +8,7 @@ parser, file read, or write is performed here.
 from collections import Counter, defaultdict
 import copy
 from fractions import Fraction
+import hashlib
 import json
 import re
 
@@ -196,4 +197,190 @@ def describe_four_cells(comparisons, measurements, *, maximum_result_bytes=12*10
     require(type(maximum_result_bytes) is int and maximum_result_bytes > 0
             and len(json.dumps(result, sort_keys=True, allow_nan=False).encode()) <= maximum_result_bytes,
             'four_cell_result_bound')
+    return result
+
+
+def _neutral_reader_bounds(coefficients, measurements, unsupported, *, difference):
+    result = _bounds(coefficients, measurements)
+    lower, upper = (Fraction(x['numerator'], x['denominator'])
+                    for x in result['exact_missing_label_bounds'])
+    lower -= unsupported if difference else 0
+    upper += unsupported
+    return dict(point_estimate=float(lower) if lower == upper else None,
+                bounds=[float(lower), float(upper)],
+                exact_bounds=[_rational(lower), _rational(upper)],
+                point_identified=lower == upper,
+                unresolved_physical_ids=result['unresolved_physical_ids'],
+                unsupported_pair_weight=_rational(unsupported))
+
+
+def _neutral_reader_scope(members, measurements):
+    tasks = Counter(member['task_id'] for member in members)
+    if not tasks:
+        return dict(pairs=0, task_draw_counts={}, thresholds={})
+    thresholds = {}
+    for threshold in THRESHOLDS:
+        coefficients = {arm:defaultdict(Fraction) for arm in ('baseline', 'treatment')}
+        counts = {arm:dict(assigned=len(members), represented=0, observed=0, yes=0,
+                          statuses=Counter(), categories=Counter(), category_weights=defaultdict(Fraction))
+                  for arm in coefficients}
+        unsupported = Fraction()
+        for member in members:
+            weight = Fraction(1, len(tasks) * tasks[member['task_id']])
+            if member['disposition'] == 'unsupported':
+                unsupported += weight
+                continue
+            for arm in coefficients:
+                identity = member['_refs'][arm][threshold]
+                coefficients[arm][identity] += weight
+                row = measurements[identity]; cell = counts[arm]
+                cell['represented'] += 1; cell['observed'] += row['status'] == 'observed'
+                cell['yes'] += row['label'] == 'yes'; cell['statuses'][row['status']] += 1
+                category = row['label'] if row['label'] is not None else 'missing'
+                cell['categories'][category] += 1; cell['category_weights'][category] += weight
+        difference = defaultdict(Fraction)
+        for arm, sign in (('baseline', -1), ('treatment', 1)):
+            for identity, weight in coefficients[arm].items():
+                difference[identity] += sign * weight
+            cell = counts[arm]
+            cell['unsupported'] = cell['assigned'] - cell['represented']
+            cell['missing'] = cell['represented'] - cell['observed']
+            cell['statuses'] = dict(cell['statuses']); cell['categories'] = dict(cell['categories'])
+            cell['category_weights'] = {name:_rational(value) for name,value in cell['category_weights'].items()}
+            cell['affirmative_rate'] = _neutral_reader_bounds(coefficients[arm], measurements,
+                                                             unsupported, difference=False)
+        thresholds[threshold] = dict(arms=counts,
+            treatment_minus_baseline=_neutral_reader_bounds(difference, measurements, unsupported, difference=True))
+    return dict(pairs=len(members), task_draw_counts=dict(tasks), thresholds=thresholds)
+
+
+def describe_neutral_readers(registry, *, scopes, primary_family, maximum_result_bytes=768*1024):
+    """Describe neutral-reader A minus B on full and coverage-qualified rosters.
+
+    The caller authenticates the complete saved_neutral_reader_registry and its
+    accepted output peer before calling. This pure entrypoint uses its frozen
+    comparisons, assignments, physical origins and three reader instruments.
+    ``scopes`` supplies one explicit descriptive selection statement per variant;
+    ``primary_family`` retains both presence endpoints for every variant.
+
+    Every fixed pair remains in the full-roster task/draw denominator. Unsupported
+    pairs contribute two unresolved [0,1] arms without invented physical IDs.
+    Coverage-qualified summaries separately weight included tasks equally and
+    draws equally within task; missing included observations are never dropped.
+    Existing affirmative scoring is unchanged: yes=1, admissible non-yes=0,
+    null=[0,1]. Native categories and missing statuses remain separate. Bounds
+    describe missing labels, not sampling uncertainty. No inference is released.
+    """
+    require(type(maximum_result_bytes) is int and maximum_result_bytes > 0, 'neutral_reader_result_bound')
+    require(type(registry) is dict and registry.get('schema') == 'causes.saved_neutral_reader_registry.v1'
+            and registry.get('inference_released') is False, 'saved_neutral_reader_registry')
+    comparisons, rows, assignments = (registry[key] for key in ('comparisons', 'measurements', 'assignments'))
+    require(type(comparisons) is list and comparisons and type(rows) is list
+            and type(assignments) is list and type(registry['origins']) is dict, 'neutral_reader_lists')
+    variants = [row['variant'] for row in comparisons]
+    require(all(type(x) is str and x for x in variants) and len(set(variants)) == len(variants)
+            and type(scopes) is dict and set(scopes) == set(variants)
+            and all(type(x) is str and x.strip() for x in scopes.values()), 'neutral_reader_scopes')
+    require(type(primary_family) is list and len(primary_family) == 2 * len(variants)
+            and all(type(x) is dict and set(x) == {'baseline', 'variant', 'readout'} for x in primary_family)
+            and {(x['variant'], x['baseline'], x['readout']) for x in primary_family}
+            == {(c['variant'], c['baseline'], method+'_evaluation_presence')
+                for c in comparisons for method in ('self', 'reader')}, 'unchanged_presence_family')
+    protocols = registry['protocols']
+    require(type(protocols) is dict and set(protocols) == set(THRESHOLDS), 'three_reader_protocols')
+    protocol_hashes = {key:hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                                   allow_nan=False).encode()).hexdigest()
+                       for key,value in protocols.items()}
+    measurements = {}
+    fields = {'id', 'original_run_id', 'stage', 'method', 'awareness_type', 'threshold',
+              'context_sha256', 'protocol_sha256', 'label', 'status', 'reason'}
+    for row in rows:
+        require(type(row) is dict and set(row) == fields and type(row['id']) is str and row['id']
+                and row['id'] not in measurements, 'unique_neutral_reader_measurement')
+        require(type(row['original_run_id']) is str and row['original_run_id'] and row['stage'] == 'early'
+                and row['method'] == 'reader' and row['awareness_type'] == 'evaluation'
+                and row['threshold'] in THRESHOLDS
+                and row['protocol_sha256'] == protocol_hashes[row['threshold']], 'neutral_reader_identity')
+        require(row['status'] in STATUSES and (row['context_sha256'] is None if row['status'] == 'unavailable'
+                else _hash(row['context_sha256'])), 'neutral_reader_context_status')
+        require((row['status'] == 'observed' and row['label'] in READER_LABELS and row['reason'] is None)
+                or (row['status'] != 'observed' and row['label'] is None
+                    and type(row['reason']) is str and row['reason']), 'neutral_reader_label_status')
+        measurements[row['id']] = row
+    require(set(registry['origins']) == set(measurements), 'neutral_reader_origins')
+    by_key = {}
+    for row in assignments:
+        require(type(row) is dict and set(row) == {'variant', 'measurement_key', 'instruments'}
+                and row['variant'] in variants and type(row['measurement_key']) is str
+                and row['measurement_key'] and type(row['instruments']) is dict
+                and set(row['instruments']) == set(THRESHOLDS), 'neutral_reader_assignment')
+        key = (row['variant'], row['measurement_key'])
+        require(key not in by_key, 'duplicate_neutral_reader_assignment')
+        by_key[key] = row['instruments']
+    used, used_keys, physical_pairs, context_hashes, summaries = set(), set(), {}, {}, []
+    for comparison in comparisons:
+        require(comparison['stage'] == 'early' and type(comparison['members']) is list
+                and comparison['members'] and type(comparison['baseline']) is str
+                and comparison['baseline'] and comparison['baseline'] != comparison['variant'], 'neutral_reader_comparison')
+        pairs, runs, members, compact = set(), set(), [], []
+        for member in comparison['members']:
+            require(type(member) is dict and type(member['task_id']) is str and member['task_id']
+                    and type(member['draw_key']) is int and member['draw_key'] >= 0, 'neutral_reader_pair')
+            pair = (member['task_id'], member['draw_key'])
+            require(pair not in pairs, 'duplicate_neutral_reader_pair'); pairs.add(pair)
+            out = {key:member[key] for key in ('task_id', 'draw_key', 'disposition')}
+            row = dict(out)
+            if member['disposition'] == 'unsupported':
+                require(type(member.get('reason')) is str and member['reason'], 'unsupported_neutral_reader_reason')
+                out.update(reason=member['reason'], baseline_run_id=member['baseline_run_id'],
+                           treatment_run_id=member['treatment_run_id'])
+            else:
+                require(member['disposition'] == 'included' and type(member['arms']) is dict
+                        and set(member['arms']) == {'baseline', 'treatment'}, 'neutral_reader_arms')
+                row['_refs'] = {}
+                for arm, value in member['arms'].items():
+                    require(value['input_disposition'] in ('prepared', 'unavailable')
+                            and type(value['neutral_view']) is str and value['neutral_view'], 'neutral_reader_input')
+                    key = (comparison['variant'], value['reader_key'])
+                    require(key in by_key and key not in used_keys, 'neutral_reader_assignment_join')
+                    used_keys.add(key); row['_refs'][arm] = by_key[key]
+                    out[arm+'_run_id'] = value['original_run_id']; out[arm+'_view'] = value['neutral_view']
+                    for threshold, identity in by_key[key].items():
+                        require(identity in measurements, 'neutral_reader_measurement_reference')
+                        saved = measurements[identity]; physical = registry['origins'][identity]['physical']
+                        require(saved['original_run_id'] == value['original_run_id'] and saved['threshold'] == threshold
+                                and physical['context_key'] == value['reader_key']
+                                and physical['view_kind'] == value['neutral_view']
+                                and (saved['status'] == 'unavailable') == (value['input_disposition'] == 'unavailable'),
+                                'neutral_reader_physical_join')
+                        require(value['reader_key'] not in context_hashes
+                                or context_hashes[value['reader_key']] == saved['context_sha256'],
+                                'neutral_reader_context_consistency')
+                        context_hashes[value['reader_key']] = saved['context_sha256']
+                        require(identity not in physical_pairs or physical_pairs[identity] == pair,
+                                'neutral_reader_cross_task_or_draw')
+                        physical_pairs[identity] = pair; used.add(identity)
+            for arm in ('baseline', 'treatment'):
+                run = out[arm+'_run_id']
+                require(type(run) is str and run and run not in runs, 'neutral_reader_actor_reused')
+                runs.add(run)
+            compact.append(out); members.append(row)
+        included = [row for row in members if row['disposition'] == 'included']
+        require(all(type(comparison[key]) is int for key in ('fixed_pairs', 'included_pairs', 'included_tasks'))
+                and comparison['fixed_pairs'] == len(members) and comparison['included_pairs'] == len(included)
+                and comparison['included_tasks'] == len({row['task_id'] for row in included}), 'neutral_reader_fixed_counts')
+        summaries.append(dict(variant=comparison['variant'], baseline=comparison['baseline'],
+            selection_scope=scopes[comparison['variant']], fixed_members=compact,
+            full_fixed=_neutral_reader_scope(members, measurements),
+            coverage_qualified=_neutral_reader_scope(included, measurements)))
+    require(used == set(measurements) and used_keys == set(by_key), 'unused_neutral_reader_evidence')
+    result = dict(schema='causes.neutral_reader_descriptive.v1', comparisons=summaries,
+        physical_measurements=len(measurements), primary_family=copy.deepcopy(primary_family),
+        primary_family_size=len(primary_family), evaluated_method='reader', direct_self_reports_evaluated=False,
+        principal_scoring='Existing affirmative rate: yes=1; every admissible non-yes=0; null=[0,1].',
+        unsupported_scoring='Both arms unresolved [0,1]; no physical measurement IDs fabricated.',
+        inference_released=False, missing_bounds_are_confidence_intervals=False,
+        interpretation='Fixed saved discovery histories. Qualified subsets are descriptive selections; no population, significance, power or equivalence claim.')
+    require(len(json.dumps(result, sort_keys=True, ensure_ascii=False, allow_nan=False).encode())
+            <= maximum_result_bytes, 'neutral_reader_result_bound')
     return result
