@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import resource
+import stat
 import subprocess
 import sys
 import tempfile
@@ -136,6 +137,148 @@ print(json.dumps(dict(record=record,bytes=p.stat().st_size)))
         self.assertEqual(json.loads(result.stdout)['bytes'], 128)
         self.assertEqual(self.real_getrlimit(resource.RLIMIT_FSIZE), before)
         self.assertEqual((self.root / 'partial').read_bytes(), b'a' * 100 + b'b' * 28)
+
+
+    def test_exact_paths_identities_sizes_and_empty_directories(self):
+        paths = ['plain', '.hidden/journal', 'nested/deeper/sp ace', 'nested/évidence']
+        expected = {}
+        for index, relative in enumerate(paths):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'x' * index)
+            value = path.stat()
+            expected[str(path)] = dict(device=value.st_dev, inode=value.st_ino, bytes=index)
+        (self.root / 'empty').mkdir()
+        self.assertEqual(budget.inventory(self.root),
+                         dict(root=str(self.root), bytes=6, files=expected))
+
+    def test_every_call_observes_growth_and_new_files(self):
+        path = self.root / 'journal'
+        path.write_bytes(b'x')
+        guard = self.make()
+        self.assertEqual(guard.before_admission(0)['retained_bytes'], 1)
+        with path.open('ab') as stream:
+            stream.write(b'yy')
+        (self.root / 'new').write_bytes(b'zzzz')
+        self.assertEqual(guard.before_admission(1)['retained_bytes'], 7)
+        self.assertEqual(guard.before_admission(2)['retained_bytes'], 7)
+
+    def test_disappearance_refuses_and_keeps_last_accepted_inventory(self):
+        path = self.root / 'retained'
+        path.write_bytes(b'x')
+        guard = self.make()
+        guard.before_admission(0)
+        previous = guard.previous
+        path.unlink()
+        with self.assertRaisesRegex(core.IntegrityError, 'file_disappeared'):
+            guard.before_admission(1)
+        self.assertIs(guard.previous, previous)
+
+    def test_same_size_replacement_refuses(self):
+        path = self.root / 'retained'
+        path.write_bytes(b'x')
+        guard = self.make()
+        guard.before_admission(0)
+        replacement = self.root / 'replacement'
+        replacement.write_bytes(b'y')
+        replacement.replace(path)
+        with self.assertRaisesRegex(core.IntegrityError, 'replaced_or_shrunk'):
+            guard.before_admission(1)
+        self.assertEqual(path.read_bytes(), b'y')
+
+    def test_hardlink_fifo_and_broken_link_refuse(self):
+        path = self.root / 'retained'
+        path.write_bytes(b'x')
+        link = self.root / 'link'
+        os.link(path, link)
+        with self.assertRaisesRegex(core.IntegrityError, 'file_link_or_device'):
+            budget.inventory(self.root)
+        link.unlink()
+        os.mkfifo(link)
+        with self.assertRaisesRegex(core.IntegrityError, 'file_link_or_device'):
+            budget.inventory(self.root)
+        link.unlink()
+        link.symlink_to(self.root / 'absent')
+        with self.assertRaisesRegex(core.IntegrityError, 'file_link_or_device'):
+            budget.inventory(self.root)
+
+    def test_missing_file_root_and_noncanonical_alias_refuse(self):
+        with self.assertRaisesRegex(core.IntegrityError, 'output_missing'):
+            budget.inventory(self.root / 'absent')
+        path = self.root / 'file'
+        path.write_bytes(b'x')
+        with self.assertRaisesRegex(core.IntegrityError, 'output_missing'):
+            budget.inventory(path)
+        alias = self.root / 'alias'
+        alias.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaises(core.IntegrityError):
+            budget.inventory(alias)
+
+    def test_directory_classification_race_still_refuses(self):
+        directory = self.root / 'directory'
+        directory.mkdir()
+        (directory / 'retained').write_bytes(b'x')
+        original = os.lstat
+        with tempfile.TemporaryDirectory() as outside:
+            external = Path(outside)
+            swapped = False
+            def substitute(path, *args, **kwargs):
+                nonlocal swapped
+                if str(path) == str(directory) and not swapped:
+                    swapped = True
+                    directory.rename(external / 'original-directory')
+                    directory.symlink_to(external, target_is_directory=True)
+                return original(path, *args, **kwargs)
+            with patch.object(os, 'lstat', side_effect=substitute):
+                with self.assertRaisesRegex(core.IntegrityError, 'directory_link'):
+                    budget.inventory(self.root)
+            directory.unlink()
+
+    def test_file_stat_errors_and_device_types_still_refuse(self):
+        path = self.root / 'retained'
+        path.write_bytes(b'x')
+        original = os.lstat
+        for mode in (stat.S_IFCHR, stat.S_IFBLK, stat.S_IFSOCK, None):
+            with self.subTest(mode=mode):
+                def altered(name, *args, **kwargs):
+                    value = original(name, *args, **kwargs)
+                    if str(name) == str(path):
+                        if mode is None:
+                            raise PermissionError('fixture stat denied')
+                        fields = list(value)
+                        fields[0] = mode | 0o600
+                        return os.stat_result(fields)
+                    return value
+                with patch.object(os, 'lstat', side_effect=altered):
+                    if mode is None:
+                        with self.assertRaises(PermissionError):
+                            budget.inventory(self.root)
+                    else:
+                        with self.assertRaisesRegex(core.IntegrityError, 'file_link_or_device'):
+                            budget.inventory(self.root)
+
+    def test_deep_tree_under_low_recursion_and_descriptor_limits(self):
+        leaf = self.root
+        for _ in range(48):
+            leaf /= 'd'
+            leaf.mkdir()
+        (leaf / 'retained').write_bytes(b'x')
+        source = '''
+import json,resource,sys
+from causes.campaign_supplement_budget import inventory
+if sys.argv[2]=='recursion':sys.setrecursionlimit(40)
+else:
+ soft,hard=resource.getrlimit(resource.RLIMIT_NOFILE)
+ resource.setrlimit(resource.RLIMIT_NOFILE,(32,hard))
+result=inventory(sys.argv[1])
+assert result['bytes']==1 and len(result['files'])==1
+print(json.dumps(dict(files=1,bytes=1)))
+'''
+        for limit in ('recursion', 'descriptors'):
+            with self.subTest(limit=limit):
+                result = subprocess.run([sys.executable, '-B', '-c', source, str(self.root), limit],
+                                        check=True, text=True, capture_output=True)
+                self.assertEqual(json.loads(result.stdout), dict(files=1, bytes=1))
 
 
 if __name__ == '__main__':
