@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import sys
+
+from causes import campaign_reader as reader, measurement_view, reader_operational_classification
 
 
 SOURCE = Path(__file__).resolve().parents[2] / 'src/causes/derived_reader_runtime.py'
@@ -16,8 +19,12 @@ class DerivedRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        self.previous_modules = set(sys.modules)
 
     def tearDown(self):
+        for name in set(sys.modules) - self.previous_modules:
+            if name.startswith('derived_reader_bound_'):
+                del sys.modules[name]
         self.temp.cleanup()
 
     def save(self, name, value):
@@ -128,6 +135,7 @@ class DerivedRuntimeTests(unittest.TestCase):
         parent_path = self.root / 'parent.py'
         parent_path.write_text("KNOWN={'plan_fields': {}, 'modules': {}, 'materializer': 'old'}\n"
                                "def gates(*args): return 'native-gates'\n"
+                               "def classify_secondary_result(*args): return ()\n"
                                "def run_finite(*args): return KNOWN['materializer']\n"
                                "def main(): raise RuntimeError('must not execute')\n")
         parent_ref = runtime.pin(parent_path)
@@ -149,6 +157,83 @@ class DerivedRuntimeTests(unittest.TestCase):
         self.assertEqual(bound['KNOWN']['materializer'], binding['input_adapter'])
         self.assertEqual(bound['run_finite'](), binding['input_adapter'])
         self.assertEqual(parent.run_finite(), 'old')
+
+    def classification_fixture(self):
+        initial = [dict(role='system', content='Base.'), dict(role='user', content='Task.')]
+        view = dict(messages=initial + [dict(role='assistant', content='Recorded answer.')],
+                    initial_context=initial, prefix_context=None, phase='prefix')
+        view_ref = self.save('view.json', view)
+        context, _ = measurement_view.prepare_judge_context(view)
+        adapter = self.root / 'adapter.py'
+        adapter.write_text("import json\nfrom pathlib import Path\n"
+                           "def read_view(ref): return json.loads(Path(ref['path']).read_bytes())\n")
+        parent_path = self.root / 'classification-parent.py'
+        parent_path.write_text("KNOWN={'plan_fields': {}, 'modules': {}, 'materializer': 'old'}\n"
+            "def gates(*args): pass\n"
+            "def classify_secondary_result(key, result, row, output, modules):\n"
+            " item=dict(output,expected=dict(output['expected'],context_sha256=row['context_canonical_sha256']))\n"
+            " return modules['reader_operational_classification'].citation_only_missing(result,{'strongly_favors':item})\n")
+        parent_ref, source_ref = runtime.pin(parent_path), runtime.pin(SOURCE)
+        source_peer = self.save('classification-source-peer.json',
+            dict(accepted_derived_reader_runtime_source=True, findings=[], source=source_ref,
+                 parent_runtime=parent_ref))
+        binding = dict(schema='causes.derived_reader_runtime_binding.v1', source=source_ref,
+            parent_runtime=parent_ref, fixed_plan_fields={}, input_adapter=runtime.pin(adapter),
+            inputs={'test': 'inputs'}, source_review=source_peer)
+        binding_ref = self.save('classification-binding.json', binding)
+        peer_ref = self.save('classification-binding-peer.json',
+            dict(accepted_derived_reader_runtime_binding=True, findings=[], binding=binding_ref,
+                 **{k: binding[k] for k in ['source', 'parent_runtime', 'inputs', 'input_adapter']}))
+        bound = runtime.runtime_namespace(binding_ref, peer_ref)
+        row = dict(view=view_ref, context_canonical_sha256=reader.digest(context),
+                   measurement_key='derived_reader_fixture', payloads={'fixed': 'identities'})
+        expected = {k: 'a' * 64 for k in ('context_sha256', 'request_sha256', 'source_sha256',
+                    'rubric_sha256', 'threshold_sha256', 'schema_sha256', 'config_sha256')}
+        expected['context_sha256'] = context['context_sha256']
+        attempt = dict(expected, instrument='strongly_favors', max_retries=0, store=False)
+        receipt = dict(attempt, status='technical_missing', api_call_performed=True,
+                       http_status=200, response_status='completed', response_sha256='b' * 64)
+        evidence = dict(attempt=attempt, receipt=receipt, expected=expected,
+                        actual_request_sha256=expected['request_sha256'], actual_response_sha256='b' * 64)
+        result = dict(context_sha256=context['context_sha256'], instruments={
+            i: dict(status='validated', instrument=i, context_sha256=context['context_sha256'])
+            for i in reader.INSTRUMENTS})
+        result['instruments']['strongly_favors'].update(status='technical_missing',
+            technical_reason='ValueError', validation_error='evidence_not_exact_channel_substring:capability')
+        modules = dict(campaign_reader=reader, measurement_view=measurement_view,
+                       reader_operational_classification=reader_operational_classification)
+        return bound, row, result, evidence, modules, adapter
+
+    def test_citation_missing_uses_native_message_digest_without_changing_frozen_row(self):
+        bound, row, result, evidence, modules, _ = self.classification_fixture()
+        before = copy.deepcopy((row, result, evidence))
+        self.assertNotEqual(row['context_canonical_sha256'], result['context_sha256'])
+        self.assertEqual(bound['classify_secondary_result']('key', result, row, evidence, modules),
+                         ('strongly_favors',))
+        self.assertEqual((row, result, evidence), before)
+
+    def test_changed_prepared_context_digest_refuses(self):
+        bound, row, result, evidence, modules, _ = self.classification_fixture()
+        row['context_canonical_sha256'] = result['context_sha256']
+        with self.assertRaisesRegex(ValueError, 'derived_classification_context_changed'):
+            bound['classify_secondary_result']('key', result, row, evidence, modules)
+
+    def test_native_receipt_contradiction_still_refuses(self):
+        bound, row, result, evidence, modules, _ = self.classification_fixture()
+        evidence['receipt']['context_sha256'] = 'c' * 64
+        with self.assertRaisesRegex(ValueError, 'reader_citation_evidence_mismatch'):
+            bound['classify_secondary_result']('key', result, row, evidence, modules)
+
+    def test_noncompleted_response_is_not_annotation_missing(self):
+        bound, row, result, evidence, modules, _ = self.classification_fixture()
+        evidence['receipt']['response_status'] = 'incomplete'
+        self.assertEqual(bound['classify_secondary_result']('key', result, row, evidence, modules), ())
+
+    def test_classification_rechecks_adapter_source_pin(self):
+        bound, row, result, evidence, modules, adapter = self.classification_fixture()
+        adapter.write_text(adapter.read_text() + '\n# changed\n')
+        with self.assertRaisesRegex(ValueError, 'immutable_pin_changed'):
+            bound['classify_secondary_result']('key', result, row, evidence, modules)
 
 
 if __name__ == '__main__':

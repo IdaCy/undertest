@@ -201,6 +201,18 @@ def runtime_namespace(binding_ref, review_ref):
             clone.__kwdefaults__ = fn.__kwdefaults__
             namespace[name] = clone
     native_gates = namespace['gates']
+    native_classify = namespace['classify_secondary_result']
+
+    def classify_secondary_result(key, result, row, output, modules):
+        # The frozen row hashes the prepared context object. Native receipts
+        # identify its original message sequence; neither digest replaces the
+        # other in the saved input or journal.
+        adapter = module(binding['input_adapter'])
+        context, _ = modules['measurement_view'].prepare_judge_context(adapter.read_view(row['view']))
+        require(modules['campaign_reader'].digest(context) == row['context_canonical_sha256'],
+                'derived_classification_context_changed')
+        native_row = dict(row, context_canonical_sha256=context['context_sha256'])
+        return native_classify(key, result, native_row, output, modules)
 
     def load(plan_ref, plan_review_ref, modules):
         plan = checked(plan_ref)
@@ -243,6 +255,7 @@ def runtime_namespace(binding_ref, review_ref):
 
     namespace['load'] = load
     namespace['gates'] = gates
+    namespace['classify_secondary_result'] = classify_secondary_result
     return namespace
 
 
