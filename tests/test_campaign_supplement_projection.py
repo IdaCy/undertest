@@ -66,6 +66,48 @@ def make_missing(data, index=0, parsed=False):
 
 
 class SupplementProjectionTests(unittest.TestCase):
+    def partial_inputs(self):
+        data = inputs(('run-a',)); row = data['verified_finals'][0]; mid = row['measurement_id']
+        proof = dict(measurement_id=mid, qualified=False,
+            accepted_flag='accepted_finite_supplement_closed_custody',
+            audit_source=ref('audit-source.py'), condition='accepted_closed_native_admission_failure',
+            actual=ref('role-closure.json'), review=ref('role-peer.json'),
+            verified_finals=ref('native-delta.json'), verified_index=0, row_sha256=digest(row),
+            finding=dict(measurement_id=mid, stage='native_admission', error='stale'),
+            custody=dict(scientific_qualified=False, request_replay_permitted=False))
+        data['evidence_by_measurement'][mid]['invalid_admission'] = copy.deepcopy(proof)
+        data['invalid_admissions'] = {mid: proof}
+        return data
+
+    def test_reviewed_invalid_admission_overrides_only_derived_slot(self):
+        data = self.partial_inputs(); before = copy.deepcopy(data)
+        result = project_verified_supplement_pairs(**data)
+        self.assertEqual(result['counts'], dict(contexts=1, occupied=2, observed=1, missing=1))
+        self.assertEqual(result['slots'][0]['reason'], 'invalid_native_admission:stale')
+        self.assertIsNone(result['slots'][0]['label'])
+        self.assertEqual(data, before)
+        self.assertEqual(data['verified_finals'][0]['label'], 'yes')
+
+    def test_missing_override_does_not_bypass_native_integrity(self):
+        data = self.partial_inputs(); data['verified_finals'][0]['request_body_sha256'] = 'changed'
+        with self.assertRaises(ValueError): project_verified_supplement_pairs(**data)
+
+    def test_known_invalid_evidence_cannot_be_silently_projected_without_opt_in(self):
+        data = self.partial_inputs(); data.pop('invalid_admissions')
+        with self.assertRaisesRegex(ValueError, 'explicit_invalid_admission_mapping_required'):
+            project_verified_supplement_pairs(**data)
+
+    def test_invalid_mapping_requires_exact_evidence_row_and_typed_finding(self):
+        for field, value in [('qualified', True), ('row_sha256', '0' * 64),
+                             ('verified_index', True), ('accepted_flag', 'accepted_whatever')]:
+            with self.subTest(field=field):
+                data = self.partial_inputs(); proof = next(iter(data['invalid_admissions'].values()))
+                proof[field] = value
+                with self.assertRaises(ValueError): project_verified_supplement_pairs(**data)
+        data = self.partial_inputs(); data['invalid_admissions']['unknown'] = {}
+        with self.assertRaisesRegex(ValueError, 'invalid_admission_membership'):
+            project_verified_supplement_pairs(**data)
+
     def test_pair_schema_and_no_input_mutation(self):
         data = inputs()
         before = copy.deepcopy(data)

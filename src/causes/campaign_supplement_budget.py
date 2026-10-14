@@ -44,14 +44,14 @@ def inventory(root):
         raise error
     for directory, folders, files in os.walk(root, followlinks=False, onerror=denied):
         for name in folders:
-            path = Path(directory) / name
-            require(stat.S_ISDIR(path.lstat().st_mode), 'retention_directory_link')
+            path = os.path.join(directory, name)
+            require(stat.S_ISDIR(os.lstat(path).st_mode), 'retention_directory_link')
         for name in files:
-            path = Path(directory) / name
-            value = path.lstat()
+            path = os.path.join(directory, name)
+            value = os.lstat(path)
             require(stat.S_ISREG(value.st_mode) and value.st_nlink == 1,
                     'retention_file_link_or_device')
-            records[str(path)] = {'device': value.st_dev, 'inode': value.st_ino,
+            records[path] = {'device': value.st_dev, 'inode': value.st_ino,
                                   'bytes': value.st_size}
     return {'root': str(root), 'bytes': sum(x['bytes'] for x in records.values()),
             'files': records}
