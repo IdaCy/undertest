@@ -192,11 +192,64 @@ class SupplementTests(unittest.TestCase):
                 futures[0].result(timeout=2)
             return {'qualified': True}
 
-        with mock.patch.object(supplement.concurrent.futures, 'ThreadPoolExecutor', TrackedExecutor):
+        with mock.patch.object(supplement.concurrent.futures, 'ThreadPoolExecutor', TrackedExecutor), \
+             mock.patch.object(self, 'source_check', wraps=self.source_check) as source:
             result = self.queue(jobs, worker=worker, admission=admission, initial_failures=2, max_clients=2)
+        self.assertEqual(source.call_args_list, [mock.call(jobs[0])])
         self.assertEqual(result['new_final'], 1)
         self.assertEqual(result['remaining_unclaimed'], 2)
         self.assertEqual(sum(row['event'] == 'claimed' for row in self.history()), 1)
+
+    def test_completed_success_is_harvested_before_next_source_preparation(self):
+        self.completed_during_admission('complete', 0)
+
+    def test_completed_failure_is_carried_before_next_source_preparation(self):
+        self.completed_during_admission('invalid_answer_schema', 1)
+
+    def completed_during_admission(self, first_status, expected_failures):
+        jobs = [self.job('run0'), self.job('run1')]
+        release = threading.Event()
+        futures = []
+        admissions = []
+        sources = []
+
+        class TrackedExecutor(supplement.concurrent.futures.ThreadPoolExecutor):
+            def submit(self, *args, **kwargs):
+                future = super().submit(*args, **kwargs)
+                futures.append(future)
+                return future
+
+        def worker(job, destination):
+            if job == jobs[0]:
+                self.assertTrue(release.wait(2))
+                return {'technical_status': first_status}
+            return {'technical_status': 'complete'}
+
+        def admission():
+            admissions.append(True)
+            if len(admissions) == 2:
+                release.set()
+                futures[0].result(timeout=2)
+            elif len(admissions) == 3:
+                terminal = [row for row in self.history()
+                            if row['event'] in ('route_success', 'route_failure')]
+                self.assertEqual(len(terminal), 1)
+                self.assertEqual(terminal[0]['consecutive_failures'], expected_failures)
+            return {'qualified': True}
+
+        def source(job):
+            sources.append(job['measurement_id'])
+            self.assertNotEqual(len(admissions), 2)
+
+        with mock.patch.object(supplement.concurrent.futures, 'ThreadPoolExecutor', TrackedExecutor):
+            result = supplement.run_queue(self.output, jobs, worker, admission, source, [],
+                family=self.family, model=self.model, max_clients=2)
+        self.assertEqual(sources, [job['measurement_id'] for job in jobs])
+        self.assertEqual(len(admissions), 3)
+        self.assertEqual((result['new_final'], result['remaining_unclaimed']), (2, 0))
+        self.assertEqual(result['consecutive_failures'], 0)
+        self.assertEqual([row['measurement_id'] for row in self.history()
+                          if row['event'] == 'claimed'], sources)
 
     def test_admission_and_integrity_failures_do_not_retry(self):
         jobs = [self.job('run0'), self.job('run1')]
