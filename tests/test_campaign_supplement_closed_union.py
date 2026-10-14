@@ -194,8 +194,8 @@ class ClosedUnionTests(unittest.TestCase):
         normalized = f.normalize(); data = f.membership(normalized)
         jobs, membership, assignments, rows, origins = union.validate_membership(data, normalized, f.get)
         evidence = union.projected_evidence(data['membership'], membership, projection_tests.ref('combined'), rows, origins)
-        invalid = {r['measurement_id']: o['admission_qualification'] for r,o in zip(rows, origins)
-                   if 'admission_qualification' in o}
+        self.assertTrue(all('measurement_id' not in origin for origin in origins))
+        invalid = pipeline.invalid_admission_proofs(rows, origins)
         for mid, proof in invalid.items(): evidence[mid]['invalid_admission'] = proof
         before = copy.deepcopy(rows)
         projected = projector.project_verified_supplement_pairs(jobs=jobs, epochs=assignments['epochs'],
@@ -207,6 +207,55 @@ class ClosedUnionTests(unittest.TestCase):
         self.assertEqual(rows[3]['raw_parsed_label'], 'invalid')
         self.assertEqual(projected['slots'][2]['reason'], 'invalid_native_admission:original_stale_claim')
         self.assertEqual(projected['slots'][3]['reason'], 'preserved failure')
+
+    def test_legacy_and_normalized_origin_identity_produce_literal_invalid_proofs(self):
+        legacy = legacy_tests.PartialQualificationTests()
+        legacy_rows, legacy_origins = legacy.call(legacy.fixture())
+        normalized = Fixture(); normalized.invalid_admission()
+        value = normalized.normalize()
+        for rows, origins in ((legacy_rows, legacy_origins), (value['rows'], value['origins'])):
+            before = copy.deepcopy((rows, origins))
+            invalid = pipeline.invalid_admission_proofs(rows, origins)
+            self.assertEqual(len(invalid), 1)
+            mid, proof = next(iter(invalid.items()))
+            index = next(i for i, row in enumerate(rows) if row['measurement_id'] == mid)
+            self.assertIs(proof, origins[index]['admission_qualification'])
+            self.assertEqual(proof['row_sha256'], union.digest(rows[index]))
+            self.assertEqual((rows, origins), before)
+
+    def test_invalid_origin_or_proof_cannot_be_reassigned_to_another_row(self):
+        for mutation in ('short', 'order', 'duplicate', 'origin_id', 'origin_hash',
+                         'proof_id', 'proof_hash', 'proof_artifact', 'proof_index', 'bool_index'):
+            with self.subTest(mutation=mutation):
+                fixture = Fixture(); fixture.invalid_admission(); value = fixture.normalize()
+                rows, origins = value['rows'], value['origins']
+                origin = origins[2]; proof = origin['admission_qualification']
+                if mutation == 'short': origins.pop()
+                elif mutation == 'order': origins[0], origins[2] = origins[2], origins[0]
+                elif mutation == 'duplicate': rows[0] = copy.deepcopy(rows[2])
+                elif mutation == 'origin_id': origin['measurement_id'] = rows[0]['measurement_id']
+                elif mutation == 'origin_hash': origin['row_sha256'] = union.digest(rows[0])
+                elif mutation == 'proof_id': proof['measurement_id'] = rows[0]['measurement_id']
+                elif mutation == 'proof_hash': proof['row_sha256'] = union.digest(rows[0])
+                elif mutation == 'proof_artifact': proof['verified_finals'] = origins[0]['verified_finals']
+                elif mutation == 'proof_index': proof['verified_index'] += 1
+                else: proof['verified_index'] = False
+                with self.assertRaises(ValueError): pipeline.invalid_admission_proofs(rows, origins)
+
+    def test_actual_main_uses_checked_origin_join_before_projector(self):
+        tree = ast.parse(Path(pipeline.__file__).read_text())
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+        start = next(i for i, n in enumerate(main.body) if isinstance(n, ast.Assign)
+                     and any(isinstance(t, ast.Name) and t.id == 'invalid_admissions' for t in n.targets))
+        code = compile(ast.Module(body=main.body[start:start + 2], type_ignores=[]), pipeline.__file__, 'exec')
+        fixture = Fixture(); fixture.invalid_admission(); value = fixture.normalize()
+        evidence = {r['measurement_id']: {} for r in value['rows']}
+        scope = dict(vars(pipeline), verified=value['rows'], origins=value['origins'], evidence=evidence)
+        exec(code, scope)
+        self.assertEqual(len(scope['invalid_admissions']), 1)
+        mid, proof = next(iter(scope['invalid_admissions'].items()))
+        self.assertEqual(evidence[mid]['invalid_admission'], proof)
+        self.assertIsNot(evidence[mid]['invalid_admission'], proof)
 
     def test_custody_parent_source_and_denominator_cannot_change(self):
         changes = [('actual', 'prior_closed_review', {}), ('actual', 'full_jobs', {}),
