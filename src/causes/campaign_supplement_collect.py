@@ -234,7 +234,7 @@ def carry_forward(binding, prepared, roster, obligations, config, original_rows,
 
 
 def verify_final(job, terminal, *, root, family, model, contexts, config, runner, record,
-                 prepare_request=None):
+                 prepare_request=None, input_binding=None):
     """Verify one saved final, optionally using an explicit derived-input adapter.
 
     ``config`` remains the pinned original config. A custom ``prepare_request``
@@ -246,6 +246,11 @@ def verify_final(job, terminal, *, root, family, model, contexts, config, runner
     The adapter changes only request preparation; saved input/capture identity,
     actual request bytes, receipts and the frozen offline parser remain checked
     here. This does not broaden collect()'s supplementary-instrument policy.
+
+    Derived jobs without legacy context/config fields may provide an explicit
+    ``input_binding`` with pinned config, view file and provenance. Their adapter
+    must reconstruct the selected view and exact original job. The binding is
+    returned separately and never inserted into the saved job identity.
     """
     destination = core.measurement_path(root, job, family=family, model=model)
     require(terminal['final']['path'] == str(destination / 'FINAL.json'), 'terminal_path_mismatch')
@@ -260,12 +265,34 @@ def verify_final(job, terminal, *, root, family, model, contexts, config, runner
     require(final['admissible'] is (final['technical_status'] == 'complete') and
             final['retry'] is False, 'final_admission_or_retry')
     require(not final['integrity_failure'], 'final_integrity_failure')
-    require(core.encoded(json.loads(record(job['frozen_config'], read=True))) == core.encoded(config),
-            'frozen_config_identity')
-    for item in contexts[(job['run_id'], job['stage'])]['original_bindings'].values():
-        if isinstance(item, dict) and set(item) == {'path', 'bytes', 'sha256'}:
+    if input_binding is None:
+        require(core.encoded(json.loads(record(job['frozen_config'], read=True))) == core.encoded(config),
+                'frozen_config_identity')
+        for item in contexts[(job['run_id'], job['stage'])]['original_bindings'].values():
+            if isinstance(item, dict) and set(item) == {'path', 'bytes', 'sha256'}:
+                record(item)
+        context_reference = job['context']
+    else:
+        require(callable(prepare_request), 'derived_binding_requires_request_preparer')
+        require(type(input_binding) is dict and set(input_binding) == {
+            'schema', 'config', 'context', 'provenance'}
+            and input_binding['schema'] == 'causes.derived_probe_final_binding.v1',
+            'derived_input_binding_invalid')
+        require('frozen_config' not in job and 'context' not in job
+                and job['family'] == family and family.startswith('derived_probe_')
+                and job['run_id'].startswith('derived_probe_')
+                and type(job.get('original_run_id')) is str and job['original_run_id'],
+                'derived_binding_cannot_replace_legacy_inputs')
+        refs = input_binding['provenance']
+        require(type(refs) is list and refs, 'derived_binding_provenance_required')
+        for item in [input_binding['config'], input_binding['context'], *refs]:
+            require(type(item) is dict and set(item) == {'path', 'bytes', 'sha256'},
+                    'derived_binding_pin_required')
             record(item)
-    record(job['context'])
+        require(core.encoded(json.loads(record(input_binding['config'], read=True))) == core.encoded(config),
+                'frozen_config_identity')
+        context_reference = input_binding['context']
+    record(context_reference)
     if prepare_request is None:
         context, question = core.prepare_request(job, contexts, config, runner)
     else:
@@ -322,15 +349,18 @@ def verify_final(job, terminal, *, root, family, model, contexts, config, runner
     else:
         require(final['technical_status'] != 'complete', 'complete_without_parsed_result')
     label = parsed.get('answer') if parsed and final['technical_status'] == 'complete' else None
-    return {'disposition': 'final_verified', 'technical_status': final['technical_status'],
+    verified = {'disposition': 'final_verified', 'technical_status': final['technical_status'],
             'admissible_label': label, 'label': label, 'raw_parsed_label': parsed.get('answer') if parsed else None,
             'reason': parsed.get('reason') if parsed else None, 'raw_result': parsed,
             'failure': final['failure'], 'integrity_failure': final['integrity_failure'],
             'final': terminal['final'], 'input_canonical_sha256': core.digest(job),
-            'context': job['context'], 'context_canonical_sha256': job['context_canonical_sha256'],
+            'context': context_reference, 'context_canonical_sha256': job['context_canonical_sha256'],
             'question_canonical_sha256': job['question_canonical_sha256'], 'seed': job['seed'],
             'request_body_sha256': job['request_body_sha256'], 'capture_files': final['capture_files'],
             'offline_verification': replay}
+    if input_binding is not None:
+        verified['derived_input_binding'] = copy.deepcopy(input_binding)
+    return verified
 
 
 def collect(binding_reference, output, *, runner):
