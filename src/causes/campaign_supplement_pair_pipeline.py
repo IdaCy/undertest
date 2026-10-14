@@ -145,7 +145,134 @@ def validate_membership(data, get):
     return jobs, membership, assignments, parts
 
 
-def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
+def verify_partial_ending(saved, rows, get, *, allow_full_bank=False):
+    """Distinguish exhausted custody from an exact saved, unclaimed hold."""
+    if saved.get('bounded_native_queue_exhausted') is True:
+        return
+    hold = saved.get('recorded_operational_hold')
+    require(saved.get('bounded_native_queue_exhausted') is False
+            and type(hold) is dict and type(hold.get('reason')) is str
+            and bool(hold['reason']) and hold['reason'] == saved.get('stop_reason'),
+            'partial_ending_hold_identity')
+    native = get(saved['native_result'])
+    require(same(saved['native_result'], saved['result'])
+            and native.get('phase') == 'continue'
+            and native.get('stop_reason') == hold['reason'], 'partial_ending_native_result')
+    saved_counts = ('terminal', 'old_terminal_reused', 'new_finals_verified',
+                    'native_remaining_unclaimed', 'full_remaining_unclaimed',
+                    'native_population_size', 'full_population_size', 'consecutive_failures')
+    native_counts = ('active', 'existing_final', 'new_final', 'remaining_unclaimed',
+                     'consecutive_failures')
+    require(all(type(saved.get(key)) is int and saved[key] >= 0 for key in saved_counts)
+            and all(type(native.get(key)) is int and native[key] >= 0 for key in native_counts),
+            'partial_ending_count_types')
+    full_bank = allow_full_bank and saved.get('queue_view') is None
+    completed = native.get('completed_ids')
+    ordered_ids = [row['measurement_id'] for row in rows]
+    completion_identity = (type(completed) is list and len(set(completed)) == len(completed)
+                           and set(completed) == set(ordered_ids) if full_bank
+                           else completed == ordered_ids)
+    require(native['active'] == 0
+            and native['existing_final'] == saved['old_terminal_reused']
+            and native['new_final'] == saved['new_finals_verified'] == len(rows) > 0
+            and completion_identity
+            and saved['terminal'] == native['existing_final'] + native['new_final']
+            and native['consecutive_failures'] == saved['consecutive_failures']
+            and native['remaining_unclaimed'] == saved['native_remaining_unclaimed'] > 0
+            and saved['full_remaining_unclaimed'] >= saved['native_remaining_unclaimed'],
+            'partial_ending_native_counts')
+    plan = get(saved['plan'])
+    if full_bank:
+        require(plan.get('queue_view') is None
+                and same(plan['jobs'], saved['full_jobs'])
+                and same(saved['native_jobs'], saved['full_jobs'])
+                and saved['native_population_size'] == saved['full_population_size']
+                and saved['native_remaining_unclaimed'] == saved['full_remaining_unclaimed'],
+                'partial_ending_full_bank_identity')
+    else:
+        view = get(saved['queue_view'])
+        require(same(plan['queue_view'], saved['queue_view'])
+                and same(plan['jobs'], saved['full_jobs'])
+                and same(view['full_jobs'], saved['full_jobs'])
+                and same(view['native_jobs'], saved['native_jobs']), 'partial_ending_jobs_identity')
+    full_ids = list(unique(get(saved['full_jobs']), 'measurement_id', 'duplicate_full_jobs'))
+    native_ids = list(unique(get(saved['native_jobs']), 'measurement_id', 'duplicate_native_jobs'))
+    if full_bank:
+        require(ordered_ids == [mid for mid in full_ids if mid in set(ordered_ids)],
+                'partial_ending_full_bank_row_order')
+    complete = saved['complete_ids']
+    require(type(complete) is list and all(type(mid) is str and mid for mid in complete)
+            and len(set(complete)) == len(complete) == saved['terminal']
+            and set(complete) <= set(native_ids) <= set(full_ids)
+            and saved['unstarted_ids'] == [mid for mid in full_ids if mid not in set(complete)]
+            and len(full_ids) == saved['full_population_size']
+                == saved['terminal'] + saved['full_remaining_unclaimed']
+            and len(native_ids) == saved['native_population_size']
+                == saved['terminal'] + saved['native_remaining_unclaimed'],
+            'partial_ending_job_partition')
+
+
+def qualification_proofs(role_ref, saved, rows, get, qualification_reviews, *, allow_full_bank=False):
+    """Accept an exact reviewed delta partition, without changing any native row."""
+    if saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == []:
+        return {}
+    require(type(qualification_reviews) is dict and role_ref['path'] in qualification_reviews,
+            'explicit_partial_qualification_review_required')
+    review_ref = qualification_reviews[role_ref['path']]
+    peer = accepted(get, review_ref, 'accepted_finite_supplement_closed_custody', actual=role_ref)
+    require(saved.get('full_tranche_qualified') is False
+            and peer.get('accepted_bounded_finite_tranche_closed') is False
+            and saved.get('clean_native_ending') is True
+            and saved.get('ambiguous') == [] and type(saved.get('active')) is int
+            and saved['active'] == 0 and same(peer.get('source'), saved['source'])
+            and same(peer.get('plan'), saved['plan'])
+            and same(peer.get('verified_finals'), saved['verified_finals'])
+            and same(peer.get('qualification_findings'), saved['qualification_findings']),
+            'partial_qualification_custody_identity')
+    verify_partial_ending(saved, rows, get, allow_full_bank=allow_full_bank)
+    findings = saved.get('current_qualification_findings', saved['qualification_findings'])
+    require(type(findings) is list, 'qualification_findings_required')
+    by_id = unique(rows, 'measurement_id', 'duplicate_qualification_rows')
+    invalid = unique(findings, 'measurement_id', 'duplicate_qualification_findings')
+    qualified_ids, invalid_ids = peer.get('qualified_admission_ids'), peer.get('invalid_admission_ids')
+    require(type(qualified_ids) is list and type(invalid_ids) is list
+            and all(type(mid) is str and mid for mid in qualified_ids + invalid_ids)
+            and len(set(qualified_ids)) == len(qualified_ids)
+            and len(set(invalid_ids)) == len(invalid_ids)
+            and not set(qualified_ids) & set(invalid_ids)
+            and set(qualified_ids) | set(invalid_ids) == set(by_id)
+            and set(invalid_ids) == set(invalid), 'exact_delta_qualification_partition')
+    custody_rows = peer.get('invalid_admission_custody')
+    require(type(custody_rows) is list, 'invalid_admission_custody_required')
+    custody = unique(custody_rows, 'measurement_id', 'duplicate_invalid_admission_custody')
+    require(set(custody) == set(invalid), 'invalid_admission_custody_partition')
+    proofs = {}
+    for index, row in enumerate(rows):
+        mid = row['measurement_id']
+        proof = dict(measurement_id=mid, qualified=mid not in invalid, actual=role_ref,
+            review=review_ref, accepted_flag='accepted_finite_supplement_closed_custody',
+            audit_source=saved['source'], condition='accepted_closed_native_admission_failure',
+            verified_finals=saved['verified_finals'], verified_index=index,
+            row_sha256=hashlib.sha256(encoded(row)).hexdigest())
+        if mid in invalid:
+            finding, evidence = invalid[mid], custody[mid]
+            require(set(finding) == {'measurement_id', 'stage', 'error'}
+                    and finding['stage'] == 'native_admission'
+                    and type(finding['error']) is str and bool(finding['error'])
+                    and evidence.get('scientific_qualified') is False
+                    and evidence.get('request_replay_permitted') is False,
+                    'unsupported_qualification_finding')
+            require(same(get(evidence['observation']), get(evidence['native_saved_observation']))
+                    and evidence['observation']['bytes'] == evidence['native_saved_observation']['bytes']
+                    and evidence['observation']['sha256'] == evidence['native_saved_observation']['sha256'],
+                    'invalid_admission_observation_identity')
+            proof.update(finding=copy.deepcopy(finding), custody=copy.deepcopy(evidence))
+        proofs[mid] = proof
+    return proofs
+
+
+def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None,
+                        *, qualification_reviews=None, allow_full_bank=False):
     """Expand accepted saved closure deltas without repeating native verification."""
     seen = set() if seen is None else seen
     require(role_ref['path'] not in seen and len(seen) < 128, 'closure_lineage_cycle_or_depth')
@@ -154,7 +281,11 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
     schema = saved['schema']
     require(schema in ('causes.finite_supplement_tranche_closed.v1',
                        'causes.finite_zero_claim_closed_extension.v1'), 'closure_lineage_schema')
-    require(saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == []
+    require(schema != 'causes.finite_zero_claim_closed_extension.v1'
+            or saved.get('full_tranche_qualified') is True,
+            'partial_zero_claim_extension_unsupported')
+    require((qualification_reviews is not None or
+             saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == [])
             and saved['role'] == part['role'] and saved['output'] == part['output_root']
             and same(saved['identity'], identity) and type(saved['active']) is int
             and saved['active'] == 0 and same(saved['native_collector'], sources['collector'])
@@ -170,6 +301,8 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
     reference = saved['verified_finals']
     rows = get(reference)
     require(type(rows) is list, 'closure_lineage_rows')
+    proofs = qualification_proofs(role_ref, saved, rows, get, qualification_reviews,
+                                  allow_full_bank=allow_full_bank)
     previous_rows, origins = [], []
     zero = schema == 'causes.finite_zero_claim_closed_extension.v1'
     prior_key = 'previous' if zero else 'prior_closed'
@@ -180,13 +313,29 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
             'closure_lineage_ambiguous_predecessor')
     if prior_key in saved:
         prior_ref, peer_ref = saved[prior_key], saved[review_key]
-        accepted(get, peer_ref, 'accepted_bounded_finite_tranche_closed', actual=prior_ref)
         prior = get(prior_ref)
-        previous_rows, origins = closed_lineage_rows(prior_ref, part, sources, identity, get, seen)
+        flag = 'accepted_bounded_finite_tranche_closed'
+        if qualification_reviews is not None and prior.get('full_tranche_qualified') is False:
+            require(same(qualification_reviews.get(prior_ref['path']), peer_ref),
+                    'lineage_partial_review_identity')
+            flag = 'accepted_finite_supplement_closed_custody'
+        accepted(get, peer_ref, flag, actual=prior_ref)
+        previous_rows, origins = closed_lineage_rows(prior_ref, part, sources, identity, get, seen,
+            qualification_reviews=qualification_reviews, allow_full_bank=allow_full_bank)
+        if prior['qualification_findings'] or any(key in saved for key in
+                ('current_qualification_findings', 'inherited_qualification_findings')):
+            require(type(saved.get('current_qualification_findings')) is list
+                    and type(saved.get('inherited_qualification_findings')) is list
+                    and same(saved['inherited_qualification_findings'], prior['qualification_findings'])
+                    and same(saved['qualification_findings'], saved['inherited_qualification_findings']
+                             + saved['current_qualification_findings'])
+                    and (not saved['qualification_findings']
+                         or saved.get('full_tranche_qualified') is False),
+                    'qualification_lineage_findings')
         require(ids[:len(previous_rows)] == prior['complete_ids'], 'closure_lineage_prefix')
         for origin in origins:
             origin.setdefault('closure_lineage', []).append(dict(actual=role_ref,
-                previous=prior_ref, review=peer_ref, accepted_flag='accepted_bounded_finite_tranche_closed'))
+                previous=prior_ref, review=peer_ref, accepted_flag=flag))
         if zero:
             require(same(reference, prior['verified_finals']) and ids == prior['complete_ids']
                     and type(saved['new_claims']) is int and saved['new_claims'] == 0
@@ -205,16 +354,22 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
         require('qualification_error' not in row, 'unqualified_lineage_row')
         origins.append(dict(role=part['role'], actual=role_ref, verified_finals=reference,
             verified_index=index, row_sha256=hashlib.sha256(encoded(row)).hexdigest()))
+        if row['measurement_id'] in proofs:
+            origins[-1]['admission_qualification'] = proofs[row['measurement_id']]
     return copy.deepcopy(previous_rows + rows), origins
 
 
 def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_flag,
-                     *, allow_closed_lineage=False):
+                     *, allow_closed_lineage=False, qualification_reviews=None):
     """Reorder accepted native rows, retaining each original artifact and index."""
     closure = get(actual_ref)
     accepted(get, review_ref, acceptance_flag, actual=actual_ref)
-    require(closure.get('all_qualified') is True
-            and closure.get('qualification_findings') == []
+    partial = qualification_reviews is not None
+    require(not partial or type(qualification_reviews) is dict and allow_closed_lineage
+            and acceptance_flag == 'accepted_finite_supplement_closed_custody',
+            'explicit_custody_continuation_required')
+    require((partial or closure.get('all_qualified') is True
+            and closure.get('qualification_findings') == [])
             and type(closure.get('active')) is int and closure['active'] == 0,
             'combined_closure_not_qualified')
     parts = unique(data['parts'], 'role', 'duplicate_parts')
@@ -223,8 +378,8 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
     for role, part in parts.items():
         role_ref = closure['roles'][role]
         saved = get(role_ref)
-        require(saved.get('full_tranche_qualified') is True
-                and saved.get('qualification_findings') == []
+        require((partial or saved.get('full_tranche_qualified') is True
+                and saved.get('qualification_findings') == [])
                 and saved['role'] == role and same(saved['plan'], part['plan'])
                 and saved['output'] == part['output_root']
                 and type(saved['active']) is int and saved['active'] == 0
@@ -234,7 +389,7 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
         original_ref = saved['verified_finals']
         if allow_closed_lineage:
             rows, row_origins = closed_lineage_rows(role_ref, part, data['sources'],
-                                                   saved['identity'], get)
+                saved['identity'], get, qualification_reviews=qualification_reviews)
         else:
             rows = get(original_ref)
             row_origins = [dict(role=role, actual=role_ref, verified_finals=original_ref,
@@ -253,6 +408,11 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
     require(set(values) == set(membership['measurement_ids'])
             and type(closure['terminal']) is int and closure['terminal'] == len(values),
             'combined_verification_partition')
+    if partial:
+        combined_findings = [dict(finding, role=role) for role, ref in closure['roles'].items()
+                             for finding in get(ref)['qualification_findings']]
+        require(same(closure['qualification_findings'], combined_findings),
+                'combined_qualification_findings_identity')
     ordered, mapping = [], []
     for index, member in enumerate(membership['rows']):
         mid = member['measurement_id']
@@ -445,6 +605,19 @@ def main():
     projector = module(binding['projector'], 'supplement_pair_projector')
     require(same(pin(sys.modules['causes.campaign_analysis'].__file__), binding['labels_source']),
             'projector_labels_source')
+    normalizer = None
+    if 'normalization' in binding:
+        require(mode == 'continue' and 'qualification_reviews' not in binding,
+                'explicit_normalized_continuation_required')
+        accepted(checked, binding['normalization_source_review'],
+                 'accepted_supplement_closed_union_source', source=binding['normalization_source'])
+        for name in list(sys.modules):
+            if name == 'shared' or name.startswith('shared.'):
+                del sys.modules[name]
+        sys.path.insert(0, str(Path(binding['exact_bytes_source']['path']).parents[1]))
+        normalizer = module(binding['normalization_source'], 'supplement_closed_union')
+        require(same(pin(sys.modules['shared.evidence_bytes'].__file__), binding['exact_bytes_source']),
+                'normalization_codec_source')
     allowlist = checked(binding['allowlist'])
     guard = reader.ReadGuard(allowlist['files'] + list(references([request, authority, binding, data]))
         + [request_ref, authority_ref], output, allowlist['source_files'], [],
@@ -453,10 +626,22 @@ def main():
     get = guard.checked_json
     for reference in (request_ref, authority_ref, request['bindings'], binding['data']):
         guard.record(reference)
-    jobs, membership, assignments, _ = validate_membership(data, get)
-    verified, origins = combine_verified(data, membership, get, binding['verification'],
-        binding['verification_review'], binding['verification_acceptance_flag'],
-        allow_closed_lineage=mode == 'continue')
+    if normalizer is None:
+        jobs, membership, assignments, _ = validate_membership(data, get)
+        verified, origins = combine_verified(data, membership, get, binding['verification'],
+            binding['verification_review'], binding['verification_acceptance_flag'],
+            allow_closed_lineage=mode == 'continue',
+            qualification_reviews=binding.get('qualification_reviews'))
+    else:
+        def raw(reference):
+            guard.record(reference)
+            return Path(reference['path']).read_bytes()
+        union = normalizer.normalize_closed_union(get(binding['normalization']), get, raw,
+                                                  closed_lineage_rows)
+        jobs, membership, assignments, verified, origins = normalizer.validate_membership(data, union, get)
+        require(all(not output.is_relative_to(Path(origin['output_root']))
+                    and not Path(origin['output_root']).is_relative_to(output) for origin in origins),
+                'normalized_separate_output')
     previous = get(binding['previous'])
     accepted(get, binding['previous_review'], 'accepted_measurement_segments',
              actual=binding['previous'], assignments=data['assignments'], manifest=previous['manifest'])
@@ -475,12 +660,20 @@ def main():
     intent = writer.save('INTENT.v1.json', dict(request=request_ref, authority=authority_ref,
         source=request['source'], mode=mode, at=datetime.datetime.now(datetime.timezone.utc).isoformat()))
     verified_ref = writer.save('VERIFIED_FINALS.derived.v1.json', verified)
-    derivation = writer.save('VERIFICATION_ORIGINS.v1.json', dict(
-        actual=binding['verification'], review=binding['verification_review'],
-        accepted_flag=binding['verification_acceptance_flag'], combined=verified_ref,
-        membership=data['membership'], rows=origins, rows_unchanged=True,
+    provenance = (dict(actual=binding['verification'], review=binding['verification_review'],
+                       accepted_flag=binding['verification_acceptance_flag']) if normalizer is None else
+                  dict(schema='causes.supplement_closed_union_origins.v1',
+                       normalization=binding['normalization'], source=binding['normalization_source'],
+                       source_review=binding['normalization_source_review']))
+    derivation = writer.save('VERIFICATION_ORIGINS.v1.json', dict(**provenance,
+        combined=verified_ref, membership=data['membership'], rows=origins, rows_unchanged=True,
         native_verifier_invocations=0))
-    evidence = projected_evidence(data, membership, verified_ref, verified)
+    evidence = (projected_evidence(data, membership, verified_ref, verified) if normalizer is None else
+                normalizer.projected_evidence(data['membership'], membership, verified_ref, verified, origins))
+    invalid_admissions = {row['measurement_id']: row['admission_qualification'] for row in origins
+        if row.get('admission_qualification', {}).get('qualified') is False}
+    for mid, proof in invalid_admissions.items():
+        evidence[mid]['invalid_admission'] = copy.deepcopy(proof)
     require(all(same(value['verified_finals'], verified_ref)
                 and type(value['verified_index']) is int
                 and same(verified[value['verified_index']], row)
@@ -489,7 +682,8 @@ def main():
         epochs=assignments['epochs'], terminal_membership=membership['rows'],
         verified_finals=verified,
         occupied_rows=[row for row in occupied if (row['run_id'], row['readout']) not in retained],
-        evidence_by_measurement=evidence)
+        evidence_by_measurement=evidence, **({'invalid_admissions': invalid_admissions}
+            if binding.get('qualification_reviews') is not None or normalizer is not None else {}))
     retained_ref = None
     if mode == 'continue':
         projection, mappings = remove_verified_retained_pairs(projection, retained, evidence)
@@ -500,7 +694,8 @@ def main():
     membership_ref = writer.save('MEMBERSHIP.v1.json', dict(
         terminal_run_ids=projection['terminal_run_ids'],
         pending_incomplete_membership=projection['pending_incomplete_membership'],
-        source_membership=data['membership'], verification=binding['verification']))
+        source_membership=data['membership'], verification=(binding['verification'] if normalizer is None
+            else binding['normalization'])))
     presence = writer.save('EXISTING_PRESENCE.v1.json', projection['existing_presence'])
     guard.finish()
     result = dict(schema='causes.supplement_pair_pipeline_result.v1', mode=mode,
