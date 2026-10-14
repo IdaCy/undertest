@@ -62,6 +62,94 @@ def payload(reference, get, read_bytes, *, maximum_bytes):
     return value
 
 
+
+def original_bank_extension(saved, plan, prior, get):
+    """Check an audited append of original donor jobs, never a replacement bank.
+
+    The accepted closure establishes that the reviewed donor resolver checked
+    saved donor custody. This helper joins that accepted transfer and its full
+    native job digest; it does not rerun a collector, resolver or observation.
+    """
+    extension = saved.get('original_bank_extension')
+    if extension is None:
+        require('original_reservation_transfer' not in plan
+                and same(saved['full_jobs'], prior['full_jobs']), 'completed_actor_same_bank')
+        return None
+    fields = {'schema', 'previous_closed', 'previous_full_jobs', 'transfer', 'source_family',
+              'model', 'prior_count', 'appended_count', 'appended_jobs_sha256',
+              'appended_ids_sha256', 'cumulative_count', 'cumulative_jobs_sha256',
+              'full_jobs', 'prior_prefix_unchanged', 'native_families_preserved'}
+    require(type(extension) is dict and set(extension) == fields
+            and extension['schema'] == 'causes.original_supplement_owner_bank_extension.v1'
+            and extension['prior_prefix_unchanged'] is True
+            and extension['native_families_preserved'] is True
+            and same(extension['previous_closed'], plan['predecessor_custody'])
+            and same(plan['predecessor_custody'], dict(actual=saved['prior_closed'],
+                                                     review=saved['prior_closed_review']))
+            and same(extension['previous_full_jobs'], prior['full_jobs'])
+            and same(extension['full_jobs'], saved['full_jobs'])
+            and same(extension['transfer'], plan.get('original_reservation_transfer')),
+            'original_bank_extension_binding')
+    previous = get(prior['full_jobs']); full = get(saved['full_jobs'])
+    previous_ids = list(unique(previous, 'measurement_id', 'original_bank_duplicate_prior'))
+    full_ids = list(unique(full, 'measurement_id', 'original_bank_duplicate_job'))
+    require(prior['unstarted_ids'] == [] and previous_ids == prior['complete_ids']
+            and prior['terminal'] == len(previous) and prior.get('unresolved_claimed_ids', []) == []
+            and prior['clean_native_ending'] is True
+            and all(type(extension[k]) is int for k in ('prior_count', 'appended_count', 'cumulative_count'))
+            and extension['prior_count'] == len(previous)
+            and extension['appended_count'] > 0
+            and extension['cumulative_count'] == len(full) == len(previous) + extension['appended_count']
+            and same(full[:len(previous)], previous), 'original_bank_prefix')
+    appended = full[len(previous):]
+    require(type(plan['maximum_new_requests']) is int
+            and plan['maximum_new_requests'] == len(appended)
+            and extension['source_family'] == plan['family']
+            and extension['model'] == plan['model']
+            and plan['family'] in ('requested_five_historical_self_v1', 'candidate_saved_self_v1')
+            and extension['appended_jobs_sha256'] == plan['jobs_sha256'] == digest(appended)
+            and extension['appended_ids_sha256'] == digest(full_ids[len(previous):])
+            and extension['cumulative_jobs_sha256'] == digest(full), 'original_bank_native_digest')
+    physical = set()
+    for job in full:
+        require(job['measurement_id'] == '/'.join(job[k] for k in
+                    ('family', 'model', 'run_id', 'stage', 'question_id'))
+                and job['model'] == plan['model'] and job['stage'] == 'early'
+                and job['question_id'] in ('evaluation_strongly_favors', 'evaluation_leans_towards_or_favors'),
+                'original_bank_native_identity')
+        key = (job['run_id'], job['stage'], job['question_id'])
+        require(key not in physical, 'original_bank_physical_alias')
+        physical.add(key)
+    require(all(job['family'] == plan['family'] for job in appended), 'original_bank_native_family')
+    transfer_ref = extension['transfer']
+    require(type(transfer_ref) is dict and set(transfer_ref) == {'actual', 'review'},
+            'original_bank_transfer_descriptor')
+    transfer, peer = get(transfer_ref['actual']), get(transfer_ref['review'])
+    require(peer.get('accepted_original_supplement_reservation_transfer') is True
+            and peer.get('findings') == [] and same(peer.get('actual'), transfer_ref['actual'])
+            and transfer['schema'] == 'causes.original_supplement_reservation_transfer.v1'
+            and same(transfer['execution_predecessor'], extension['previous_closed'])
+            and transfer['target_role'] == saved['role'] == 'mi'
+            and transfer['target_output'] == saved['output']
+            and transfer['family'] == plan['family'] and transfer['model'] == plan['model']
+            and type(transfer['job_count']) is int and transfer['job_count'] == len(appended)
+            and transfer['jobs_sha256'] == digest(appended), 'original_bank_accepted_transfer')
+    invocations = saved['native_invocations']; before = prior['native_invocations']
+    require(type(invocations) is list and type(before) is list
+            and len(invocations) == len(before) + 1 and same(invocations[:-1], before),
+            'original_bank_invocation_prefix')
+    invocation = invocations[-1]
+    require(same(invocation['plan'], saved['plan'])
+            and same(invocation['source'], plan['sources']['driver'])
+            and same(invocation['result'], saved['native_result'])
+            and type(invocation['pid']) is int and invocation['pid'] > 0
+            and invocation['process_absent'] is True
+            and invocation['family'] == plan['family'] and invocation['model'] == plan['model']
+            and invocation['jobs_sha256'] == plan['jobs_sha256']
+            and same(invocation['original_reservation_transfer'], transfer_ref),
+            'original_bank_invocation_identity')
+    return copy.deepcopy(extension)
+
 def normalize_closed_union(descriptor, get, read_bytes, legacy_rows):
     """Return native rows and explicit origins for a disjoint reviewed role union.
 
@@ -76,7 +164,7 @@ ending option. No collector, parser, queue, process check or model is invoked.
     roots = descriptor['roots']
     require(type(roots) is list and roots, 'closed_union_roots')
     roles = unique(roots, 'role', 'closed_union_duplicate_role')
-    cache, journals, ancestry = {}, {}, set()
+    cache, journals, ancestry, extensions = {}, {}, set(), []
 
     def document(ref):
         key = encoded(ref)
@@ -173,11 +261,13 @@ ending option. No collector, parser, queue, process check or model is invoked.
                 and type(plan['initial_failures']) is int
                 and plan['initial_failures'] >= 0
                 and plan['initial_failures'] == prior['consecutive_failures']
-                and same(saved['full_jobs'], prior['full_jobs'])
                 and same(saved['inherited_qualification_findings'], prior['qualification_findings'])
                 and same(saved['qualification_findings'], saved['inherited_qualification_findings']
                          + saved['current_qualification_findings']), 'completed_actor_predecessor')
+        extension = original_bank_extension(saved, plan, prior, document)
         previous_rows, origins = walk(prior_ref, prior_peer, role)
+        if extension is not None:
+            extensions.append(dict(actual=actual_ref, review=peer_ref, extension=extension))
         full = document(saved['full_jobs']); by_id = unique(full, 'measurement_id', 'closed_duplicate_job')
         old_ids = [r['measurement_id'] for r in previous_rows]
         require(old_ids == prior['complete_ids'], 'completed_actor_prior_rows')
@@ -257,6 +347,8 @@ ending option. No collector, parser, queue, process check or model is invoked.
                         recipe=saved['recipe'], driver=plan['sources']['driver'],
                         native_queue=plan['sources']['native_queue'],
                         transport=plan['sources']['collector']))
+            if extension is not None:
+                origin['invocation']['original_bank_extension'] = copy.deepcopy(extension)
             if mid in findings:
                 finding, evidence = findings[mid], custody[mid]
                 require(set(finding) == {'measurement_id','stage','error'}
@@ -282,9 +374,65 @@ ending option. No collector, parser, queue, process check or model is invoked.
         rows.extend(values); origins.extend(mapping)
     require(len(unique(rows, 'measurement_id', 'closed_union_overlap')) == len(origins),
             'closed_union_origin_count')
-    return dict(schema='causes.normalized_supplement_closed_union.v1', rows=rows, origins=origins,
-                roots=copy.deepcopy(roots), original_rows_unchanged=True, native_verifier_invocations=0)
+    result = dict(schema='causes.normalized_supplement_closed_union.v1', rows=rows, origins=origins,
+                  roots=copy.deepcopy(roots), original_rows_unchanged=True, native_verifier_invocations=0)
+    if extensions:
+        result['original_bank_extensions'] = extensions
+    return result
 
+
+
+def validate_global_jobs_extension(data, normalized, get, jobs):
+    """Reconstruct an explicit global-bank append without changing assignments."""
+    extensions = normalized.get('original_bank_extensions', [])
+    if not extensions:
+        require('global_jobs_extension' not in data, 'global_extension_without_closed_bank')
+        return
+    require('global_jobs_extension' in data, 'global_jobs_extension_required')
+    descriptor = get(data['global_jobs_extension'])
+    require(type(descriptor) is dict and set(descriptor) == {
+                'schema', 'previous_global_jobs', 'previous_assignments', 'global_jobs',
+                'assignments', 'closed_bank_extensions'}
+            and descriptor['schema'] == 'causes.supplement_global_jobs_extension.v1'
+            and same(descriptor['global_jobs'], data['global_jobs'])
+            and same(descriptor['assignments'], data['assignments'])
+            and same(descriptor['previous_assignments'], data['assignments'])
+            and same(descriptor['closed_bank_extensions'],
+                     [dict(actual=e['actual'], review=e['review']) for e in extensions]),
+            'global_jobs_extension_binding')
+    previous = get(descriptor['previous_global_jobs'])
+    existing = unique(previous, 'measurement_id', 'global_extension_duplicate_prior')
+    expected = copy.deepcopy(previous)
+    require(type(jobs) is list and len(jobs) >= len(previous)
+            and same(jobs[:len(previous)], previous), 'global_jobs_prefix_changed')
+    physical = {(j['run_id'], j['stage'], j['question_id']): j['measurement_id'] for j in previous}
+    require(len(physical) == len(previous), 'global_prior_physical_alias')
+    for proof in extensions:
+        actual, peer = get(proof['actual']), get(proof['review'])
+        extension = proof['extension']
+        require(peer.get('accepted_completed_actor_saved_closure') is True
+                and peer.get('accepted_finite_supplement_closed_custody') is True
+                and peer.get('original_denominator_preserved') is True
+                and peer.get('all_original_attempts_retained') is True
+                and peer.get('findings') == [] and same(peer.get('actual'), proof['actual'])
+                and same(peer.get('source'), actual['source'])
+                and same(peer.get('qualification_findings'), actual['qualification_findings'])
+                and same(actual.get('original_bank_extension'), extension),
+                'global_extension_closed_peer')
+        # Reuse the typed accepted-transfer join, never infer membership from a
+        # marker or from a run merely appearing in the assignment roster.
+        checked = original_bank_extension(actual, get(actual['plan']),
+                                          get(actual['prior_closed']), get)
+        require(same(checked, extension), 'global_extension_actual_identity')
+        full = get(extension['full_jobs'])
+        for job in full[extension['prior_count']:]:
+            mid = job['measurement_id']; key = (job['run_id'], job['stage'], job['question_id'])
+            if mid in existing:
+                require(same(existing[mid], job), 'global_existing_job_changed')
+            else:
+                require(key not in physical, 'global_extension_physical_alias')
+                physical[key] = mid; existing[mid] = job; expected.append(copy.deepcopy(job))
+    require(same(jobs, expected), 'global_jobs_exact_append')
 
 def validate_membership(data, normalized, get):
     """Join an explicitly pinned fixed membership to its invocation-local custody."""
@@ -297,6 +445,7 @@ def validate_membership(data, normalized, get):
             documents[key] = reader(reference)
         return documents[key]
     jobs = get(data['global_jobs']); by_id = unique(jobs, 'measurement_id', 'duplicate_global_jobs')
+    validate_global_jobs_extension(data, normalized, get, jobs)
     membership = get(data['membership']); members = unique(membership['rows'], 'measurement_id', 'duplicate_members')
     assignments = get(data['assignments']); peer = get(data['assignment_review'])
     require(peer.get(data['assignment_acceptance_flag']) is True and peer.get('findings') == []
