@@ -145,6 +145,56 @@ def validate_membership(data, get):
     return jobs, membership, assignments, parts
 
 
+def verify_partial_ending(saved, rows, get):
+    """Distinguish exhausted custody from an exact saved, unclaimed hold."""
+    if saved.get('bounded_native_queue_exhausted') is True:
+        return
+    hold = saved.get('recorded_operational_hold')
+    require(saved.get('bounded_native_queue_exhausted') is False
+            and type(hold) is dict and type(hold.get('reason')) is str
+            and bool(hold['reason']) and hold['reason'] == saved.get('stop_reason'),
+            'partial_ending_hold_identity')
+    native = get(saved['native_result'])
+    require(same(saved['native_result'], saved['result'])
+            and native.get('phase') == 'continue'
+            and native.get('stop_reason') == hold['reason'], 'partial_ending_native_result')
+    saved_counts = ('terminal', 'old_terminal_reused', 'new_finals_verified',
+                    'native_remaining_unclaimed', 'full_remaining_unclaimed',
+                    'native_population_size', 'full_population_size', 'consecutive_failures')
+    native_counts = ('active', 'existing_final', 'new_final', 'remaining_unclaimed',
+                     'consecutive_failures')
+    require(all(type(saved.get(key)) is int and saved[key] >= 0 for key in saved_counts)
+            and all(type(native.get(key)) is int and native[key] >= 0 for key in native_counts),
+            'partial_ending_count_types')
+    require(native['active'] == 0
+            and native['existing_final'] == saved['old_terminal_reused']
+            and native['new_final'] == saved['new_finals_verified'] == len(rows) > 0
+            and native['completed_ids'] == [row['measurement_id'] for row in rows]
+            and saved['terminal'] == native['existing_final'] + native['new_final']
+            and native['consecutive_failures'] == saved['consecutive_failures']
+            and native['remaining_unclaimed'] == saved['native_remaining_unclaimed'] > 0
+            and saved['full_remaining_unclaimed'] >= saved['native_remaining_unclaimed'],
+            'partial_ending_native_counts')
+    plan = get(saved['plan'])
+    view = get(saved['queue_view'])
+    require(same(plan['queue_view'], saved['queue_view'])
+            and same(plan['jobs'], saved['full_jobs'])
+            and same(view['full_jobs'], saved['full_jobs'])
+            and same(view['native_jobs'], saved['native_jobs']), 'partial_ending_jobs_identity')
+    full_ids = list(unique(get(saved['full_jobs']), 'measurement_id', 'duplicate_full_jobs'))
+    native_ids = list(unique(get(saved['native_jobs']), 'measurement_id', 'duplicate_native_jobs'))
+    complete = saved['complete_ids']
+    require(type(complete) is list and all(type(mid) is str and mid for mid in complete)
+            and len(set(complete)) == len(complete) == saved['terminal']
+            and set(complete) <= set(native_ids) <= set(full_ids)
+            and saved['unstarted_ids'] == [mid for mid in full_ids if mid not in set(complete)]
+            and len(full_ids) == saved['full_population_size']
+                == saved['terminal'] + saved['full_remaining_unclaimed']
+            and len(native_ids) == saved['native_population_size']
+                == saved['terminal'] + saved['native_remaining_unclaimed'],
+            'partial_ending_job_partition')
+
+
 def qualification_proofs(role_ref, saved, rows, get, qualification_reviews):
     """Accept an exact reviewed delta partition, without changing any native row."""
     if saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == []:
@@ -156,13 +206,13 @@ def qualification_proofs(role_ref, saved, rows, get, qualification_reviews):
     require(saved.get('full_tranche_qualified') is False
             and peer.get('accepted_bounded_finite_tranche_closed') is False
             and saved.get('clean_native_ending') is True
-            and saved.get('bounded_native_queue_exhausted') is True
             and saved.get('ambiguous') == [] and type(saved.get('active')) is int
             and saved['active'] == 0 and same(peer.get('source'), saved['source'])
             and same(peer.get('plan'), saved['plan'])
             and same(peer.get('verified_finals'), saved['verified_finals'])
             and same(peer.get('qualification_findings'), saved['qualification_findings']),
             'partial_qualification_custody_identity')
+    verify_partial_ending(saved, rows, get)
     findings = saved.get('current_qualification_findings', saved['qualification_findings'])
     require(type(findings) is list, 'qualification_findings_required')
     by_id = unique(rows, 'measurement_id', 'duplicate_qualification_rows')

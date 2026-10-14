@@ -597,6 +597,101 @@ class PartialQualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'partial_zero_claim_extension_unsupported'):
             self.call(f)
 
+    def held_fixture(self):
+        f = self.fixture(); docs, get, refs, proofs = f[1], f[2], f[6], f[7]
+        final = docs[refs['final']['path']]
+        new = copy.deepcopy(get(docs[refs['delta']['path']]['verified_finals'])[0])
+        new['measurement_id'] = 'new/clean'
+        docs[final['verified_finals']['path']] = [new]
+        complete = final['complete_ids'] + [new['measurement_id']]
+        plan = docs[final['plan']['path']]
+        def put(name, value):
+            ref = dict(path='/saved/' + name, bytes=0, sha256='d' * 64)
+            docs[ref['path']] = value
+            return ref
+        full_ids, native_ids = complete + ['pending/one', 'pending/two'], complete + ['pending/one']
+        docs[plan['jobs']['path']] = [dict(measurement_id=mid) for mid in full_ids]
+        native_jobs = put('held-native-jobs.json', [dict(measurement_id=mid) for mid in native_ids])
+        view = put('held-view.json', dict(full_jobs=plan['jobs'], native_jobs=native_jobs))
+        plan['queue_view'] = view
+        reason = "AdmissionHold('supplement_observation_stale')"
+        result = put('held-result.json', dict(phase='continue', active=0, existing_final=2,
+            new_final=1, remaining_unclaimed=1, consecutive_failures=0,
+            completed_ids=[new['measurement_id']], stop_reason=reason))
+        final.update(complete_ids=complete, terminal=3, old_terminal_reused=2,
+            new_finals_verified=1, consecutive_failures=0, native_population_size=4,
+            full_population_size=5, native_remaining_unclaimed=1, full_remaining_unclaimed=2,
+            unstarted_ids=full_ids[3:], full_jobs=plan['jobs'], native_jobs=native_jobs,
+            queue_view=view, result=result, native_result=result, stop_reason=reason,
+            recorded_operational_hold=dict(reason=reason, event=None),
+            bounded_native_queue_exhausted=False)
+        docs[proofs[refs['final']['path']]['path']]['qualified_admission_ids'] = [new['measurement_id']]
+        return f
+
+    def held_call(self, f):
+        final = f[1][f[6]['final']['path']]
+        return pipeline.closed_lineage_rows(f[6]['final'], f[0]['parts'][0], f[0]['sources'],
+            final['identity'], f[2], qualification_reviews=f[7])
+
+    def test_recorded_clean_hold_preserves_nonexhaustion_and_inherited_invalid_row(self):
+        f = self.held_fixture(); before = copy.deepcopy(f[1])
+        rows, origins = self.held_call(f)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(f[1], before)
+        self.assertFalse(f[1][f[6]['final']['path']]['bounded_native_queue_exhausted'])
+        self.assertTrue(origins[-1]['admission_qualification']['qualified'])
+        self.assertEqual(sum(x.get('admission_qualification', {}).get('qualified') is False
+                             for x in origins), 1)
+
+    def test_held_ending_requires_exact_reason_clean_flag_and_native_result(self):
+        for mode in ('missing_hold', 'wrong_reason', 'empty_reason', 'native_reason',
+                     'false_clean', 'active', 'ambiguous', 'phase', 'result_ref'):
+            with self.subTest(mode=mode):
+                f = self.held_fixture(); final = f[1][f[6]['final']['path']]; native = f[1][final['native_result']['path']]
+                if mode == 'missing_hold': final.pop('recorded_operational_hold')
+                elif mode == 'wrong_reason': final['recorded_operational_hold']['reason'] = 'other'
+                elif mode == 'empty_reason': final['recorded_operational_hold']['reason'] = ''
+                elif mode == 'native_reason': native['stop_reason'] = 'other'
+                elif mode == 'false_clean': final['clean_native_ending'] = False
+                elif mode == 'active': native['active'] = 1
+                elif mode == 'ambiguous': final['ambiguous'] = ['unknown']
+                elif mode == 'phase': native['phase'] = 'other'
+                else: final['result'] = {}
+                with self.assertRaises(ValueError): self.held_call(f)
+
+    def test_held_ending_count_types_and_exact_population_joins(self):
+        saved_fields = ('terminal', 'old_terminal_reused', 'new_finals_verified',
+            'native_remaining_unclaimed', 'full_remaining_unclaimed', 'native_population_size',
+            'full_population_size', 'consecutive_failures')
+        native_fields = ('active', 'existing_final', 'new_final', 'remaining_unclaimed',
+                         'consecutive_failures')
+        for scope, fields in (('saved', saved_fields), ('native', native_fields)):
+            for field in fields:
+                for value in (-1, True, 0.5):
+                    with self.subTest(scope=scope, field=field, value=value):
+                        f = self.held_fixture(); final = f[1][f[6]['final']['path']]
+                        target = final if scope == 'saved' else f[1][final['native_result']['path']]
+                        target[field] = value
+                        with self.assertRaises(ValueError): self.held_call(f)
+        for field in ('native_remaining_unclaimed', 'full_remaining_unclaimed',
+                      'native_population_size', 'full_population_size'):
+            f = self.held_fixture(); f[1][f[6]['final']['path']][field] += 1
+            with self.assertRaises(ValueError): self.held_call(f)
+
+    def test_held_ending_rejects_changed_jobs_ids_and_zero_claim_extension(self):
+        for mode in ('view', 'native_jobs', 'duplicate', 'unstarted', 'completed',
+                     'zero_new', 'zero_remaining'):
+            with self.subTest(mode=mode):
+                f = self.held_fixture(); final = f[1][f[6]['final']['path']]; native = f[1][final['native_result']['path']]
+                if mode == 'view': f[1][final['plan']['path']]['queue_view'] = {}
+                elif mode == 'native_jobs': f[1][final['native_jobs']['path']][0]['measurement_id'] = 'other'
+                elif mode == 'duplicate': f[1][final['full_jobs']['path']].append(f[1][final['full_jobs']['path']][0])
+                elif mode == 'unstarted': final['unstarted_ids'].reverse()
+                elif mode == 'completed': native['completed_ids'] = []
+                elif mode == 'zero_new': native['new_final'] = final['new_finals_verified'] = 0
+                else: native['remaining_unclaimed'] = final['native_remaining_unclaimed'] = 0
+                with self.assertRaises(ValueError): self.held_call(f)
+
 
 if __name__ == '__main__':
     unittest.main()
