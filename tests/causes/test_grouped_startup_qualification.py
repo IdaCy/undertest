@@ -83,6 +83,16 @@ def later_read(args, path='README.md', stdout='file contents\n', returncode=0):
 
 
 class GroupedStartupQualificationTests(unittest.TestCase):
+    def test_truncation_marker_newline_cannot_complete_an_invisible_banner(self):
+        args = setup()
+        args[0]['config']['tool_output_characters'] = 74
+        args[0]['messages'][-1]['content'] = runner.render_tool(args[2][0]['result'], 74)
+        proof = qualify_run(*args)
+        self.assertEqual(args[0]['messages'][-1]['content'].encode()[23:75], BANNER.encode())
+        self.assertFalse(proof['invocations'][0]['qualified'])
+        self.assertEqual(proof['invocations'][0]['reason'], 'injected_banner_not_fully_visible')
+        self.assertFalse(proof['all_injected_startup_banner_intervals_qualified'])
+
     def test_native_first_interval_is_pending_and_never_a_view(self):
         args = setup(); before = reader.encoded(args)
         proof = qualify_run(*args)
