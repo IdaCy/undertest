@@ -124,7 +124,7 @@ def _validated_final(job, member, value, epochs):
 
 def project_verified_supplement_pairs(*, jobs, epochs, terminal_membership,
                                      verified_finals, occupied_rows,
-                                     evidence_by_measurement):
+                                     evidence_by_measurement, invalid_admissions=None):
     """Caller verifies file pins, accepted native reviews and fixed cut membership."""
     require(type(epochs) is dict and all(type(k) is str and k and type(v) is str and v
                                        for k, v in epochs.items()), 'epoch_mapping_required')
@@ -135,6 +135,8 @@ def project_verified_supplement_pairs(*, jobs, epochs, terminal_membership,
                        'duplicate_or_invalid_verified_finals')
     verified_indices = {row['measurement_id']: i for i, row in enumerate(verified_finals)}
     require(set(verified) == set(members), 'verified_terminal_membership_changed')
+    require(invalid_admissions is None or type(invalid_admissions) is dict
+            and set(invalid_admissions) <= set(members), 'invalid_admission_membership')
     require(type(evidence_by_measurement) is dict
             and set(evidence_by_measurement) == set(members), 'evidence_membership_changed')
     occupied = _unique(occupied_rows, lambda row: (row['run_id'], row['readout']),
@@ -163,6 +165,29 @@ def project_verified_supplement_pairs(*, jobs, epochs, terminal_membership,
                 and custody['accepted_flag'].startswith('accepted_'), 'terminal_custody_required')
         for field in ('actual', 'review', 'membership'):
             _reference(custody[field])
+        require(('invalid_admission' in evidence) ==
+                (invalid_admissions is not None and mid in invalid_admissions),
+                'explicit_invalid_admission_mapping_required')
+        if invalid_admissions is not None and mid in invalid_admissions:
+            proof = invalid_admissions[mid]
+            require(type(proof) is dict and proof.get('measurement_id') == mid
+                    and proof.get('qualified') is False
+                    and proof.get('accepted_flag') == 'accepted_finite_supplement_closed_custody'
+                    and proof.get('condition') == 'accepted_closed_native_admission_failure'
+                    and proof.get('row_sha256') == digest(verified[mid])
+                    and type(proof.get('verified_index')) is int and proof['verified_index'] >= 0
+                    and _same_json(evidence.get('invalid_admission'), proof),
+                    'invalid_admission_proof_identity')
+            for field in ('actual', 'review', 'verified_finals', 'audit_source'):
+                _reference(proof[field])
+            finding = proof['finding']
+            require(set(finding) == {'measurement_id', 'stage', 'error'}
+                    and finding['measurement_id'] == mid and finding['stage'] == 'native_admission'
+                    and type(finding['error']) is str and bool(finding['error'])
+                    and proof['custody'].get('scientific_qualified') is False
+                    and proof['custody'].get('request_replay_permitted') is False,
+                    'invalid_admission_finding_required')
+            statuses[mid] = ('missing', None, 'invalid_native_admission:' + finding['error'])
     selected, pending, slots, preserved = [], [], [], []
     # Frozen global job order controls ordering; response labels do not select groups.
     run_order = list(dict.fromkeys(job['run_id'] for job in jobs if job['measurement_id'] in members))

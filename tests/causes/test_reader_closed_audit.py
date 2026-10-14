@@ -166,4 +166,62 @@ class DescriptorV2Boundaries(unittest.TestCase):
   self.d['output']=self.ref['path']
   with self.assertRaisesRegex(AssertionError,'output_overwrites_input'):m.validate_descriptor(self.d)
 
+class DerivedCohortBoundaries(unittest.TestCase):
+ setUp=SavedCohortBoundaries.setUp
+ put=SavedCohortBoundaries.put
+ def case(self):
+  rows=[dict(run_id='same_actor',view_kind='neutral',stage=stage,measurement_key='derived_reader_'+stage,disposition=disposition) for stage,disposition in [('early','prepared'),('end','unavailable')]]
+  assignments=self.put('assigned.json',[{key:row[key] for key in ('run_id','view_kind','stage')} for row in rows])
+  ready=self.put('ready.json',rows[:1]);missing=self.put('missing.json',rows[1:])
+  plan=dict(schema='causes.derived_reader_plan.v1',cohort=assignments,additive_assigned=assignments,additive_ready=ready)
+  prep=dict(schema='causes.frozen_derived_reader_preparation.v1',assignments=assignments,ready=ready,unavailable=missing,counts=dict(assigned=2,ready=1,unavailable=1,requests=3),missing_slots=3)
+  return plan,prep,rows
+ def test_derived_keeps_missing_arm_and_distinct_stages_of_one_actor(self):
+  plan,prep,rows=self.case();m.validate_cohort_counts('derived',None,plan,prep,rows)
+ def test_derived_dropped_or_reordered_assignment_refuses(self):
+  plan,prep,rows=self.case()
+  for changed in [rows[:1],list(reversed(rows)),[rows[0],rows[0]]]:
+   with self.subTest(changed=changed),self.assertRaises(AssertionError):m.validate_cohort_counts('derived',None,plan,prep,changed)
+ def test_derived_changed_or_boolean_counts_refuse(self):
+  plan,prep,rows=self.case()
+  for key,value in [('assigned',3),('ready',True),('requests',2),('unavailable',0)]:
+   changed=copy.deepcopy(prep);changed['counts'][key]=value
+   with self.subTest(key=key),self.assertRaises(AssertionError):m.validate_cohort_counts('derived',None,plan,changed,rows)
+ def test_derived_missing_slots_and_cohort_join_refuse(self):
+  plan,prep,rows=self.case()
+  for changed in [dict(prep,missing_slots=0),dict(prep,missing_slots=True),dict(prep,assignments=self.put('foreign.json',[]))]:
+   with self.subTest(changed=changed),self.assertRaises(AssertionError):m.validate_cohort_counts('derived',None,plan,changed,rows)
+ def test_derived_row_substitution_refuses(self):
+  plan,prep,rows=self.case();changed=copy.deepcopy(rows);changed[0]['disposition']='unavailable'
+  with self.assertRaisesRegex(AssertionError,'derived_assigned_rows'):m.validate_cohort_counts('derived',None,plan,prep,changed)
+ def test_original_measurement_key_cannot_impersonate_derived(self):
+  plan,prep,rows=self.case();rows[0]['measurement_key']='original_reader_early';ready=self.put('changed_ready.json',rows[:1]);plan['additive_ready']=prep['ready']=ready
+  with self.assertRaisesRegex(AssertionError,'derived_measurement_identity'):m.validate_cohort_counts('derived',None,plan,prep,rows)
+ def test_derived_runtime_uses_exact_plan_pin(self):
+  plan,_,_=self.case();ref=self.put('plan.json',plan);seen=[];bound=object();runtime=SimpleNamespace(bind_for_plan=lambda value:(seen.append(value),bound)[1])
+  self.assertIs(m.runtime_for_plan(runtime,plan,ref),bound);self.assertEqual(seen,[ref])
+  with self.assertRaisesRegex(AssertionError,'derived_runtime_plan_pin'):m.runtime_for_plan(runtime,plan)
+  with self.assertRaisesRegex(AssertionError,'derived_runtime_plan_pin'):m.runtime_for_plan(runtime,dict(plan,workers=9),ref)
+ def test_old_runtime_interfaces_remain(self):
+  seen=[];bound=object();runtime=SimpleNamespace(bind_for_plan=lambda value:(seen.append(value),bound)[1]);ordinary={'schema':'old'}
+  self.assertIs(m.runtime_for_plan(runtime,ordinary),runtime)
+  extension=dict(ordinary,cohort_extension={'path':'binding'})
+  self.assertIs(m.runtime_for_plan(runtime,extension),bound);self.assertEqual(seen,[extension])
+ def test_derived_projection_only_adds_native_interface_fields(self):
+  _,prep,_=self.case();prep['protocol']=dict(checker_config={'path':'config'},prompts={'presence':'prompt'},reader_source={'sha256':'native'})
+  original=copy.deepcopy(prep);loaded=dict(prep,checker_config=prep['protocol']['checker_config'],prompts=prep['protocol']['prompts'],cohort=prep['assignments'])
+  m.validate_loaded_preparation('derived',loaded,prep);self.assertEqual(prep,original)
+  self.assertEqual(m.native_reader_source('derived',prep),{'sha256':'native'})
+  for changed in [dict(loaded,unreviewed=True),dict(loaded,missing_slots=0),dict(loaded,checker_config={})]:
+   with self.assertRaisesRegex(AssertionError,'loaded_preparation_changed'):m.validate_loaded_preparation('derived',changed,prep)
+ def test_old_preparation_must_still_be_identical(self):
+  prep={'reader_source':{'sha256':'native'}};m.validate_loaded_preparation('saved_corpus',prep,prep)
+  self.assertEqual(m.native_reader_source('saved_corpus',prep),{'sha256':'native'})
+  with self.assertRaisesRegex(AssertionError,'loaded_preparation_changed'):m.validate_loaded_preparation('saved_corpus',dict(prep,extra=True),prep)
+ def test_explicit_derived_descriptor_accepts(self):
+  ClosedAuditBoundaries.setUp(self);self.d.update(schema='causes.saved_reader_closed_audit_descriptor.v2',cohort_kind='derived',process_journal_progress=self.ref,direct_binding=None);m.validate_descriptor(self.d)
+ def test_derived_predecessor_must_have_completed_exact_selection(self):
+  rows,plan=ClosedAuditBoundaries.history(self);rows['p1']['schema']='causes.derived_reader_plan.v1';rows['p1']['expected_unclaimed_contexts']=2
+  with patch.object(m,'ck',lambda ref:rows[ref['path']]),self.assertRaises(AssertionError):m.previous_history(plan)
+
 if __name__=='__main__':unittest.main()
