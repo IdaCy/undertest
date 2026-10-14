@@ -145,7 +145,7 @@ def validate_membership(data, get):
     return jobs, membership, assignments, parts
 
 
-def verify_partial_ending(saved, rows, get):
+def verify_partial_ending(saved, rows, get, *, allow_full_bank=False):
     """Distinguish exhausted custody from an exact saved, unclaimed hold."""
     if saved.get('bounded_native_queue_exhausted') is True:
         return
@@ -166,23 +166,40 @@ def verify_partial_ending(saved, rows, get):
     require(all(type(saved.get(key)) is int and saved[key] >= 0 for key in saved_counts)
             and all(type(native.get(key)) is int and native[key] >= 0 for key in native_counts),
             'partial_ending_count_types')
+    full_bank = allow_full_bank and saved.get('queue_view') is None
+    completed = native.get('completed_ids')
+    ordered_ids = [row['measurement_id'] for row in rows]
+    completion_identity = (type(completed) is list and len(set(completed)) == len(completed)
+                           and set(completed) == set(ordered_ids) if full_bank
+                           else completed == ordered_ids)
     require(native['active'] == 0
             and native['existing_final'] == saved['old_terminal_reused']
             and native['new_final'] == saved['new_finals_verified'] == len(rows) > 0
-            and native['completed_ids'] == [row['measurement_id'] for row in rows]
+            and completion_identity
             and saved['terminal'] == native['existing_final'] + native['new_final']
             and native['consecutive_failures'] == saved['consecutive_failures']
             and native['remaining_unclaimed'] == saved['native_remaining_unclaimed'] > 0
             and saved['full_remaining_unclaimed'] >= saved['native_remaining_unclaimed'],
             'partial_ending_native_counts')
     plan = get(saved['plan'])
-    view = get(saved['queue_view'])
-    require(same(plan['queue_view'], saved['queue_view'])
-            and same(plan['jobs'], saved['full_jobs'])
-            and same(view['full_jobs'], saved['full_jobs'])
-            and same(view['native_jobs'], saved['native_jobs']), 'partial_ending_jobs_identity')
+    if full_bank:
+        require(plan.get('queue_view') is None
+                and same(plan['jobs'], saved['full_jobs'])
+                and same(saved['native_jobs'], saved['full_jobs'])
+                and saved['native_population_size'] == saved['full_population_size']
+                and saved['native_remaining_unclaimed'] == saved['full_remaining_unclaimed'],
+                'partial_ending_full_bank_identity')
+    else:
+        view = get(saved['queue_view'])
+        require(same(plan['queue_view'], saved['queue_view'])
+                and same(plan['jobs'], saved['full_jobs'])
+                and same(view['full_jobs'], saved['full_jobs'])
+                and same(view['native_jobs'], saved['native_jobs']), 'partial_ending_jobs_identity')
     full_ids = list(unique(get(saved['full_jobs']), 'measurement_id', 'duplicate_full_jobs'))
     native_ids = list(unique(get(saved['native_jobs']), 'measurement_id', 'duplicate_native_jobs'))
+    if full_bank:
+        require(ordered_ids == [mid for mid in full_ids if mid in set(ordered_ids)],
+                'partial_ending_full_bank_row_order')
     complete = saved['complete_ids']
     require(type(complete) is list and all(type(mid) is str and mid for mid in complete)
             and len(set(complete)) == len(complete) == saved['terminal']
@@ -195,7 +212,7 @@ def verify_partial_ending(saved, rows, get):
             'partial_ending_job_partition')
 
 
-def qualification_proofs(role_ref, saved, rows, get, qualification_reviews):
+def qualification_proofs(role_ref, saved, rows, get, qualification_reviews, *, allow_full_bank=False):
     """Accept an exact reviewed delta partition, without changing any native row."""
     if saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == []:
         return {}
@@ -212,7 +229,7 @@ def qualification_proofs(role_ref, saved, rows, get, qualification_reviews):
             and same(peer.get('verified_finals'), saved['verified_finals'])
             and same(peer.get('qualification_findings'), saved['qualification_findings']),
             'partial_qualification_custody_identity')
-    verify_partial_ending(saved, rows, get)
+    verify_partial_ending(saved, rows, get, allow_full_bank=allow_full_bank)
     findings = saved.get('current_qualification_findings', saved['qualification_findings'])
     require(type(findings) is list, 'qualification_findings_required')
     by_id = unique(rows, 'measurement_id', 'duplicate_qualification_rows')
@@ -255,7 +272,7 @@ def qualification_proofs(role_ref, saved, rows, get, qualification_reviews):
 
 
 def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None,
-                        *, qualification_reviews=None):
+                        *, qualification_reviews=None, allow_full_bank=False):
     """Expand accepted saved closure deltas without repeating native verification."""
     seen = set() if seen is None else seen
     require(role_ref['path'] not in seen and len(seen) < 128, 'closure_lineage_cycle_or_depth')
@@ -284,7 +301,8 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None,
     reference = saved['verified_finals']
     rows = get(reference)
     require(type(rows) is list, 'closure_lineage_rows')
-    proofs = qualification_proofs(role_ref, saved, rows, get, qualification_reviews)
+    proofs = qualification_proofs(role_ref, saved, rows, get, qualification_reviews,
+                                  allow_full_bank=allow_full_bank)
     previous_rows, origins = [], []
     zero = schema == 'causes.finite_zero_claim_closed_extension.v1'
     prior_key = 'previous' if zero else 'prior_closed'
@@ -303,7 +321,7 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None,
             flag = 'accepted_finite_supplement_closed_custody'
         accepted(get, peer_ref, flag, actual=prior_ref)
         previous_rows, origins = closed_lineage_rows(prior_ref, part, sources, identity, get, seen,
-            qualification_reviews=qualification_reviews)
+            qualification_reviews=qualification_reviews, allow_full_bank=allow_full_bank)
         if prior['qualification_findings'] or any(key in saved for key in
                 ('current_qualification_findings', 'inherited_qualification_findings')):
             require(type(saved.get('current_qualification_findings')) is list
@@ -587,6 +605,19 @@ def main():
     projector = module(binding['projector'], 'supplement_pair_projector')
     require(same(pin(sys.modules['causes.campaign_analysis'].__file__), binding['labels_source']),
             'projector_labels_source')
+    normalizer = None
+    if 'normalization' in binding:
+        require(mode == 'continue' and 'qualification_reviews' not in binding,
+                'explicit_normalized_continuation_required')
+        accepted(checked, binding['normalization_source_review'],
+                 'accepted_supplement_closed_union_source', source=binding['normalization_source'])
+        for name in list(sys.modules):
+            if name == 'shared' or name.startswith('shared.'):
+                del sys.modules[name]
+        sys.path.insert(0, str(Path(binding['exact_bytes_source']['path']).parents[1]))
+        normalizer = module(binding['normalization_source'], 'supplement_closed_union')
+        require(same(pin(sys.modules['shared.evidence_bytes'].__file__), binding['exact_bytes_source']),
+                'normalization_codec_source')
     allowlist = checked(binding['allowlist'])
     guard = reader.ReadGuard(allowlist['files'] + list(references([request, authority, binding, data]))
         + [request_ref, authority_ref], output, allowlist['source_files'], [],
@@ -595,11 +626,22 @@ def main():
     get = guard.checked_json
     for reference in (request_ref, authority_ref, request['bindings'], binding['data']):
         guard.record(reference)
-    jobs, membership, assignments, _ = validate_membership(data, get)
-    verified, origins = combine_verified(data, membership, get, binding['verification'],
-        binding['verification_review'], binding['verification_acceptance_flag'],
-        allow_closed_lineage=mode == 'continue',
-        qualification_reviews=binding.get('qualification_reviews'))
+    if normalizer is None:
+        jobs, membership, assignments, _ = validate_membership(data, get)
+        verified, origins = combine_verified(data, membership, get, binding['verification'],
+            binding['verification_review'], binding['verification_acceptance_flag'],
+            allow_closed_lineage=mode == 'continue',
+            qualification_reviews=binding.get('qualification_reviews'))
+    else:
+        def raw(reference):
+            guard.record(reference)
+            return Path(reference['path']).read_bytes()
+        union = normalizer.normalize_closed_union(get(binding['normalization']), get, raw,
+                                                  closed_lineage_rows)
+        jobs, membership, assignments, verified, origins = normalizer.validate_membership(data, union, get)
+        require(all(not output.is_relative_to(Path(origin['output_root']))
+                    and not Path(origin['output_root']).is_relative_to(output) for origin in origins),
+                'normalized_separate_output')
     previous = get(binding['previous'])
     accepted(get, binding['previous_review'], 'accepted_measurement_segments',
              actual=binding['previous'], assignments=data['assignments'], manifest=previous['manifest'])
@@ -618,12 +660,16 @@ def main():
     intent = writer.save('INTENT.v1.json', dict(request=request_ref, authority=authority_ref,
         source=request['source'], mode=mode, at=datetime.datetime.now(datetime.timezone.utc).isoformat()))
     verified_ref = writer.save('VERIFIED_FINALS.derived.v1.json', verified)
-    derivation = writer.save('VERIFICATION_ORIGINS.v1.json', dict(
-        actual=binding['verification'], review=binding['verification_review'],
-        accepted_flag=binding['verification_acceptance_flag'], combined=verified_ref,
-        membership=data['membership'], rows=origins, rows_unchanged=True,
+    provenance = (dict(actual=binding['verification'], review=binding['verification_review'],
+                       accepted_flag=binding['verification_acceptance_flag']) if normalizer is None else
+                  dict(schema='causes.supplement_closed_union_origins.v1',
+                       normalization=binding['normalization'], source=binding['normalization_source'],
+                       source_review=binding['normalization_source_review']))
+    derivation = writer.save('VERIFICATION_ORIGINS.v1.json', dict(**provenance,
+        combined=verified_ref, membership=data['membership'], rows=origins, rows_unchanged=True,
         native_verifier_invocations=0))
-    evidence = projected_evidence(data, membership, verified_ref, verified)
+    evidence = (projected_evidence(data, membership, verified_ref, verified) if normalizer is None else
+                normalizer.projected_evidence(data['membership'], membership, verified_ref, verified, origins))
     invalid_admissions = {row['measurement_id']: row['admission_qualification'] for row in origins
         if row.get('admission_qualification', {}).get('qualified') is False}
     for mid, proof in invalid_admissions.items():
@@ -637,7 +683,7 @@ def main():
         verified_finals=verified,
         occupied_rows=[row for row in occupied if (row['run_id'], row['readout']) not in retained],
         evidence_by_measurement=evidence, **({'invalid_admissions': invalid_admissions}
-            if binding.get('qualification_reviews') is not None else {}))
+            if binding.get('qualification_reviews') is not None or normalizer is not None else {}))
     retained_ref = None
     if mode == 'continue':
         projection, mappings = remove_verified_retained_pairs(projection, retained, evidence)
@@ -648,7 +694,8 @@ def main():
     membership_ref = writer.save('MEMBERSHIP.v1.json', dict(
         terminal_run_ids=projection['terminal_run_ids'],
         pending_incomplete_membership=projection['pending_incomplete_membership'],
-        source_membership=data['membership'], verification=binding['verification']))
+        source_membership=data['membership'], verification=(binding['verification'] if normalizer is None
+            else binding['normalization'])))
     presence = writer.save('EXISTING_PRESENCE.v1.json', projection['existing_presence'])
     guard.finish()
     result = dict(schema='causes.supplement_pair_pipeline_result.v1', mode=mode,
