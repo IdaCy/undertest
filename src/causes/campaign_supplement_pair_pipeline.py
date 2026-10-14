@@ -145,7 +145,67 @@ def validate_membership(data, get):
     return jobs, membership, assignments, parts
 
 
-def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
+def qualification_proofs(role_ref, saved, rows, get, qualification_reviews):
+    """Accept an exact reviewed delta partition, without changing any native row."""
+    if saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == []:
+        return {}
+    require(type(qualification_reviews) is dict and role_ref['path'] in qualification_reviews,
+            'explicit_partial_qualification_review_required')
+    review_ref = qualification_reviews[role_ref['path']]
+    peer = accepted(get, review_ref, 'accepted_finite_supplement_closed_custody', actual=role_ref)
+    require(saved.get('full_tranche_qualified') is False
+            and peer.get('accepted_bounded_finite_tranche_closed') is False
+            and saved.get('clean_native_ending') is True
+            and saved.get('bounded_native_queue_exhausted') is True
+            and saved.get('ambiguous') == [] and type(saved.get('active')) is int
+            and saved['active'] == 0 and same(peer.get('source'), saved['source'])
+            and same(peer.get('plan'), saved['plan'])
+            and same(peer.get('verified_finals'), saved['verified_finals'])
+            and same(peer.get('qualification_findings'), saved['qualification_findings']),
+            'partial_qualification_custody_identity')
+    findings = saved.get('current_qualification_findings', saved['qualification_findings'])
+    require(type(findings) is list, 'qualification_findings_required')
+    by_id = unique(rows, 'measurement_id', 'duplicate_qualification_rows')
+    invalid = unique(findings, 'measurement_id', 'duplicate_qualification_findings')
+    qualified_ids, invalid_ids = peer.get('qualified_admission_ids'), peer.get('invalid_admission_ids')
+    require(type(qualified_ids) is list and type(invalid_ids) is list
+            and all(type(mid) is str and mid for mid in qualified_ids + invalid_ids)
+            and len(set(qualified_ids)) == len(qualified_ids)
+            and len(set(invalid_ids)) == len(invalid_ids)
+            and not set(qualified_ids) & set(invalid_ids)
+            and set(qualified_ids) | set(invalid_ids) == set(by_id)
+            and set(invalid_ids) == set(invalid), 'exact_delta_qualification_partition')
+    custody_rows = peer.get('invalid_admission_custody')
+    require(type(custody_rows) is list, 'invalid_admission_custody_required')
+    custody = unique(custody_rows, 'measurement_id', 'duplicate_invalid_admission_custody')
+    require(set(custody) == set(invalid), 'invalid_admission_custody_partition')
+    proofs = {}
+    for index, row in enumerate(rows):
+        mid = row['measurement_id']
+        proof = dict(measurement_id=mid, qualified=mid not in invalid, actual=role_ref,
+            review=review_ref, accepted_flag='accepted_finite_supplement_closed_custody',
+            audit_source=saved['source'], condition='accepted_closed_native_admission_failure',
+            verified_finals=saved['verified_finals'], verified_index=index,
+            row_sha256=hashlib.sha256(encoded(row)).hexdigest())
+        if mid in invalid:
+            finding, evidence = invalid[mid], custody[mid]
+            require(set(finding) == {'measurement_id', 'stage', 'error'}
+                    and finding['stage'] == 'native_admission'
+                    and type(finding['error']) is str and bool(finding['error'])
+                    and evidence.get('scientific_qualified') is False
+                    and evidence.get('request_replay_permitted') is False,
+                    'unsupported_qualification_finding')
+            require(same(get(evidence['observation']), get(evidence['native_saved_observation']))
+                    and evidence['observation']['bytes'] == evidence['native_saved_observation']['bytes']
+                    and evidence['observation']['sha256'] == evidence['native_saved_observation']['sha256'],
+                    'invalid_admission_observation_identity')
+            proof.update(finding=copy.deepcopy(finding), custody=copy.deepcopy(evidence))
+        proofs[mid] = proof
+    return proofs
+
+
+def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None,
+                        *, qualification_reviews=None):
     """Expand accepted saved closure deltas without repeating native verification."""
     seen = set() if seen is None else seen
     require(role_ref['path'] not in seen and len(seen) < 128, 'closure_lineage_cycle_or_depth')
@@ -154,7 +214,11 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
     schema = saved['schema']
     require(schema in ('causes.finite_supplement_tranche_closed.v1',
                        'causes.finite_zero_claim_closed_extension.v1'), 'closure_lineage_schema')
-    require(saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == []
+    require(schema != 'causes.finite_zero_claim_closed_extension.v1'
+            or saved.get('full_tranche_qualified') is True,
+            'partial_zero_claim_extension_unsupported')
+    require((qualification_reviews is not None or
+             saved.get('full_tranche_qualified') is True and saved.get('qualification_findings') == [])
             and saved['role'] == part['role'] and saved['output'] == part['output_root']
             and same(saved['identity'], identity) and type(saved['active']) is int
             and saved['active'] == 0 and same(saved['native_collector'], sources['collector'])
@@ -170,6 +234,7 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
     reference = saved['verified_finals']
     rows = get(reference)
     require(type(rows) is list, 'closure_lineage_rows')
+    proofs = qualification_proofs(role_ref, saved, rows, get, qualification_reviews)
     previous_rows, origins = [], []
     zero = schema == 'causes.finite_zero_claim_closed_extension.v1'
     prior_key = 'previous' if zero else 'prior_closed'
@@ -180,13 +245,29 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
             'closure_lineage_ambiguous_predecessor')
     if prior_key in saved:
         prior_ref, peer_ref = saved[prior_key], saved[review_key]
-        accepted(get, peer_ref, 'accepted_bounded_finite_tranche_closed', actual=prior_ref)
         prior = get(prior_ref)
-        previous_rows, origins = closed_lineage_rows(prior_ref, part, sources, identity, get, seen)
+        flag = 'accepted_bounded_finite_tranche_closed'
+        if qualification_reviews is not None and prior.get('full_tranche_qualified') is False:
+            require(same(qualification_reviews.get(prior_ref['path']), peer_ref),
+                    'lineage_partial_review_identity')
+            flag = 'accepted_finite_supplement_closed_custody'
+        accepted(get, peer_ref, flag, actual=prior_ref)
+        previous_rows, origins = closed_lineage_rows(prior_ref, part, sources, identity, get, seen,
+            qualification_reviews=qualification_reviews)
+        if prior['qualification_findings'] or any(key in saved for key in
+                ('current_qualification_findings', 'inherited_qualification_findings')):
+            require(type(saved.get('current_qualification_findings')) is list
+                    and type(saved.get('inherited_qualification_findings')) is list
+                    and same(saved['inherited_qualification_findings'], prior['qualification_findings'])
+                    and same(saved['qualification_findings'], saved['inherited_qualification_findings']
+                             + saved['current_qualification_findings'])
+                    and (not saved['qualification_findings']
+                         or saved.get('full_tranche_qualified') is False),
+                    'qualification_lineage_findings')
         require(ids[:len(previous_rows)] == prior['complete_ids'], 'closure_lineage_prefix')
         for origin in origins:
             origin.setdefault('closure_lineage', []).append(dict(actual=role_ref,
-                previous=prior_ref, review=peer_ref, accepted_flag='accepted_bounded_finite_tranche_closed'))
+                previous=prior_ref, review=peer_ref, accepted_flag=flag))
         if zero:
             require(same(reference, prior['verified_finals']) and ids == prior['complete_ids']
                     and type(saved['new_claims']) is int and saved['new_claims'] == 0
@@ -205,16 +286,22 @@ def closed_lineage_rows(role_ref, part, sources, identity, get, seen=None):
         require('qualification_error' not in row, 'unqualified_lineage_row')
         origins.append(dict(role=part['role'], actual=role_ref, verified_finals=reference,
             verified_index=index, row_sha256=hashlib.sha256(encoded(row)).hexdigest()))
+        if row['measurement_id'] in proofs:
+            origins[-1]['admission_qualification'] = proofs[row['measurement_id']]
     return copy.deepcopy(previous_rows + rows), origins
 
 
 def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_flag,
-                     *, allow_closed_lineage=False):
+                     *, allow_closed_lineage=False, qualification_reviews=None):
     """Reorder accepted native rows, retaining each original artifact and index."""
     closure = get(actual_ref)
     accepted(get, review_ref, acceptance_flag, actual=actual_ref)
-    require(closure.get('all_qualified') is True
-            and closure.get('qualification_findings') == []
+    partial = qualification_reviews is not None
+    require(not partial or type(qualification_reviews) is dict and allow_closed_lineage
+            and acceptance_flag == 'accepted_finite_supplement_closed_custody',
+            'explicit_custody_continuation_required')
+    require((partial or closure.get('all_qualified') is True
+            and closure.get('qualification_findings') == [])
             and type(closure.get('active')) is int and closure['active'] == 0,
             'combined_closure_not_qualified')
     parts = unique(data['parts'], 'role', 'duplicate_parts')
@@ -223,8 +310,8 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
     for role, part in parts.items():
         role_ref = closure['roles'][role]
         saved = get(role_ref)
-        require(saved.get('full_tranche_qualified') is True
-                and saved.get('qualification_findings') == []
+        require((partial or saved.get('full_tranche_qualified') is True
+                and saved.get('qualification_findings') == [])
                 and saved['role'] == role and same(saved['plan'], part['plan'])
                 and saved['output'] == part['output_root']
                 and type(saved['active']) is int and saved['active'] == 0
@@ -234,7 +321,7 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
         original_ref = saved['verified_finals']
         if allow_closed_lineage:
             rows, row_origins = closed_lineage_rows(role_ref, part, data['sources'],
-                                                   saved['identity'], get)
+                saved['identity'], get, qualification_reviews=qualification_reviews)
         else:
             rows = get(original_ref)
             row_origins = [dict(role=role, actual=role_ref, verified_finals=original_ref,
@@ -253,6 +340,11 @@ def combine_verified(data, membership, get, actual_ref, review_ref, acceptance_f
     require(set(values) == set(membership['measurement_ids'])
             and type(closure['terminal']) is int and closure['terminal'] == len(values),
             'combined_verification_partition')
+    if partial:
+        combined_findings = [dict(finding, role=role) for role, ref in closure['roles'].items()
+                             for finding in get(ref)['qualification_findings']]
+        require(same(closure['qualification_findings'], combined_findings),
+                'combined_qualification_findings_identity')
     ordered, mapping = [], []
     for index, member in enumerate(membership['rows']):
         mid = member['measurement_id']
@@ -456,7 +548,8 @@ def main():
     jobs, membership, assignments, _ = validate_membership(data, get)
     verified, origins = combine_verified(data, membership, get, binding['verification'],
         binding['verification_review'], binding['verification_acceptance_flag'],
-        allow_closed_lineage=mode == 'continue')
+        allow_closed_lineage=mode == 'continue',
+        qualification_reviews=binding.get('qualification_reviews'))
     previous = get(binding['previous'])
     accepted(get, binding['previous_review'], 'accepted_measurement_segments',
              actual=binding['previous'], assignments=data['assignments'], manifest=previous['manifest'])
@@ -481,6 +574,10 @@ def main():
         membership=data['membership'], rows=origins, rows_unchanged=True,
         native_verifier_invocations=0))
     evidence = projected_evidence(data, membership, verified_ref, verified)
+    invalid_admissions = {row['measurement_id']: row['admission_qualification'] for row in origins
+        if row.get('admission_qualification', {}).get('qualified') is False}
+    for mid, proof in invalid_admissions.items():
+        evidence[mid]['invalid_admission'] = copy.deepcopy(proof)
     require(all(same(value['verified_finals'], verified_ref)
                 and type(value['verified_index']) is int
                 and same(verified[value['verified_index']], row)
@@ -489,7 +586,8 @@ def main():
         epochs=assignments['epochs'], terminal_membership=membership['rows'],
         verified_finals=verified,
         occupied_rows=[row for row in occupied if (row['run_id'], row['readout']) not in retained],
-        evidence_by_measurement=evidence)
+        evidence_by_measurement=evidence, **({'invalid_admissions': invalid_admissions}
+            if binding.get('qualification_reviews') is not None else {}))
     retained_ref = None
     if mode == 'continue':
         projection, mappings = remove_verified_retained_pairs(projection, retained, evidence)

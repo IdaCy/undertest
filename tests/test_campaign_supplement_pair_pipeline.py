@@ -468,5 +468,135 @@ class SavedPairPipelineTests(unittest.TestCase):
                 pipeline.deny_effects(event, ())
 
 
+class PartialQualificationTests(unittest.TestCase):
+    def fixture(self):
+        data, docs, get, members, actual, review, refs = SavedPairPipelineTests().lineage_fixture()
+        delta = docs[refs['delta']['path']]
+        mid = get(delta['verified_finals'])[0]['measurement_id']
+        finding = dict(measurement_id=mid, stage='native_admission', error='stale')
+        obs = dict(path='/saved/observation.json', bytes=2, sha256='a' * 64)
+        docs[obs['path']] = {'saved': True}
+        proofs = {}
+        for name in ('delta', 'final'):
+            role = docs[refs[name]['path']]
+            role.update(full_tranche_qualified=False, qualification_findings=[finding],
+                clean_native_ending=True, bounded_native_queue_exhausted=True, ambiguous=[],
+                source=data['sources']['collector'])
+            rows = get(role['verified_finals'])
+            invalid = [mid] if name == 'delta' else []
+            peer_ref = (docs[refs['final']['path']]['prior_closed_review'] if name == 'delta'
+                        else dict(path='/saved/final-peer.json', bytes=0, sha256='b' * 64))
+            peer = dict(accepted_finite_supplement_closed_custody=True,
+                accepted_bounded_finite_tranche_closed=False, actual=refs[name], findings=[],
+                source=role['source'], plan=role['plan'],
+                verified_finals=role['verified_finals'], qualification_findings=[finding],
+                qualified_admission_ids=[], invalid_admission_ids=invalid,
+                invalid_admission_custody=[dict(measurement_id=mid, scientific_qualified=False,
+                    request_replay_permitted=False, observation=obs, native_saved_observation=obs)]
+                    if invalid else [])
+            docs[peer_ref['path']] = peer
+            proofs[refs[name]['path']] = peer_ref
+        docs[refs['final']['path']].update(current_qualification_findings=[],
+                                         inherited_qualification_findings=[finding])
+        docs[actual['path']].update(all_qualified=False,
+            qualification_findings=[dict(finding, role='route')])
+        docs[review['path']]['accepted_finite_supplement_closed_custody'] = True
+        return data, docs, get, members, actual, review, refs, proofs
+
+    def call(self, fixture):
+        data, docs, get, members, actual, review, refs, proofs = fixture
+        return pipeline.combine_verified(data, members, get, actual, review,
+            'accepted_finite_supplement_closed_custody', allow_closed_lineage=True,
+            qualification_reviews=proofs)
+
+    def test_invalid_native_row_is_literal_and_carries_exact_missing_proof(self):
+        f = self.fixture(); before = copy.deepcopy(f[1]); rows, origins = self.call(f)
+        self.assertEqual(f[1], before)
+        invalid = [x for x in origins if x.get('admission_qualification', {}).get('qualified') is False]
+        self.assertEqual(len(invalid), 1)
+        proof = invalid[0]['admission_qualification']
+        row = next(x for x in rows if x['measurement_id'] == proof['measurement_id'])
+        self.assertEqual(row, f[2](proof['verified_finals'])[proof['verified_index']])
+        self.assertEqual(proof['row_sha256'], hashlib.sha256(pipeline.encoded(row)).hexdigest())
+
+    def test_default_mode_does_not_accept_partial_custody(self):
+        data, docs, get, members, actual, review, refs, proofs = self.fixture()
+        with self.assertRaisesRegex(ValueError, 'combined_closure_not_qualified'):
+            pipeline.combine_verified(data, members, get, actual, review,
+                'accepted_finite_supplement_closed_custody', allow_closed_lineage=True)
+
+    def test_partition_and_accepted_proof_cannot_be_weakened(self):
+        for mutation in ('missing_review', 'false_peer', 'wrong_actual', 'missing_invalid',
+                         'invalid_as_qualified', 'duplicate', 'changed_observation', 'wrong_stage'):
+            with self.subTest(mutation=mutation):
+                f = self.fixture(); docs, refs, proofs = f[1], f[6], f[7]
+                peer = docs[proofs[refs['delta']['path']]['path']]
+                if mutation == 'missing_review': proofs.pop(refs['delta']['path'])
+                elif mutation == 'false_peer': peer['accepted_finite_supplement_closed_custody'] = False
+                elif mutation == 'wrong_actual': peer['actual'] = {}
+                elif mutation == 'missing_invalid': peer['invalid_admission_ids'] = []
+                elif mutation == 'invalid_as_qualified':
+                    peer['qualified_admission_ids'] = peer['invalid_admission_ids']; peer['invalid_admission_ids'] = []
+                elif mutation == 'duplicate': peer['invalid_admission_ids'] *= 2
+                elif mutation == 'changed_observation':
+                    peer['invalid_admission_custody'][0]['native_saved_observation'] = dict(
+                        path='/saved/other.json', bytes=2, sha256='c' * 64)
+                    docs['/saved/other.json'] = {'changed': True}
+                else: peer['qualification_findings'][0]['stage'] = 'unrelated'
+                with self.assertRaises(ValueError): self.call(f)
+
+    def test_later_clean_suffix_retains_prior_invalid_and_imports_new_rows(self):
+        f = self.fixture(); docs, get, refs, proofs = f[1], f[2], f[6], f[7]
+        final = docs[refs['final']['path']]
+        new = copy.deepcopy(get(docs[refs['delta']['path']]['verified_finals'])[0])
+        new['measurement_id'] = 'new/clean'
+        docs[final['verified_finals']['path']] = [new]
+        final['complete_ids'] = final['complete_ids'] + ['new/clean']
+        final.update(terminal=3, new_finals_verified=1)
+        docs[proofs[refs['final']['path']]['path']]['qualified_admission_ids'] = ['new/clean']
+        part = f[0]['parts'][0]
+        rows, origins = pipeline.closed_lineage_rows(refs['final'], part, f[0]['sources'],
+            final['identity'], get, qualification_reviews=proofs)
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(origins[-1]['admission_qualification']['qualified'])
+        self.assertEqual(sum(o.get('admission_qualification', {}).get('qualified') is False
+                             for o in origins), 1)
+
+    def test_cumulative_finding_cannot_be_removed_or_reassigned(self):
+        for field in ('inherited_qualification_findings', 'qualification_findings'):
+            f = self.fixture(); f[1][f[6]['final']['path']][field] = []
+            with self.assertRaises(ValueError): self.call(f)
+
+    def test_partial_scope_requires_clean_closed_run_and_exact_audit_source(self):
+        for field, value in [('clean_native_ending', False), ('bounded_native_queue_exhausted', False),
+                             ('ambiguous', ['unknown']), ('active', 1), ('source', {})]:
+            f = self.fixture(); f[1][f[6]['delta']['path']][field] = value
+            with self.assertRaises(ValueError): self.call(f)
+
+    def test_descendant_cannot_strip_inherited_findings_or_promote_whole_flag(self):
+        for promote in (False, True):
+            with self.subTest(promote=promote):
+                f = self.fixture(); docs, refs, proofs = f[1], f[6], f[7]
+                final = docs[refs['final']['path']]
+                final.pop('current_qualification_findings')
+                final.pop('inherited_qualification_findings')
+                final['qualification_findings'] = []
+                final['full_tranche_qualified'] = promote
+                docs[proofs[refs['final']['path']]['path']]['qualification_findings'] = []
+                docs[f[4]['path']]['qualification_findings'] = []
+                with self.assertRaisesRegex(ValueError, 'qualification_lineage_findings'):
+                    self.call(f)
+
+    def test_false_full_promotion_with_explicit_inherited_findings_refuses(self):
+        f = self.fixture(); f[1][f[6]['final']['path']]['full_tranche_qualified'] = True
+        with self.assertRaises(ValueError): self.call(f)
+
+    def test_partial_zero_claim_extension_is_explicitly_unsupported(self):
+        f = self.fixture()
+        f[1][f[6]['final']['path']]['schema'] = 'causes.finite_zero_claim_closed_extension.v1'
+        with self.assertRaisesRegex(ValueError, 'partial_zero_claim_extension_unsupported'):
+            self.call(f)
+
+
 if __name__ == '__main__':
     unittest.main()
