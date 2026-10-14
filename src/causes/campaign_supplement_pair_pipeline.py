@@ -561,6 +561,28 @@ def deny_effects(event, args):
         raise ValueError('offline_only:' + event)
 
 
+def invalid_admission_proofs(verified, origins):
+    """Join invalid custody to its aligned native row in either origin schema."""
+    require(len(verified) == len(origins), 'admission_origin_count')
+    invalid, seen = {}, set()
+    for row, origin in zip(verified, origins):
+        mid = row['measurement_id']
+        row_hash = hashlib.sha256(encoded(row)).hexdigest()
+        require(type(mid) is str and mid and mid not in seen
+                and origin['row_sha256'] == row_hash
+                and origin.get('measurement_id', mid) == mid, 'admission_origin_identity')
+        seen.add(mid)
+        proof = origin.get('admission_qualification', {})
+        if proof.get('qualified') is False:
+            require(proof['measurement_id'] == mid and proof['row_sha256'] == row_hash
+                    and same(proof['verified_finals'], origin['verified_finals'])
+                    and type(proof['verified_index']) is int
+                    and proof['verified_index'] == origin['verified_index'],
+                    'invalid_admission_proof_identity')
+            invalid[mid] = proof
+    return invalid
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--request', required=True)
@@ -670,8 +692,7 @@ def main():
         native_verifier_invocations=0))
     evidence = (projected_evidence(data, membership, verified_ref, verified) if normalizer is None else
                 normalizer.projected_evidence(data['membership'], membership, verified_ref, verified, origins))
-    invalid_admissions = {row['measurement_id']: row['admission_qualification'] for row in origins
-        if row.get('admission_qualification', {}).get('qualified') is False}
+    invalid_admissions = invalid_admission_proofs(verified, origins)
     for mid, proof in invalid_admissions.items():
         evidence[mid]['invalid_admission'] = copy.deepcopy(proof)
     require(all(same(value['verified_finals'], verified_ref)
