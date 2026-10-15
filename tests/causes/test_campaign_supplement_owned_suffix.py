@@ -7,6 +7,12 @@ import unittest
 from causes import campaign_supplement_owned_suffix as suffix
 
 
+def native_digest(value):
+    """Independent fixture encoding specified by the unchanged native queue."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                    allow_nan=False).encode()).hexdigest()
+
+
 class Saved:
     def __init__(self):
         self.data = {}
@@ -86,8 +92,8 @@ def close_run(s, plan_ref, full, terminal, attempts, captures, *, failure=False,
             previous_closed=plan['predecessor_custody'], previous_full_jobs=previous['full_jobs'],
             transfer=plan['original_reservation_transfer'], full_jobs=full,
             prior_count=prior_count, appended_count=len(ids)-prior_count, cumulative_count=len(ids),
-            appended_jobs_sha256=suffix.digest(s.value(full)[prior_count:]),
-            appended_ids_sha256=suffix.digest(ids[prior_count:]), cumulative_jobs_sha256=suffix.digest(s.value(full)),
+            appended_jobs_sha256=native_digest(s.value(full)[prior_count:]),
+            appended_ids_sha256=native_digest(ids[prior_count:]), cumulative_jobs_sha256=native_digest(s.value(full)),
             prior_prefix_unchanged=True, native_families_preserved=True)
     return s.accepted(actual)
 
@@ -99,7 +105,7 @@ def next_plan(s, first_ref, predecessor, policy_ref, consumed_attempts, consumed
     current.pop('original_reservation_transfer')
     current.update(continuation_scope=suffix.SCOPE, predecessor_custody=predecessor,
         output_root='/fixture/suffix_' + str(len(s.data)), occupied_ids=actual['complete_ids'],
-        jobs_sha256=suffix.digest(jobs), maximum_new_requests=len(jobs),
+        jobs_sha256=native_digest(jobs), maximum_new_requests=len(jobs),
         initial_failures=actual['consecutive_failures'],
         maximum_admission_attempts=min(4*len(jobs),policy['maximum_admission_attempts']-consumed_attempts),
         maximum_captures=min(len(jobs),policy['maximum_captures']-consumed_captures))
@@ -123,9 +129,10 @@ def next_plan(s, first_ref, predecessor, policy_ref, consumed_attempts, consumed
     return current
 
 
-def fixture(prior_count=2, added=3, completed=1, attempts=4, captures=1, failure=False):
+def fixture(prior_count=2, added=3, completed=1, attempts=4, captures=1, failure=False,
+            job_factory=job):
     s = Saved(); s.audit = s.put(b'unchanged closed auditor')
-    full_jobs = [job(i) for i in range(prior_count+added)]
+    full_jobs = [job_factory(i) for i in range(prior_count+added)]
     old_full = s.put(full_jobs[:prior_count]); full = s.put(full_jobs)
     prior = base_actual(s, old_full, prior_count, invalid=full_jobs[0]['measurement_id'])
     prior['native_invocations'] = [dict(plan=s.put(dict(old=True)))]
@@ -138,7 +145,7 @@ def fixture(prior_count=2, added=3, completed=1, attempts=4, captures=1, failure
         local_free_space_floor_bytes=40*1024**3, max_clients=8,
         continuation_scope='transferred_original_reservation', predecessor_custody=previous,
         occupied_ids=[j['measurement_id'] for j in full_jobs[:prior_count]],
-        jobs_sha256=suffix.digest(full_jobs[prior_count:]), maximum_new_requests=added,
+        jobs_sha256=native_digest(full_jobs[prior_count:]), maximum_new_requests=added,
         maximum_admission_attempts=4*added, maximum_captures=added, maximum_capture_uses=8,
         initial_failures=0, retain_admission_after_healthy_harvest=True,
         pause_paths=['/fixture/first/PAUSE'],
@@ -210,6 +217,25 @@ class OwnedSuffixTests(unittest.TestCase):
         if text:
             self.assertIn(text, str(caught.exception))
 
+    def test_native_digest_spacing_unicode_and_nested_values(self):
+        value = [{'z': ['café', {'a': 1}], 'a': 'λ'}]
+        expected_bytes = '[{"a": "λ", "z": ["café", {"a": 1}]}]'.encode()
+        self.assertEqual(suffix.digest(value), hashlib.sha256(expected_bytes).hexdigest())
+        compact_ascii = json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+        self.assertNotEqual(suffix.digest(value), hashlib.sha256(compact_ascii).hexdigest())
+        with self.assertRaises(ValueError):
+            suffix.digest({'bad': float('nan')})
+
+    def test_native_encoded_nested_bank_resolves_without_rewriting_jobs(self):
+        def nested_job(i):
+            item = job(i)
+            item['context_metadata'] = {'language': 'café λ', 'values': [i, {'ok': True}]}
+            return item
+        s, plan, _, _ = fixture(job_factory=nested_job)
+        result = self.check(s, plan)
+        self.assertEqual(result['jobs'], [nested_job(3), nested_job(4)])
+        self.assertEqual(plan['jobs_sha256'], native_digest(result['jobs']))
+
     def test_ordered_remainder_and_inherited_invalid_are_unchanged(self):
         s, plan, _, _ = fixture(); before = copy.deepcopy(s.data)
         result = self.check(s, plan)
@@ -276,7 +302,7 @@ class OwnedSuffixTests(unittest.TestCase):
 
     def test_replayed_or_reordered_ids_and_budget_reset_refused(self):
         for field,value in [('maximum_new_requests',3),('maximum_admission_attempts',12),
-                            ('maximum_captures',3),('jobs_sha256',suffix.digest([job(4),job(3)]))]:
+                            ('maximum_captures',3),('jobs_sha256',native_digest([job(4),job(3)]))]:
             with self.subTest(field=field):
                 s,p,_,_=fixture();p[field]=value;self.refuse(s,p,'remaining_budget')
         s,p,_,_=fixture();p['occupied_ids']=p['occupied_ids'][:-1];self.refuse(s,p,'current_predecessor')

@@ -48,7 +48,8 @@ def integer(value, reason, minimum=0):
 
 
 def digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+    # The native queue also uses this encoding for bank-extension ID hashes.
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                     allow_nan=False).encode()).hexdigest()
 
 
