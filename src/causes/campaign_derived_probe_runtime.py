@@ -38,6 +38,10 @@ module is not substituted into that protocol or used to rebuild input IDs.
     if review is None:
         raise operational.IntegrityError('derived_runtime_migration_required')
     peer = json.loads(raw(review))
+    if peer.get('schema') == 'causes.derived_probe_ready_queue_compatibility.v1':
+        return _ready_compatibility(peer, review, scientific_source,
+                                    operational_source, old, new, raw,
+                                    operational.IntegrityError)
     if peer.get('schema') == 'causes.derived_probe_healthy_queue_compatibility.v1':
         return _healthy_compatibility(peer, review, scientific_source,
                                       operational_source, old, new, raw,
@@ -163,6 +167,131 @@ def _healthy_compatibility(descriptor, reference, scientific_source,
         if isinstance(exc, error):
             raise
         raise error('derived_healthy_compatibility_shape') from exc
+
+
+def _ready_compatibility(descriptor, reference, scientific_source,
+                         operational_source, old, new, read, error):
+    """Extend the accepted healthy proof; never replace scientific identities."""
+    refs = {}
+
+    def require(ok, reason):
+        if not ok:
+            raise error(reason)
+
+    def raw(ref):
+        require(type(ref) is dict and set(ref) == {'path', 'bytes', 'sha256'},
+                'derived_ready_pin')
+        require(ref['path'] not in refs or refs[ref['path']] == ref,
+                'derived_ready_conflicting_pin')
+        body = read(ref)
+        refs[ref['path']] = ref
+        return body
+
+    def value(ref):
+        result = json.loads(raw(ref))
+        require(type(result) is dict, 'derived_ready_object')
+        return result
+
+    def nested(item):
+        if type(item) is dict:
+            if set(item) == {'path', 'bytes', 'sha256'}:
+                raw(item)
+            else:
+                for child in item.values():
+                    nested(child)
+        elif type(item) is list:
+            for child in item:
+                nested(child)
+
+    def helpers(body):
+        tree = ast.parse(body)
+        queues = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'run_queue']
+        require(len(queues) == 1, 'derived_ready_queue_shape')
+        tree.body.remove(queues[0])
+        return ast.dump(tree, include_attributes=False)
+
+    def inverse(proof, parent, source):
+        """Check the declared complete line inverse against both pinned bodies."""
+        a, b = parent.splitlines(keepends=True), source.splitlines(keepends=True)
+        ai = bi = 0
+        require(type(proof['line_edits']) is list and proof['line_edits'],
+                'derived_ready_inverse')
+        for edit in proof['line_edits']:
+            require(type(edit) is list and len(edit) == 7, 'derived_ready_inverse')
+            tag, a0, a1, b0, b1, ah, bh = edit
+            require(tag in ('replace', 'insert', 'delete') and
+                    all(type(n) is int for n in (a0, a1, b0, b1)) and
+                    ai <= a0 <= a1 <= len(a) and bi <= b0 <= b1 <= len(b) and
+                    a[ai:a0] == b[bi:b0] and
+                    hashlib.sha256(b''.join(a[a0:a1])).hexdigest() == ah and
+                    hashlib.sha256(b''.join(b[b0:b1])).hexdigest() == bh,
+                    'derived_ready_inverse')
+            ai, bi = a1, b1
+        require(a[ai:] == b[bi:] and helpers(parent) == helpers(source) and
+                proof['changed_ast'] == ['run_queue'] and proof['added_ast'] == [],
+                'derived_ready_request_helpers_changed')
+
+    try:
+        require(set(descriptor) == {'schema', 'scientific_source', 'healthy_compatibility',
+                'operational_source', 'completed_actor_source', 'ready_preparation',
+                'ready_derivation', 'ready_review', 'ready_adoption'}, 'derived_ready_descriptor')
+        require(descriptor['scientific_source'] == scientific_source and
+                descriptor['operational_source'] == operational_source,
+                'derived_ready_source_endpoints')
+        healthy = value(descriptor['healthy_compatibility'])
+        require(healthy['schema'] == 'causes.derived_probe_healthy_queue_compatibility.v1',
+                'derived_ready_healthy_chain')
+        healthy_source = healthy['operational_source']; parent = raw(healthy_source)
+        inherited = _healthy_compatibility(healthy, descriptor['healthy_compatibility'],
+            scientific_source, healthy_source, old, parent, raw, error)
+        for ref in inherited:
+            raw(ref)
+        preparation = value(descriptor['ready_preparation'])
+        derivation = value(descriptor['ready_derivation'])
+        peer = value(descriptor['ready_review']); adoption = value(descriptor['ready_adoption'])
+        selected, parents = preparation['sources'], preparation['parent_sources']
+        require(all(obj['sources'] == selected and obj['parent_sources'] == parents
+                    for obj in (peer, adoption)) and
+                selected['native_queue'] == operational_source and
+                selected['completed_actor'] == descriptor['completed_actor_source'] and
+                parents['native_queue'] == healthy_source and
+                parents['completed_actor'] == healthy['completed_actor_source'],
+                'derived_ready_source_chain')
+        require(peer.get('accepted_late_ready_harvest_runtime_source') is True and
+                adoption.get('accepted_late_ready_harvest_runtime_source') is True and
+                peer.get('accepted_original_owned_suffix_runtime_source') is True and
+                adoption.get('accepted_original_owned_suffix_runtime_source') is True and
+                adoption['root_authorized'] is True and adoption['runtime_authorized'] is False and
+                peer['findings'] == adoption['findings'] == [] and
+                adoption['independent_review'] == descriptor['ready_review'] and
+                all(obj['source_preparation'] == descriptor['ready_preparation'] for obj in (peer, adoption)) and
+                all(obj['source_derivation'] == descriptor['ready_derivation']
+                    for obj in (preparation, peer, adoption)) and
+                all(obj['binder_source'] == preparation['binder_source'] for obj in (peer, adoption)),
+                'derived_ready_source_acceptance')
+        proofs = derivation['proofs']
+        require(type(proofs) is list and len(proofs) == 6 and
+                {p['key'] for p in proofs} == {'native_queue', 'completed_actor', 'driver',
+                                             'owned_suffix', 'source_lineage', 'binder'} and
+                derivation['only_reviewed_ready_harvest_native_delta'] is True and
+                derivation['active_completed_actor_non_run_queue_preserved'] is True and
+                derivation['unchanged_scientific_limits'] is True,
+                'derived_ready_derivation')
+        for proof in proofs:
+            key = proof['key']
+            require(proof['source'] == (preparation['binder_source'] if key == 'binder' else selected[key]) and
+                    proof['parent'] == (derivation['binder_parent'] if key == 'binder' else parents[key]),
+                    'derived_ready_derivation_endpoints')
+            if key in ('native_queue', 'completed_actor'):
+                inverse(proof, raw(proof['parent']), raw(proof['source']))
+        require(raw(operational_source) == new, 'derived_ready_loaded_endpoint')
+        for item in (reference, descriptor, preparation, derivation, peer, adoption):
+            nested(item)
+        return [refs[path] for path in sorted(refs)]
+    except (KeyError, TypeError, ValueError, SyntaxError) as exc:
+        if isinstance(exc, error):
+            raise
+        raise error('derived_ready_compatibility_shape') from exc
 
 
 class FrozenProbeAdapter:
