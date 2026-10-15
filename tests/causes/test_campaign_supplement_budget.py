@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from causes import campaign_supplement as core
 from causes import campaign_supplement_budget as budget
+from shared import bounded_timing as timing
 
 
 class AdmissionBudgetTests(unittest.TestCase):
@@ -279,6 +280,77 @@ print(json.dumps(dict(files=1,bytes=1)))
                 result = subprocess.run([sys.executable, '-B', '-c', source, str(self.root), limit],
                                         check=True, text=True, capture_output=True)
                 self.assertEqual(json.loads(result.stdout), dict(files=1, bytes=1))
+
+
+class TimedAdmissionBudgetTests(AdmissionBudgetTests):
+    """Run the same semantic matrix with the optional hook enabled."""
+    def make(self, **changes):
+        guard = super().make(**changes)
+        before_admission = guard.before_admission
+        sampler = timing.Sampler(enabled=True)
+        def measured(claimed):
+            return before_admission(claimed, timing=sampler.begin())
+        guard.before_admission = measured
+        return guard
+
+
+class BudgetTimingBoundaryTests(unittest.TestCase):
+    # Only the explicit boundaries below; the complete matrix runs twice above.
+    setUp = AdmissionBudgetTests.setUp
+    make = AdmissionBudgetTests.make
+
+    def test_timing_preserves_inventory_and_validation_order(self):
+        guard = self.make()
+        events = []
+        def clock():
+            events.append('clock')
+            return len(events)
+        def limit(_):
+            events.append('limit')
+            return (100, 100)
+        actual_inventory = budget.inventory
+        def inventory(root):
+            events.append('inventory')
+            return actual_inventory(root)
+        sample = timing.Sampler(enabled=True, clock=clock).begin()
+        with patch.object(budget.resource, 'getrlimit', side_effect=limit):
+            with patch.object(budget, 'inventory', side_effect=inventory) as observed:
+                result = guard.before_admission(0, timing=sample)
+        observed.assert_called_once_with(self.root)
+        self.assertEqual(events, ['clock', 'limit', 'clock', 'clock', 'inventory',
+                                  'clock', 'clock', 'clock'])
+        self.assertEqual(result['retained_bytes'], 0)
+        self.assertEqual([row['code'] for row in timing.annotation(sample)['spans']],
+                         [budget.TIMING_PRECHECK, budget.TIMING_INVENTORY, budget.TIMING_VALIDATION])
+
+    def test_timer_failure_keeps_exact_inventory_exception_and_previous(self):
+        guard = self.make()
+        guard.before_admission(0)
+        previous = guard.previous
+        error = PermissionError('fixture inventory refused')
+        sample = timing.Sampler(enabled=True, clock=lambda: (_ for _ in ()).throw(OSError())).begin()
+        with patch.object(budget, 'inventory', side_effect=error) as observed:
+            with self.assertRaises(PermissionError) as caught:
+                guard.before_admission(1, timing=sample)
+        observed.assert_called_once_with(self.root)
+        self.assertIs(caught.exception, error)
+        self.assertIs(guard.previous, previous)
+
+    def test_claim_hold_keeps_previous_and_is_not_replaced_by_clock_failure(self):
+        guard = self.make()
+        guard.before_admission(0)
+        previous = guard.previous
+        calls = iter((1, 2, 3, 4, 5))
+        sample = timing.Sampler(enabled=True, clock=lambda: next(calls)).begin()
+        with self.assertRaisesRegex(core.AdmissionHold, 'fixed_admission_tranche_complete'):
+            guard.before_admission(64, timing=sample)
+        self.assertIs(guard.previous, previous)
+        self.assertEqual(timing.annotation(sample)['missing'], ['clock_error'])
+
+    def test_default_hook_has_no_clock_calls(self):
+        with patch.object(timing.time, 'monotonic_ns', side_effect=AssertionError('not called')):
+            with patch.object(timing.json, 'dumps', side_effect=AssertionError('not called')):
+                self.assertEqual(self.make().before_admission(0)['claimed'], 0)
 
 
 if __name__ == '__main__':
