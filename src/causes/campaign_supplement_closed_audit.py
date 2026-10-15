@@ -120,6 +120,11 @@ class SavedAudit:
         self.provider_plan=checked(plan['provider_intent'])['request']['plan']
         self.native=module(self.provider_plan['native_source'],'_saved_direct_provider_native')
         self.retired=checked(plan['completed_actor_custody']['actual'])['retired_actors']
+        self.transport=mods.get('transport') if 'control_transport' in plan else None
+        self.control_ready_refs=[];self.control_intent_times=[]
+        if 'control_transport' in plan:
+            require(self.transport is not None and pin(self.transport.__file__)==plan['sources']['control_transport'],'exact_saved_transport_module')
+            self.transport.validate_plan(plan,read=self.read)
     def record(self,value,read=False):
         ref=value if type(value)is dict else pin(Path(value))
         if ref['path']==str(Path(self.plan['output_root'])/'.control/journal.jsonl') and ref['bytes']<len(self.journal):
@@ -161,13 +166,20 @@ class SavedAudit:
     def remote_intent(self,intent):
         p=self.plan;require(type(intent['full'])is bool,'remote_full_type')
         refs=[p['sources'][key]for key in ['remote','provider_status','collector','exact_bytes']]+[p['provider_intent'],self.provider_plan['native_source']]
+        transport_argv=None
+        if 'control_transport' in p:
+            more,transport_argv=self.transport.saved_call(p,intent['control_transport'],read=self.read);refs+=more
+            self.control_ready_refs.append(intent['control_transport']['ready']);self.control_intent_times.append(intent['at'])
+        else:require('control_transport' not in intent,'undeclared_transport')
         require(intent['source']==p['sources']['remote']and intent['sources']==refs and intent['maximum_invocations']==1 and intent['automatic_retry']is False,'remote_exact_source_roster')
         for ref in refs:self.record(ref)
         envelope=dict(provider_plan=self.provider_plan,runtime_identity=p['provider_identity'],helper_source=p['sources']['provider_status'],helper_base64=base64.b64encode(self.read(p['sources']['provider_status'])).decode(),native_base64=base64.b64encode(self.read(self.provider_plan['native_source'])).decode(),retired_actors=self.retired,remote_pause_paths=p['remote_pause_paths'],full=intent['full'])
         payload=encoded(envelope)[:-1]
         argv=p['ssh_argv']+[p['provider_interpreter']+' -c '+shlex.quote(self.read(p['sources']['remote']).decode())]
+        if transport_argv is not None:
+            require(transport_argv[-1]==argv[-1],'transport_remote_command_changed');argv=transport_argv
         require(intent['argv']==argv and intent['payload_bytes']==len(payload)and intent['payload_sha256']==hashlib.sha256(payload).hexdigest(),'remote_exact_argv_payload')
-    def remote_accounting(self,files,number):
+    def remote_accounting(self,files,number,control_closed=None):
         root=Path(self.plan['output_root'])/'remote_records';groups={}
         for ref in files:
             path=Path(ref['path'])
@@ -183,7 +195,13 @@ class SavedAudit:
             if len(refs)==5:require(intent['full'],'gzip_in_status_call')
             rows.append(dict(directory=name,full=intent['full'],intent=refs[0],execution=refs[3],complete=ex['transport']['complete'],returncode=ex['transport']['returncode'],source_error=ex['source_error'],all_files=refs))
         require(full<=self.plan['maximum_captures'],'remote_full_budget')
-        return dict(calls=number,full_calls=full,rows=rows,failed_and_unclaimed_calls_retained=True)
+        result=dict(calls=number,full_calls=full,rows=rows,failed_and_unclaimed_calls_retained=True)
+        if 'control_transport' in self.plan:
+            custody=self.transport.saved_closed(self.plan,control_closed,self.control_ready_refs,read=self.read)
+            require(all(stamp(custody['ready_at'])<=stamp(t)<=stamp(custody['stopped_at']) for t in self.control_intent_times),'transport_call_outside_owned_lifetime')
+            result['control_transport']=custody
+        else:require(control_closed is None,'undeclared_transport_closure')
+        return result
     def remote(self,evidence):
         executions=[r for r in evidence if Path(r['path']).name.endswith('_execution')]
         require(len(executions)==1,'remote_execution_count');er=executions[0]
@@ -379,7 +397,7 @@ def main():
         for i,r in enumerate(records,1):require(Path(r['path']).name.startswith('%06d_'%i),'record_sequence')
         audit=SavedAudit(p,runtime,mods,journal,records)
         for ref in files+durable_refs+scope['required_pins']+[recipe_ref,authority_ref,pin(__file__),recipe['plan'],recipe['owner'],recipe['runtime_plan'],recipe['closed_scope_source'],recipe['output_allocation']]:audit.record(ref)
-        remote_accounting=audit.remote_accounting(files,result_wrapper['remote_calls'])
+        remote_accounting=audit.remote_accounting(files,result_wrapper['remote_calls'],result_wrapper.get('control_transport'))
         kinds={}
         for ref in records:kinds.setdefault(Path(ref['path']).name.split('_',1)[1],[]).append(ref)
         reservations=[audit.value(r)for r in kinds.get('reservation',[])];captures=[audit.value(r)for r in kinds.get('capture_intent',[])]
@@ -440,6 +458,7 @@ def main():
             actual['native_invocations'][-1]['derived_bank']=p['derived_bank']
             actual['derived_scientific_protocol']=scope['derived_bank']['protocol']
             actual['derived_execution_protocol']=p['execution_protocol']
+        if 'control_transport' in p:actual['control_transport']=remote_accounting['control_transport']
         actual_ref=buffered('ACTUAL.v1.json',actual)
         total=sum(map(len,outputs.values()));require(total<=recipe['maximum_output_bytes']and recipe['maximum_output_bytes']<=allocation['maximum_output_bytes'],'buffered_audit_output_bound')
         require(size(allocation_root)+total+allocation['future_margin_bytes']<=allocation['maximum_complete_bytes'],'whole_saved_output_root_bound')
