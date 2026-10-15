@@ -46,7 +46,7 @@ class HealthyHarvestTests(unittest.TestCase):
 
     def scenario(self, *, enabled=True, statuses=('complete',), initial_failures=0,
                  release_at='admission', mutate=None, prepare=None, journal_hook=None,
-                 recorder_failure=False, clients=2, pause_paths=()):
+                 recorder_failure=False, clients=2, pause_paths=(), ready_enabled=False):
         count = len(statuses) + 1
         jobs = self.jobs[:count]
         capacity, identity = (self.capacity(jobs, clients) if clients > 2 else (None, {}))
@@ -66,7 +66,7 @@ class HealthyHarvestTests(unittest.TestCase):
 
         def finish():
             release.set()
-            for future in futures[:1 if release_at == 'snapshot' else len(statuses)]:
+            for future in futures[:1 if release_at in ('snapshot', 'prepare_twice') else len(statuses)]:
                 try:
                     future.result(timeout=3)
                 except BaseException:
@@ -77,7 +77,7 @@ class HealthyHarvestTests(unittest.TestCase):
             worked.append(job['measurement_id'])
             index = int(job['run_id'][3:])
             if index < len(statuses):
-                gate = second_release if release_at == 'snapshot' and index == 1 else release
+                gate = second_release if release_at in ('snapshot', 'prepare_twice') and index == 1 else release
                 if not gate.wait(3):
                     raise AssertionError('fixture release missing')
                 value = statuses[index]
@@ -101,6 +101,12 @@ class HealthyHarvestTests(unittest.TestCase):
                 finish()
             if job is jobs[-1] and release_at == 'locked' and not release.is_set():
                 locked_release[0] = True
+            if job is jobs[-1] and release_at == 'prepare_twice':
+                if not release.is_set():
+                    finish()
+                elif not second_release.is_set():
+                    second_release.set()
+                    futures[1].result(timeout=3)
             if prepare:
                 prepare(job, admissions)
 
@@ -138,7 +144,8 @@ class HealthyHarvestTests(unittest.TestCase):
             result = core.run_queue(self.output, jobs, worker, admission, source, pause_paths,
                 family='fixed', model='model', max_clients=clients,
                 initial_failures=initial_failures, capacity_limit=capacity,
-                retain_admission_after_healthy_harvest=enabled)
+                retain_admission_after_healthy_harvest=enabled,
+                retain_admission_after_ready_harvest=ready_enabled)
         return result, jobs, admissions, prepared, worked
 
     def test_opt_in_reuses_exact_candidate_and_prepares_after_harvest(self):
@@ -321,6 +328,132 @@ class HealthyHarvestTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(core.IntegrityError, 'healthy_harvest_option'):
                 core.run_queue(self.output, self.jobs[:1], mock.Mock(), mock.Mock(), mock.Mock(), [],
                     family='fixed', model='model', retain_admission_after_healthy_harvest=value)
+            self.assertFalse(self.output.exists())
+
+
+    def test_ready_harvest_retains_reservation_but_prepares_again(self):
+        result, jobs, admissions, prepared, worked = self.scenario(
+            release_at='prepare', ready_enabled=True)
+        self.assertEqual(len(admissions), 2)
+        self.assertEqual([row[1] for row in prepared], [1, 2, 2])
+        self.assertEqual(result['new_final'], 2)
+        self.assertEqual(worked, [job['measurement_id'] for job in jobs])
+        self.assertTrue(self.history()[0]['retain_admission_after_ready_harvest'])
+        second_ready_history = prepared[-1][2]
+        self.assertEqual([r['measurement_id'] for r in second_ready_history
+                          if r['event'] == 'route_success'], [jobs[0]['measurement_id']])
+        target = core.measurement_path(self.output, jobs[-1], family='fixed', model='model')
+        self.assertEqual(core.load(target/'ADMISSION_OBSERVATION.json'), admissions[-1])
+
+    def test_ready_harvest_reprepares_only_once_per_reservation(self):
+        result, jobs, admissions, prepared, worked = self.scenario(
+            release_at='prepare_twice', statuses=('complete', 'complete'),
+            clients=4, ready_enabled=True)
+        self.assertEqual(len(admissions), 4)
+        self.assertEqual([row[1] for row in prepared], [1, 2, 3, 3, 4])
+        self.assertEqual(result['new_final'], 3)
+        self.assertEqual(worked, [job['measurement_id'] for job in jobs])
+
+    def test_ready_harvest_keeps_final_locked_completion_gate(self):
+        result, _, admissions, prepared, worked = self.scenario(
+            release_at='locked', ready_enabled=True)
+        self.assertEqual(len(admissions), 3)
+        self.assertEqual([row[1] for row in prepared], [1, 2, 3])
+        self.assertEqual((result['new_final'], len(worked)), (2, 2))
+
+    def test_ready_harvest_handles_completion_after_early_snapshot(self):
+        result, jobs, admissions, prepared, worked = self.scenario(
+            release_at='snapshot', statuses=('complete', 'complete'),
+            clients=4, ready_enabled=True)
+        self.assertEqual(len(admissions), 3)
+        self.assertEqual([row[1] for row in prepared], [1, 2, 3, 3])
+        self.assertEqual((result['new_final'], len(worked)), (len(jobs), len(jobs)))
+
+    def test_ready_harvest_failure_or_reset_rebuilds_original_admission(self):
+        for statuses, initial in [(('invalid_answer_schema',), 0), (('complete',), 1),
+                                  (('invalid_answer_schema', 'complete'), 0)]:
+            with self.subTest(statuses=statuses, initial=initial):
+                # Each scenario needs a fresh native namespace.
+                self.output = self.root / ('output_' + str(len(list(self.root.iterdir()))))
+                result, _, admissions, prepared, worked = self.scenario(
+                    release_at='prepare', ready_enabled=True, statuses=statuses,
+                    initial_failures=initial, clients=2 if len(statuses)==1 else 4)
+                self.assertEqual(len(admissions), len(statuses)+2)
+                self.assertEqual(prepared[-1][1], len(admissions))
+                self.assertEqual(result['new_final'], len(statuses)+1)
+
+    def test_ready_harvest_source_refusal_after_harvest_prevents_claim(self):
+        calls = []
+        def prepare(job, admissions):
+            if job['run_id'] == 'run1':
+                calls.append(job['measurement_id'])
+                if len(calls) == 2:
+                    raise core.IntegrityError('changed source after late harvest')
+        result, _, admissions, _, worked = self.scenario(
+            release_at='prepare', ready_enabled=True, prepare=prepare)
+        self.assertEqual((len(admissions), len(worked), len(calls)), (2, 1, 2))
+        self.assertIn('changed source after late harvest', result['stop_reason'])
+
+    def test_ready_harvest_rechecks_pause_and_disk(self):
+        for action in ('pause', 'disk'):
+            with self.subTest(action=action):
+                self.output = self.root / ('output_' + action)
+                self.free.free = 100 * 1024**3
+                pause = self.root / ('PAUSE_' + action)
+                def change(row, admissions, capacity):
+                    if row['event'] == 'route_success':
+                        if action == 'pause':
+                            pause.write_text('synthetic pause')
+                        else:
+                            self.free.free = 79 * 1024**3
+                result, _, _, prepared, worked = self.scenario(
+                    release_at='prepare', ready_enabled=True, journal_hook=change,
+                    pause_paths=[pause])
+                self.assertEqual((len(prepared), len(worked)), (2, 1))
+                self.assertIn('operator_pause' if action == 'pause' else 'local_disk_below80GiB', result['stop_reason'])
+
+    def test_ready_harvest_rechecks_exact_assignment_observation_and_capacity(self):
+        root, jobs = self.root, copy.deepcopy(self.jobs)
+        for action in ('job', 'observation', 'capacity_pin', 'capacity_file'):
+            with self.subTest(action=action):
+                self.root = root / action
+                self.root.mkdir()
+                self.output = self.root / 'output'
+                self.jobs = copy.deepcopy(jobs)
+                def change(row, admissions, capacity):
+                    if row['event'] == 'route_success':
+                        if action == 'job':
+                            self.jobs[1]['seed'] += 1
+                        elif action == 'observation':
+                            admissions[-1]['reservation'] += 99
+                        elif action == 'capacity_pin':
+                            capacity['sha256'] = '0'*64
+                        else:
+                            Path(capacity['path']).write_bytes(b'{}\n')
+                result, _, _, prepared, worked = self.scenario(
+                    release_at='prepare', ready_enabled=True, journal_hook=change, clients=4)
+                self.assertEqual((len(prepared), len(worked)), (2, 1))
+                self.assertIsNotNone(result['stop_reason'])
+
+    def test_ready_harvest_preserves_integrity_recorder_and_third_failure_stops(self):
+        cases = [dict(statuses=(core.IntegrityError('synthetic integrity failure'),)),
+                 dict(recorder_failure=True),
+                 dict(statuses=('invalid_answer_schema',), initial_failures=2)]
+        for index, options in enumerate(cases):
+            with self.subTest(options=options):
+                self.output = self.root / ('stopped_' + str(index))
+                result, _, admissions, prepared, worked = self.scenario(
+                    release_at='prepare', ready_enabled=True, **options)
+                self.assertEqual((len(admissions), len(prepared), len(worked)), (2, 2, 1))
+                self.assertIsNotNone(result['stop_reason'])
+                self.assertEqual(result['remaining_unclaimed'], 1)
+
+    def test_ready_harvest_requires_boolean_and_existing_opt_in(self):
+        for enabled, ready in [(False, True), (True, 1), (True, None), (True, 'yes')]:
+            with self.subTest(enabled=enabled, ready=ready), self.assertRaisesRegex(core.IntegrityError, 'ready_harvest_option'):
+                core.run_queue(self.output, self.jobs[:1], mock.Mock(), mock.Mock(), mock.Mock(), [],
+                    family='fixed', model='model', retain_admission_after_healthy_harvest=enabled,
+                    retain_admission_after_ready_harvest=ready)
             self.assertFalse(self.output.exists())
 
 

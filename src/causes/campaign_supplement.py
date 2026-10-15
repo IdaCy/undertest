@@ -325,7 +325,7 @@ def validate_capacity_limit(reference, max_clients, output, jobs, *, family, mod
     return value
 
 
-def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, *, family, model, initial_failures=0, phase='pilot', max_clients=2, local_free_space_floor_bytes=DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES, capacity_limit=None, retain_admission_after_healthy_harvest=False):
+def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, *, family, model, initial_failures=0, phase='pilot', max_clients=2, local_free_space_floor_bytes=DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES, capacity_limit=None, retain_admission_after_healthy_harvest=False, retain_admission_after_ready_harvest=False):
     """Caller holds the unique family lock and binds this output/journal to one family/model.
 
     A partial attempt is never replayed. The optional healthy-harvest path keeps
@@ -333,9 +333,14 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
     failure state and next assignment unchanged. The caller's source callback
     must still perform fresh request preparation and claim-readiness checks;
     this option never carries a ready proof across a later completion gate.
+    The separate ready-harvest option permits one repeat of source/readiness
+    preparation on the same reservation after a healthy late harvest.
     """
     if type(retain_admission_after_healthy_harvest) is not bool:
         raise IntegrityError('healthy_harvest_option')
+    if (type(retain_admission_after_ready_harvest) is not bool or
+            (retain_admission_after_ready_harvest and not retain_admission_after_healthy_harvest)):
+        raise IntegrityError('ready_harvest_option')
     if type(max_clients) is not int or max_clients not in (1, 2, 4, 8, 12, 16):
         raise IntegrityError('client_cap')
     if type(initial_failures) is not int or initial_failures < 0:
@@ -374,6 +379,8 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
                        'queue_prefix_count': len(jobs)})
     if retain_admission_after_healthy_harvest:
         capacity_record['retain_admission_after_healthy_harvest'] = True
+    if retain_admission_after_ready_harvest:
+        capacity_record['retain_admission_after_ready_harvest'] = True
     journal(log, {'event': 'controller_started', 'phase': phase, 'existing_finals': len(existing), 'pending': len(pending), 'inherited_failures': failures, 'local_free_space_floor_bytes': local_free_space_floor_bytes, **capacity_record})
     stopped = threading.Event()
     lock = threading.Lock()
@@ -474,7 +481,35 @@ def run_queue(output, jobs, worker, admission_check, source_check, pause_paths, 
                     job = pending[0]
                     source_check(job)
                     if any(future.done() for future in active):
-                        break  # Account completed outcomes before any replacement claim.
+                        if not retain_admission_after_ready_harvest:
+                            break  # Account outcomes before any replacement claim.
+                        reserved_observation = digest(observation)
+                        previous_failures = failures
+                        healthy = harvest(active, [future for future in active if future.done()])
+                        if (not pending or
+                                digest([pending[0], capacity_limit, capacity]) != reserved_scope or
+                                digest(observation) != reserved_observation):
+                            raise IntegrityError('reserved_admission_changed_during_ready_harvest')
+                        if stopped.is_set():
+                            break
+                        if not healthy or failures != previous_failures:
+                            rebuild_admission = True
+                            break
+                        if any(path.exists() for path in pause_paths):
+                            raise AdmissionHold('operator_pause')
+                        if shutil.disk_usage(output).free < local_free_space_floor_bytes:
+                            reason = ('local_disk_below80GiB' if local_free_space_floor_bytes == DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES
+                                      else 'local_disk_below_floor:' + str(local_free_space_floor_bytes))
+                            raise AdmissionHold(reason)
+                        if capacity is not None:
+                            pinned(capacity_limit); pinned(capacity['capacity_review'])
+                            if observation.get('identity') != capacity['provider_identity']:
+                                raise IntegrityError('provider_capacity_identity_changed')
+                        # Keep only the reservation. Replace the old ready proof
+                        # through the original source/readiness callback once.
+                        source_check(job)
+                        if any(future.done() for future in active):
+                            break
                     with lock:
                         if any(future.done() for future in active):
                             break

@@ -623,7 +623,8 @@ class Admission:
 def run_queue(output, jobs, worker, admission, pause_paths, *, family, model,
               initial_failures, max_clients, capacity_limit,
               local_free_space_floor_bytes=core.DEFAULT_LOCAL_FREE_SPACE_FLOOR_BYTES,
-              retain_admission_after_healthy_harvest=False):
+              retain_admission_after_healthy_harvest=False,
+              retain_admission_after_ready_harvest=False):
     """Preserve native claim, harvest, failure, no-replay and capacity behavior."""
     require(type(retain_admission_after_healthy_harvest) is bool and
             admission.plan.get('retain_admission_after_healthy_harvest', False)
@@ -631,6 +632,13 @@ def run_queue(output, jobs, worker, admission, pause_paths, *, family, model,
             admission.contract.get('retain_admission_after_healthy_harvest', False)
                 is retain_admission_after_healthy_harvest,
             'completed_actor_healthy_harvest_binding')
+    require(type(retain_admission_after_ready_harvest) is bool and
+            admission.plan.get('retain_admission_after_ready_harvest', False)
+                is retain_admission_after_ready_harvest and
+            admission.contract.get('retain_admission_after_ready_harvest', False)
+                is retain_admission_after_ready_harvest and
+            (not retain_admission_after_ready_harvest or retain_admission_after_healthy_harvest),
+            'completed_actor_ready_harvest_binding')
     validate_contract(admission.plan, admission.contract, jobs,
                       initial_failures=initial_failures, max_clients=max_clients,
                       read=admission.read)
@@ -658,4 +666,6 @@ def run_queue(output, jobs, worker, admission, pause_paths, *, family, model,
                           max_clients=max_clients, capacity_limit=capacity_limit,
                           local_free_space_floor_bytes=local_free_space_floor_bytes,
                           **({'retain_admission_after_healthy_harvest': True}
-                             if retain_admission_after_healthy_harvest else {}))
+                             if retain_admission_after_healthy_harvest else {}),
+                          **({'retain_admission_after_ready_harvest': True}
+                             if retain_admission_after_ready_harvest else {}))
