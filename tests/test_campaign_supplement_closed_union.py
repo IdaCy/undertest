@@ -522,5 +522,246 @@ class CleanSummaryReviewTests(unittest.TestCase):
         self.assertEqual((actual, peer), before)
 
 
+class IndependentSummaryReviewTests(unittest.TestCase):
+    @staticmethod
+    def summary(actual, peer, prior_count, profile):
+        actual['current_tranche_qualified'] = True
+        for name in ('qualified_admission_ids', 'invalid_admission_ids', 'invalid_admission_custody'):
+            peer.pop(name, None)
+        current = len(actual['new_scientifically_qualified_ids'])
+        pending = len(actual['unstarted_ids'])
+        partition = dict(active=0, prior_occupied=prior_count)
+        if profile == 'flat':
+            partition.update(new_invalid=0, new_qualified=current, occupied=actual['occupied'],
+                terminal=actual['terminal'], scientifically_qualified_total=actual['scientifically_qualified_total'],
+                unstarted=pending, owner_members=actual['occupied'] + pending,
+                ambiguous=0, unresolved_claimed=0, consecutive_failures=actual['consecutive_failures'],
+                stop_reason=actual['stop_reason'])
+        else:
+            partition.update(cumulative_occupied=actual['occupied'], cumulative_terminal=actual['terminal'],
+                cumulative_qualified=actual['scientifically_qualified_total'], new_occupied=current,
+                new_terminal=current, untouched=pending, full_population=actual['occupied'] + pending,
+                unresolved=0)
+            if profile == 'cumulative_qualified':
+                partition['new_qualified'] = current
+                peer['admission_summary'] = dict(total=current, qualified=current, unqualified=0,
+                    unique_measurement_ids=current, exact_current_partition=True, findings=[])
+        peer.update(schema='causes.completed_actor_saved_closure_independent_review.v1',
+            current_tranche_qualified=True, new_invalid_ids=[], current_qualification_findings=[],
+            inherited_qualification_findings=copy.deepcopy(actual['inherited_qualification_findings']),
+            cumulative_invalid_ids=list(actual['cumulative_invalid_ids']), partition=partition,
+            missingness=dict(current_integrity_failures=0, current_native_technical_missing=0,
+                new_qualification_invalid=0, inherited_invalid=len(actual['cumulative_invalid_ids'])))
+        if profile == 'flat':
+            del peer['missingness']
+
+    def fixture(self, profile='cumulative'):
+        f = Fixture(); actual, peer = f.docs[f.actual['path']], f.docs[f.peer['path']]
+        self.summary(actual, peer, 2, profile)
+        return f, actual, peer
+
+    def test_all_three_independent_shapes_preserve_native_rows_and_origins(self):
+        for profile in ('flat', 'cumulative', 'cumulative_qualified'):
+            with self.subTest(profile=profile):
+                f = Fixture(); expected = f.normalize()
+                self.summary(f.docs[f.actual['path']], f.docs[f.peer['path']], 2, profile)
+                before = copy.deepcopy((f.docs, f.raw))
+                self.assertEqual(f.normalize(), expected)
+                self.assertEqual((f.docs, f.raw), before)
+
+    def test_recursive_mixed_shapes_preserve_inherited_invalid_admission(self):
+        f = Fixture(); f.invalid_admission()
+        jobs = f.get(f.jobs); initial = f.docs[f.actual['path']]
+        f.docs[f.plan['path']].update(maximum_new_requests=1, jobs_sha256=union.digest(jobs[2:3]))
+        f.docs[f.result['path']]['result'].update(new_final=1, completed_ids=[jobs[2]['measurement_id']])
+        f.docs[f.rows['path']] = f.get(f.rows)[:1]
+        initial.update(complete_ids=[j['measurement_id'] for j in jobs[:3]], terminal=3, occupied=3,
+            unstarted_ids=[j['measurement_id'] for j in jobs[3:]], new_scientifically_qualified_ids=[],
+            scientifically_qualified_total=2, journal=f.journal('invalid-first-journal', range(2, 3)))
+        f.docs[f.peer['path']]['qualified_admission_ids'] = []
+        reviews = []
+        for index, profile in zip(range(3, 6), ('flat', 'cumulative', 'cumulative_qualified')):
+            prior_ref, prior_peer = f.actual, f.peer
+            prior = f.get(prior_ref); mid = jobs[index]['measurement_id']
+            output = str(Path(f.inputs['verified_finals'][index]['final']['path']).parents[1])
+            plan = f.get(f.plan)
+            plan.update(output_root=output, predecessor_custody=dict(actual=prior_ref, review=prior_peer),
+                occupied_ids=prior['complete_ids'], maximum_new_requests=1,
+                jobs_sha256=union.digest(jobs[index:index + 1]))
+            f.plan = f.put('plan-' + str(index), plan)
+            result = f.get(f.result); result['result'].update(new_final=1, completed_ids=[mid])
+            f.result = f.put('result-' + str(index), result)
+            recipe = f.get(f.recipe); recipe.update(plan=f.plan, driver_result=f.result)
+            f.recipe = f.put('recipe-' + str(index), recipe)
+            f.rows = f.put('rows-' + str(index), f.inputs['verified_finals'][index:index + 1])
+            actual = copy.deepcopy(initial)
+            actual.update(plan=f.plan, recipe=f.recipe, native_result=f.result, output=output,
+                prior_closed=prior_ref, prior_closed_review=prior_peer, verified_finals=f.rows,
+                complete_ids=[j['measurement_id'] for j in jobs[:index + 1]], terminal=index + 1,
+                occupied=index + 1, unstarted_ids=[j['measurement_id'] for j in jobs[index + 1:]],
+                journal=f.journal('journal-' + str(index), range(index, index + 1)),
+                inherited_qualification_findings=prior['qualification_findings'], current_qualification_findings=[],
+                new_scientifically_qualified_ids=[mid], new_invalid_ids=[],
+                prior_invalid_ids=prior['cumulative_invalid_ids'], scientifically_qualified_total=index)
+            f.actual = f.put('actual-' + str(index), actual)
+            peer = dict(accepted_finite_supplement_closed_custody=True,
+                accepted_completed_actor_saved_closure=True, actual=f.actual, source=f.source, findings=[],
+                original_denominator_preserved=True, all_original_attempts_retained=True,
+                qualification_findings=actual['qualification_findings'], qualified_admission_ids=[mid],
+                invalid_admission_ids=[], invalid_admission_custody=[])
+            f.peer = f.put('peer-' + str(index), peer)
+            reviews.append((f.actual, f.peer, index, profile))
+        f.descriptor['roots'] = [dict(role='mi', actual=f.actual, review=f.peer)]
+        expected = f.normalize()
+        for actual_ref, peer_ref, prior_count, profile in reviews:
+            self.summary(f.docs[actual_ref['path']], f.docs[peer_ref['path']], prior_count, profile)
+        before = copy.deepcopy((f.docs, f.raw)); normalized = f.normalize()
+        self.assertEqual(normalized, expected)
+        self.assertEqual([row['measurement_id'] for row in normalized['rows']], [j['measurement_id'] for j in jobs])
+        invalid = pipeline.invalid_admission_proofs(normalized['rows'], normalized['origins'])
+        self.assertEqual(list(invalid), [jobs[2]['measurement_id']])
+        self.assertFalse(f.get(f.actual)['full_tranche_qualified'])
+        self.assertEqual(f.get(f.actual)['scientifically_qualified_total'], 5)
+        self.assertEqual((f.docs, f.raw), before)
+
+    def test_missing_structural_count_groups_and_current_witnesses_are_rejected(self):
+        for profile in ('flat', 'cumulative', 'cumulative_qualified'):
+            f, _, peer = self.fixture(profile)
+            required = ('active', 'prior_occupied') + (('occupied', 'terminal',
+                'scientifically_qualified_total', 'unstarted') if profile == 'flat' else
+                ('cumulative_occupied', 'cumulative_terminal', 'cumulative_qualified', 'untouched'))
+            for field in required:
+                with self.subTest(profile=profile, missing=field):
+                    f, _, peer = self.fixture(profile); del peer['partition'][field]
+                    with self.assertRaises(ValueError): f.normalize()
+        for remaining in ({}, {'new_occupied': 2}, {'new_terminal': 2}):
+            f, _, peer = self.fixture()
+            del peer['partition']['new_occupied']; del peer['partition']['new_terminal']
+            peer['partition'].update(remaining)
+            with self.assertRaisesRegex(ValueError, 'closed_independent_admission_current_counts'):
+                f.normalize()
+
+    def test_all_present_aliases_must_be_exact_nonboolean_counts(self):
+        aliases = dict(active=0, prior_occupied=2, occupied=4, cumulative_occupied=4,
+            terminal=4, cumulative_terminal=4, scientifically_qualified_total=4,
+            qualified_custody_total=4, cumulative_qualified=4, unstarted=2, untouched=2,
+            new_qualified=2, new_admission_qualified=2, new_occupied=2, new_terminal=2,
+            new_invalid=0, owner_members=6, full_population=6, unresolved=0,
+            unresolved_claimed=0, ambiguous=0, consecutive_failures=0)
+        f, _, peer = self.fixture(); peer['partition'].update(aliases)
+        f.normalize()  # Equal aliases are supported only by this exact new schema.
+        for field, expected in aliases.items():
+            for value in (None, False, True, str(expected), float(expected), expected + 1):
+                with self.subTest(field=field, value=value):
+                    f, _, peer = self.fixture(); peer['partition'].update(aliases)
+                    peer['partition'][field] = value
+                    with self.assertRaises(ValueError): f.normalize()
+
+    def test_occupancy_never_substitutes_for_clean_qualification(self):
+        for target, field, value in (
+            ('peer', 'schema', 'causes.completed_actor_saved_closure_independent_review.v2'),
+            ('peer', 'current_tranche_qualified', False), ('actual', 'current_tranche_qualified', False),
+            ('peer', 'new_invalid_ids', ['bad']), ('actual', 'new_invalid_ids', ['bad']),
+            ('peer', 'current_qualification_findings', ['bad']),
+            ('actual', 'current_qualification_findings', ['bad']),
+            ('peer', 'inherited_qualification_findings', ['changed']),
+            ('peer', 'cumulative_invalid_ids', ['changed']),
+            ('actual', 'new_scientifically_qualified_ids', []),
+        ):
+            with self.subTest(target=target, field=field):
+                f, actual, peer = self.fixture()
+                (actual if target == 'actual' else peer)[field] = value
+                with self.assertRaises(ValueError): f.normalize()
+        f, actual, _ = self.fixture(); actual['new_scientifically_qualified_ids'].reverse()
+        with self.assertRaises(ValueError): f.normalize()
+        f = Fixture(); f.invalid_admission()
+        self.summary(f.docs[f.actual['path']], f.docs[f.peer['path']], 2, 'cumulative')
+        with self.assertRaises(ValueError): f.normalize()
+
+    def test_missingness_is_explicit_and_cannot_hide_current_or_inherited_invalidity(self):
+        for field in ('current_integrity_failures', 'current_native_technical_missing',
+                      'new_qualification_invalid', 'inherited_invalid'):
+            for value in (None, False, True, 1, '0'):
+                f, _, peer = self.fixture(); peer['missingness'][field] = value
+                with self.assertRaises(ValueError): f.normalize()
+            f, _, peer = self.fixture(); del peer['missingness'][field]
+            with self.assertRaises(ValueError): f.normalize()
+        for value in (None, [], {}):
+            f, _, peer = self.fixture(); peer['missingness'] = value
+            with self.assertRaises(ValueError): f.normalize()
+
+    def test_all_present_admission_summary_counts_are_checked(self):
+        for field in ('total', 'qualified', 'unqualified', 'unique_measurement_ids'):
+            for value in (None, False, True, 999):
+                f, _, peer = self.fixture('cumulative_qualified'); peer['admission_summary'][field] = value
+                with self.assertRaises(ValueError): f.normalize()
+            f, _, peer = self.fixture('cumulative_qualified'); del peer['admission_summary'][field]
+            with self.assertRaises(ValueError): f.normalize()
+        for field, value in (('exact_current_partition', False), ('findings', ['bad'])):
+            f, _, peer = self.fixture('cumulative_qualified'); peer['admission_summary'][field] = value
+            with self.assertRaises(ValueError): f.normalize()
+
+    def test_partial_typed_fields_never_fall_back_in_independent_schema(self):
+        for field in ('qualified_admission_ids', 'invalid_admission_ids', 'invalid_admission_custody'):
+            for value in ([], None):
+                f, _, peer = self.fixture(); peer[field] = value
+                with self.assertRaisesRegex(ValueError, 'closed_admission_review_fields'): f.normalize()
+
+    def test_exact_flat_profile_has_no_missingness_or_admission_summary(self):
+        f, _, peer = self.fixture('flat')
+        self.assertNotIn('missingness', peer)
+        self.assertNotIn('admission_summary', peer)
+        self.assertEqual(set(peer['partition']), {'active', 'ambiguous', 'consecutive_failures',
+            'new_invalid', 'new_qualified', 'occupied', 'owner_members', 'prior_occupied',
+            'scientifically_qualified_total', 'stop_reason', 'terminal', 'unresolved_claimed', 'unstarted'})
+        self.assertEqual(f.normalize()['rows'], f.get(f.old_rows) + f.get(f.rows))
+        for field in ('new_invalid', 'new_qualified', 'occupied', 'terminal',
+                      'scientifically_qualified_total', 'unstarted'):
+            f, _, peer = self.fixture('flat'); del peer['partition'][field]
+            with self.assertRaises(ValueError): f.normalize()
+            for value in (None, False, True, 999):
+                f, _, peer = self.fixture('flat'); peer['partition'][field] = value
+                with self.assertRaises(ValueError): f.normalize()
+
+    def test_flat_absence_does_not_accept_present_incomplete_missingness(self):
+        for value in (None, {}, [], False, dict(current_integrity_failures=0)):
+            f, _, peer = self.fixture('flat'); peer['missingness'] = value
+            with self.assertRaisesRegex(ValueError, 'closed_independent_admission_missingness'):
+                f.normalize()
+        complete = dict(current_integrity_failures=0, current_native_technical_missing=0,
+                        new_qualification_invalid=0, inherited_invalid=0)
+        f, _, peer = self.fixture('flat'); peer['missingness'] = complete.copy(); f.normalize()
+        for field in complete:
+            for value in (None, False, True, 1):
+                f, _, peer = self.fixture('flat'); peer['missingness'] = complete.copy()
+                peer['missingness'][field] = value
+                with self.assertRaises(ValueError): f.normalize()
+
+    def test_cumulative_and_mixed_profiles_cannot_omit_missingness(self):
+        for profile in ('cumulative', 'cumulative_qualified'):
+            f, _, peer = self.fixture(profile); del peer['missingness']
+            with self.assertRaisesRegex(ValueError, 'closed_independent_admission_flat_profile'):
+                f.normalize()
+        for field, value in dict(cumulative_occupied=4, cumulative_terminal=4,
+            cumulative_qualified=4, untouched=2, new_occupied=2, new_terminal=2).items():
+            f, _, peer = self.fixture('flat'); peer['partition'][field] = value
+            with self.assertRaisesRegex(ValueError, 'closed_independent_admission_flat_profile'):
+                f.normalize()
+
+    def test_flat_admission_qualification_does_not_promote_missing_native_response(self):
+        f = Fixture(); projection_tests.make_missing(f.inputs, index=3, parsed=True)
+        f.docs[f.rows['path']][1] = copy.deepcopy(f.inputs['verified_finals'][3])
+        actual = f.docs[f.actual['path']]
+        actual.update(journal=f.journal('flat-native-missing-journal', range(2, 4)), consecutive_failures=1)
+        f.docs[f.result['path']]['result']['consecutive_failures'] = 1
+        peer = f.docs[f.peer['path']]; self.summary(actual, peer, 2, 'flat')
+        before = copy.deepcopy((f.docs, f.raw)); normalized = f.normalize()
+        self.assertEqual(normalized['rows'][-1], f.inputs['verified_finals'][3])
+        self.assertEqual(normalized['rows'][-1]['technical_status'], 'parse_failure')
+        self.assertIsNone(normalized['rows'][-1]['label'])
+        self.assertEqual(normalized['rows'][-1]['raw_parsed_label'], 'invalid')
+        self.assertEqual((f.docs, f.raw), before)
+
+
 if __name__ == '__main__':
     unittest.main()
