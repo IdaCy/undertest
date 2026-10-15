@@ -15,6 +15,7 @@ import re
 MIGRATION = 'causes.original_transfer_healthy_harvest_migration.v1'
 CONTINUATION = 'causes.original_transfer_healthy_harvest_continuation.v1'
 KIND = 'retain_admission_after_healthy_harvest'
+READY_CONTINUATION = 'causes.derived_ready_harvest_source_continuation.v1'
 
 
 class SourceLineageError(ValueError):
@@ -265,3 +266,144 @@ def validate_after_derived(reference, *, predecessor, sources, read, mixed_owner
         raise SourceLineageError(str(error)) from error
     except (KeyError, TypeError, IndexError) as error:
         raise SourceLineageError('after_derived_shape') from error
+
+
+
+def validate_ready_continuation(reference, *, predecessor, sources, read,
+                                validate_migration):
+    """Retain one accepted original ready migration at the first derived handoff.
+
+    The caller loads the separately pinned migration validator and binds its
+    callable here. That validator keeps its original parent and ancestry rules.
+    Later derived suffixes validate this same first handoff, not a new migration.
+    This function grants no job, owner, storage or runtime authority.
+    """
+    require(callable(read) and callable(validate_migration), 'ready_continuation_reader')
+    refs, cache = {}, {}
+    total = 0
+
+    def raw(ref):
+        nonlocal total
+        require(type(ref) is dict and set(ref) == {'path', 'bytes', 'sha256'},
+                'ready_continuation_pin')
+        path, size, sha = ref['path'], ref['bytes'], ref['sha256']
+        require(type(path) is str and path.startswith('/') and '\x00' not in path and
+                str(PurePosixPath(path)) == path and '..' not in PurePosixPath(path).parts and
+                type(size) is int and 0 <= size <= 8 * 1024**2 and
+                type(sha) is str and re.fullmatch('[0-9a-f]{64}', sha) is not None,
+                'ready_continuation_pin_bound')
+        require(path not in refs or refs[path] == ref, 'ready_continuation_conflicting_pin')
+        if path not in refs:
+            require(len(refs) < 4096 and total + size <= 512 * 1024**2,
+                    'ready_continuation_read_bound')
+            body = read(ref)
+            require(type(body) is bytes and len(body) == size and
+                    hashlib.sha256(body).hexdigest() == sha, 'ready_continuation_pin_bytes')
+            refs[path], cache[path] = dict(ref), body
+            total += size
+        return cache[path]
+
+    def unique(pairs):
+        result = {}
+        for key, item in pairs:
+            require(key not in result, 'ready_continuation_duplicate_key')
+            result[key] = item
+        return result
+
+    def value(ref):
+        def invalid(_):
+            raise SourceLineageError('ready_continuation_nonfinite_json')
+        result = json.loads(raw(ref), object_pairs_hook=unique, parse_constant=invalid)
+        require(type(result) is dict, 'ready_continuation_object')
+        return result
+
+    def nested(item):
+        if type(item) is dict:
+            if set(item) == {'path', 'bytes', 'sha256'}:
+                raw(item)
+            else:
+                for child in item.values():
+                    nested(child)
+        elif type(item) is list:
+            for child in item:
+                nested(child)
+
+    try:
+        step = value(reference)
+        require(set(step) == {'schema', 'kind', 'predecessor', 'predecessor_plan',
+                'previous_migration', 'source', 'completed_actor_source', 'driver_source',
+                'binder_source', 'lineage_source', 'migration_validator_source',
+                'source_preparation', 'source_derivation', 'source_review',
+                'root_source_adoption'}, 'ready_continuation_shape')
+        require(step['schema'] == READY_CONTINUATION and
+                step['kind'] == 'retain_admission_after_ready_harvest' and
+                step['predecessor'] == predecessor and
+                type(predecessor) is dict and set(predecessor) == {'actual', 'review'},
+                'ready_continuation_descriptor')
+        actual, closed_peer = value(predecessor['actual']), value(predecessor['review'])
+        require(closed_peer.get('accepted_finite_supplement_closed_custody') is True and
+                closed_peer.get('accepted_completed_actor_saved_closure') is True and
+                closed_peer['actual'] == predecessor['actual'] and closed_peer['findings'] == [] and
+                closed_peer['source'] == actual['source'] and
+                closed_peer['all_original_attempts_retained'] is True and
+                closed_peer['original_denominator_preserved'] is True and
+                closed_peer['qualification_findings'] == actual['qualification_findings'],
+                'ready_continuation_closed_peer')
+        require(actual['schema'] == 'causes.finite_supplement_tranche_closed.v1' and
+                type(actual['active']) is int and actual['active'] == 0 and
+                actual['unstarted_ids'] == [] and actual['ambiguous'] == [] and
+                actual['unresolved_claimed_ids'] == [] and actual['quarantined'] is False and
+                actual['clean_native_ending'] is True and
+                actual['all_original_attempts_retained'] is True and
+                actual['original_denominator_preserved'] is True and actual['native_invocations'] and
+                actual['native_invocations'][-1]['plan'] == actual['plan'] == step['predecessor_plan'],
+                'ready_continuation_closed_original')
+        prior = value(actual['plan'])
+        require('derived_bank' not in prior and 'original_reservation_transfer' not in prior and
+                prior.get('retain_admission_after_healthy_harvest') is True and
+                prior.get('retain_admission_after_ready_harvest') is True and
+                prior['native_source_migration'] == step['previous_migration'],
+                'ready_continuation_original_plan')
+        require(step['source'] == sources['native_queue'] == prior['sources']['native_queue'] and
+                step['completed_actor_source'] == sources['completed_actor'] == prior['sources']['completed_actor'] and
+                step['driver_source'] == sources['driver'] and
+                step['lineage_source'] == sources['source_lineage'] and
+                step['migration_validator_source'] == sources['ready_migration'] ==
+                    prior['sources']['source_lineage'], 'ready_continuation_endpoints')
+        for key in ('native_queue', 'completed_actor', 'driver', 'source_lineage',
+                    'derived_runtime', 'ready_migration'):
+            raw(sources[key])
+        migration = validate_migration(prior, read=raw)
+        require(type(migration) is dict and
+                migration.get('kind') == 'authenticated_ready_harvest_migration' and
+                migration.get('runtime_authorized') is False and
+                type(migration.get('required_pins')) is list and
+                step['previous_migration'] in migration['required_pins'],
+                'ready_continuation_migration_proof')
+        for ref in migration['required_pins']:
+            raw(ref)
+        prep = value(step['source_preparation']); derivation = value(step['source_derivation'])
+        peer = value(step['source_review']); adoption = value(step['root_source_adoption'])
+        selected = {key: sources[key] for key in ('native_queue', 'completed_actor',
+                    'driver', 'source_lineage', 'derived_runtime', 'ready_migration')}
+        selected['binder'] = step['binder_source']
+        require(peer.get('accepted_derived_ready_harvest_runtime_sources') is True and
+                adoption.get('accepted_derived_ready_harvest_runtime_sources') is True and
+                adoption['root_authorized'] is True and adoption['runtime_authorized'] is False and
+                peer['findings'] == adoption['findings'] == [] and
+                all(obj['first_runtime_sources'] == selected for obj in (prep, peer, adoption)) and
+                adoption['independent_review'] == step['source_review'] and
+                all(obj['source_preparation'] == step['source_preparation'] for obj in (peer, adoption)) and
+                all(obj['source_derivation'] == step['source_derivation'] for obj in (prep, peer, adoption)) and
+                derivation['only_ready_compatibility_and_lineage_changed'] is True and
+                derivation['scientific_identity_preserved'] is True,
+                'ready_continuation_source_acceptance')
+        for item in (step, prep, derivation, peer, adoption):
+            nested(item)
+        return dict(kind='same_source_ready_continuation',
+                    original_migration=dict(step['previous_migration']),
+                    predecessor_plan=dict(actual['plan']), migration=migration,
+                    required_pins=[refs[path] for path in sorted(refs)],
+                    runtime_authorized=False)
+    except (KeyError, TypeError, IndexError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SourceLineageError('ready_continuation_shape') from exc
