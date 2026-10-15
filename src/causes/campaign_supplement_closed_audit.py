@@ -5,6 +5,7 @@ remain unchanged. Provider and guard checks use their retained original clocks.
 All output bytes are buffered and sized before the output directory is created.
 """
 import argparse,base64,copy,datetime as dt,fcntl,hashlib,json,os,shlex,stat,sys,types
+from collections import OrderedDict
 from pathlib import Path
 
 def require(ok,why):
@@ -17,8 +18,85 @@ def pin(path):
     require(p.is_absolute() and p.resolve()==p and not p.is_symlink() and stat.S_ISREG(a.st_mode),'pin_path')
     require((a.st_dev,a.st_ino,a.st_size,a.st_mtime_ns)==(z.st_dev,z.st_ino,z.st_size,z.st_mtime_ns),'pin_changed')
     return dict(path=str(p),bytes=len(b),sha256=hashlib.sha256(b).hexdigest())
+def file_identity(info):
+    return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns,
+            info.st_mode,info.st_uid,info.st_gid,info.st_nlink)
+
+def named_identity(ref):
+    require(type(ref)is dict and set(ref)=={'path','bytes','sha256'} and
+            type(ref['path'])is str and type(ref['bytes'])is int and ref['bytes']>=0 and
+            type(ref['sha256'])is str and len(ref['sha256'])==64 and
+            all(c in '0123456789abcdef' for c in ref['sha256']),'pin_mismatch')
+    path=Path(ref['path'])
+    require(path.is_absolute() and str(path)==ref['path'] and path.resolve()==path,'pin_path')
+    info=path.lstat()
+    require(stat.S_ISREG(info.st_mode),'pin_path')
+    require(info.st_size==ref['bytes'],'pin_mismatch')
+    return file_identity(info)
+
+def read_pinned_bytes(ref):
+    """Return exactly the bytes hashed, with named/opened identity bracketing."""
+    before=named_identity(ref)
+    fd=os.open(ref['path'],os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,'rb') as stream:
+        require(file_identity(os.fstat(stream.fileno()))==before,'pin_changed')
+        body=stream.read(ref['bytes']+1)
+        require(file_identity(os.fstat(stream.fileno()))==before,'pin_changed')
+    require(named_identity(ref)==before,'pin_changed')
+    require(len(body)==ref['bytes'] and hashlib.sha256(body).hexdigest()==ref['sha256'],'pin_mismatch')
+    return body,before
+
 def raw(ref):
-    require(pin(ref['path'])==ref,'pin_mismatch');return Path(ref['path']).read_bytes()
+    return read_pinned_bytes(ref)[0]
+
+class PinnedBytes:
+    """One audit's bounded bytes-only cache, never a global source cache.
+
+    Every hit still checks the pin and full named file identity. This assumes
+    trusted local filesystem metadata; it cannot detect a byte change that
+    leaves the observed identity unchanged, including coalesced timestamps.
+    Final full-content revalidation bypasses the cache and catches a lasting
+    change; neither check proves continuous byte immutability.
+    It verifies content pins, not whole-audit metadata immutability. Limits
+    cover retained byte payload, not total RSS or uncached input size.
+    """
+    MAX_BYTES=32*1024**2
+    MAX_ENTRIES=256
+    MAX_OBJECT_BYTES=16*1024**2
+
+    def __init__(self,*,maximum_bytes=MAX_BYTES,maximum_entries=MAX_ENTRIES,
+                 maximum_object_bytes=MAX_OBJECT_BYTES):
+        for value,ceiling in ((maximum_bytes,self.MAX_BYTES),
+                              (maximum_entries,self.MAX_ENTRIES),
+                              (maximum_object_bytes,self.MAX_OBJECT_BYTES)):
+            require(type(value)is int and 0<=value<=ceiling,'cache_bound')
+        self.maximum_bytes=maximum_bytes;self.maximum_entries=maximum_entries
+        self.maximum_object_bytes=maximum_object_bytes
+        self.entries=OrderedDict();self.retained_bytes=0
+
+    def read(self,ref):
+        identity=named_identity(ref)
+        old=self.entries.get(ref['path'])
+        if old is not None:
+            saved,previous,body=old
+            require(saved==ref,'pin_mismatch')
+            require(identity==previous,'pin_changed')
+            self.entries.move_to_end(ref['path'])
+            return body
+        body,identity=read_pinned_bytes(ref)
+        if (self.maximum_bytes and self.maximum_entries and len(body)<=self.maximum_bytes and
+                len(body)<=self.maximum_object_bytes):
+            while (len(self.entries)>=self.maximum_entries or
+                   self.retained_bytes+len(body)>self.maximum_bytes):
+                _,(_,_,evicted)=self.entries.popitem(last=False)
+                self.retained_bytes-=len(evicted)
+            self.entries[ref['path']]=(dict(ref),identity,body)
+            self.retained_bytes+=len(body)
+        return body
+
+    def clear(self):
+        self.entries.clear();self.retained_bytes=0
+
 def checked(ref):return json.loads(raw(ref))
 def module(ref,name):
     b=raw(ref);m=types.ModuleType(name);m.__file__=ref['path'];sys.modules[name]=m
@@ -112,24 +190,34 @@ def lock_identity(stream,desc):
     require(stat.S_ISREG(opened.st_mode)and stat.S_ISREG(named.st_mode)and (opened.st_dev,opened.st_ino)==(named.st_dev,named.st_ino)==(desc['device'],desc['inode']),'held_lock_identity')
 
 class SavedAudit:
-    def __init__(self,plan,runtime,mods,journal,records):
+    def __init__(self,plan,runtime,mods,journal,records,*,byte_cache=None):
         self.plan=plan;self.runtime=runtime;self.mods=mods;self.core=mods['core'];self.direct=mods['direct']
+        self.byte_cache=PinnedBytes() if byte_cache is None else byte_cache
         self.contract=checked(plan['contract']);self.journal=journal;self.records=records;self.pins={};self.prefixes={}
         self.remote_cache={};self.guard_cache={};self.provider_cache={}
         self.record_roster={r['path']:r for r in records};self.used_capture_novelty={}
         self.provider_plan=checked(plan['provider_intent'])['request']['plan']
         self.native=module(self.provider_plan['native_source'],'_saved_direct_provider_native')
         self.retired=checked(plan['completed_actor_custody']['actual'])['retired_actors']
+        self.transport=mods.get('transport') if 'control_transport' in plan else None
+        self.control_ready_refs=[];self.control_intent_times=[]
+        if 'control_transport' in plan:
+            require(self.transport is not None and pin(self.transport.__file__)==plan['sources']['control_transport'],'exact_saved_transport_module')
+            self.transport.validate_plan(plan,read=self.read)
     def record(self,value,read=False):
         ref=value if type(value)is dict else pin(Path(value))
         if ref['path']==str(Path(self.plan['output_root'])/'.control/journal.jsonl') and ref['bytes']<len(self.journal):
             b=self.journal[:ref['bytes']];require(b.endswith(b'\n')and hashlib.sha256(b).hexdigest()==ref['sha256'],'historical_journal_prefix')
             self.prefixes[(ref['bytes'],ref['sha256'])]=ref
         else:
-            b=raw(ref);old=self.pins.get(ref['path']);require(old is None or old==ref,'conflicting_pin');self.pins[ref['path']]=ref
+            old=self.pins.get(ref['path']);require(old is None or old==ref,'conflicting_pin')
+            b=self.byte_cache.read(ref);self.pins[ref['path']]=ref
         return b if read else None
     def read(self,ref):return self.record(ref,True)
     def value(self,ref):return json.loads(self.read(ref))
+    def revalidate(self):
+        """Final authentication must read every recorded file, including hits."""
+        for ref in self.pins.values():raw(ref)
     def registered(self,ref,kind):
         path=Path(ref['path'])
         require(path.parent==Path(self.plan['output_root'])/'admission_records'and path.name.split('_',1)[1]==kind and self.record_roster.get(ref['path'])==ref,'unregistered_admission_record')
@@ -161,13 +249,20 @@ class SavedAudit:
     def remote_intent(self,intent):
         p=self.plan;require(type(intent['full'])is bool,'remote_full_type')
         refs=[p['sources'][key]for key in ['remote','provider_status','collector','exact_bytes']]+[p['provider_intent'],self.provider_plan['native_source']]
+        transport_argv=None
+        if 'control_transport' in p:
+            more,transport_argv=self.transport.saved_call(p,intent['control_transport'],read=self.read);refs+=more
+            self.control_ready_refs.append(intent['control_transport']['ready']);self.control_intent_times.append(intent['at'])
+        else:require('control_transport' not in intent,'undeclared_transport')
         require(intent['source']==p['sources']['remote']and intent['sources']==refs and intent['maximum_invocations']==1 and intent['automatic_retry']is False,'remote_exact_source_roster')
         for ref in refs:self.record(ref)
         envelope=dict(provider_plan=self.provider_plan,runtime_identity=p['provider_identity'],helper_source=p['sources']['provider_status'],helper_base64=base64.b64encode(self.read(p['sources']['provider_status'])).decode(),native_base64=base64.b64encode(self.read(self.provider_plan['native_source'])).decode(),retired_actors=self.retired,remote_pause_paths=p['remote_pause_paths'],full=intent['full'])
         payload=encoded(envelope)[:-1]
         argv=p['ssh_argv']+[p['provider_interpreter']+' -c '+shlex.quote(self.read(p['sources']['remote']).decode())]
+        if transport_argv is not None:
+            require(transport_argv[-1]==argv[-1],'transport_remote_command_changed');argv=transport_argv
         require(intent['argv']==argv and intent['payload_bytes']==len(payload)and intent['payload_sha256']==hashlib.sha256(payload).hexdigest(),'remote_exact_argv_payload')
-    def remote_accounting(self,files,number):
+    def remote_accounting(self,files,number,control_closed=None):
         root=Path(self.plan['output_root'])/'remote_records';groups={}
         for ref in files:
             path=Path(ref['path'])
@@ -183,7 +278,13 @@ class SavedAudit:
             if len(refs)==5:require(intent['full'],'gzip_in_status_call')
             rows.append(dict(directory=name,full=intent['full'],intent=refs[0],execution=refs[3],complete=ex['transport']['complete'],returncode=ex['transport']['returncode'],source_error=ex['source_error'],all_files=refs))
         require(full<=self.plan['maximum_captures'],'remote_full_budget')
-        return dict(calls=number,full_calls=full,rows=rows,failed_and_unclaimed_calls_retained=True)
+        result=dict(calls=number,full_calls=full,rows=rows,failed_and_unclaimed_calls_retained=True)
+        if 'control_transport' in self.plan:
+            custody=self.transport.saved_closed(self.plan,control_closed,self.control_ready_refs,read=self.read)
+            require(all(stamp(custody['ready_at'])<=stamp(t)<=stamp(custody['stopped_at']) for t in self.control_intent_times),'transport_call_outside_owned_lifetime')
+            result['control_transport']=custody
+        else:require(control_closed is None,'undeclared_transport_closure')
+        return result
     def remote(self,evidence):
         executions=[r for r in evidence if Path(r['path']).name.endswith('_execution')]
         require(len(executions)==1,'remote_execution_count');er=executions[0]
@@ -344,7 +445,7 @@ def main():
     allocation_root=Path(allocation['output_root']);require(allocation_root.is_absolute()and allocation_root.resolve()==allocation_root and destination.is_absolute()and destination.resolve()==destination and destination.parent==allocation_root,'allocated_output_path')
     complete,ex,result_wrapper,owner,supervisor,durable_refs=durable_chain(recipe,p);result=result_wrapper['result']
     absence=[absent(owner['process']),absent(supervisor)]
-    locks=[]
+    locks=[];audit=None
     try:
         for desc in p['exclusive_locks']:
             path=Path(desc['path']);info=path.stat();require((info.st_dev,info.st_ino)==(desc['device'],desc['inode']),'closed_lock_identity')
@@ -379,7 +480,7 @@ def main():
         for i,r in enumerate(records,1):require(Path(r['path']).name.startswith('%06d_'%i),'record_sequence')
         audit=SavedAudit(p,runtime,mods,journal,records)
         for ref in files+durable_refs+scope['required_pins']+[recipe_ref,authority_ref,pin(__file__),recipe['plan'],recipe['owner'],recipe['runtime_plan'],recipe['closed_scope_source'],recipe['output_allocation']]:audit.record(ref)
-        remote_accounting=audit.remote_accounting(files,result_wrapper['remote_calls'])
+        remote_accounting=audit.remote_accounting(files,result_wrapper['remote_calls'],result_wrapper.get('control_transport'))
         kinds={}
         for ref in records:kinds.setdefault(Path(ref['path']).name.split('_',1)[1],[]).append(ref)
         reservations=[audit.value(r)for r in kinds.get('reservation',[])];captures=[audit.value(r)for r in kinds.get('capture_intent',[])]
@@ -440,6 +541,7 @@ def main():
             actual['native_invocations'][-1]['derived_bank']=p['derived_bank']
             actual['derived_scientific_protocol']=scope['derived_bank']['protocol']
             actual['derived_execution_protocol']=p['execution_protocol']
+        if 'control_transport' in p:actual['control_transport']=remote_accounting['control_transport']
         actual_ref=buffered('ACTUAL.v1.json',actual)
         total=sum(map(len,outputs.values()));require(total<=recipe['maximum_output_bytes']and recipe['maximum_output_bytes']<=allocation['maximum_output_bytes'],'buffered_audit_output_bound')
         require(size(allocation_root)+total+allocation['future_margin_bytes']<=allocation['maximum_complete_bytes'],'whole_saved_output_root_bound')
@@ -447,13 +549,14 @@ def main():
         for stream,desc in zip(locks,p['exclusive_locks']):lock_identity(stream,desc);fcntl.flock(stream,fcntl.LOCK_EX|fcntl.LOCK_NB)
         driver.verify_roster(runtime['execution_pins'],list(driver.references(p['sources'])))
         require(tree(out)==files,'closed_runtime_tree_changed')
-        for ref in audit.pins.values():raw(ref)
+        audit.revalidate()
         require(raw(recipe['journal'])==journal,'closed_journal_changed')
         destination.mkdir()
         for path,data in outputs.items():
             with path.open('xb')as f:f.write(data)
         print(json.dumps(dict(actual=actual_ref,output_bytes=total,new_qualified=len(good),new_invalid=len(bad),terminal=actual['terminal'],unstarted=len(actual['unstarted_ids']),output_files=len(outputs),output_sizes=output_sizes)),flush=True)
     finally:
+        if audit is not None:audit.byte_cache.clear()
         for f in reversed(locks):f.close()
 
 if __name__=='__main__':main()
