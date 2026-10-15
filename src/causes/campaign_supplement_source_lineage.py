@@ -407,3 +407,112 @@ def validate_ready_continuation(reference, *, predecessor, sources, read,
                     runtime_authorized=False)
     except (KeyError, TypeError, IndexError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SourceLineageError('ready_continuation_shape') from exc
+
+AFTER_DERIVED_READY = 'causes.original_after_derived_ready_source_transition.v1'
+
+
+def validate_after_derived_ready(reference, *, predecessor, sources, read, mixed_owner,
+                                 validate_migration):
+    """Join a complete derived owner to an explicitly accepted ready successor.
+
+    The historical first invocation retains its own ready source map and
+    migration validator. A separately adopted mixed completed actor can change
+    at this boundary; the queue, scientific rows and prior lineage cannot.
+    This saved-metadata check neither authorizes a runtime nor invents closure.
+    """
+    require(callable(validate_migration), 'after_derived_ready_validator')
+    try:
+        value, refs = mixed_owner._reader(read, 128 * 1024**2)
+        transition = value(reference)
+        require(set(transition) == {'schema', 'kind', 'owner_partition',
+                'predecessor_plan', 'previous_lineage', 'previous_source',
+                'previous_runtime_completed_actor_source', 'source',
+                'completed_actor_source', 'mixed_owner_source', 'lineage_source',
+                'driver_source', 'binder_source', 'migration_validator_source',
+                'source_review', 'root_source_adoption'} and
+                transition['schema'] == AFTER_DERIVED_READY and
+                transition['kind'] == 'retain_admission_after_ready_harvest',
+                'after_derived_ready_transition')
+        partition = mixed_owner.resolve(transition['owner_partition'], predecessor=predecessor,
+            source=sources['mixed_owner'], read=read)
+        head = value(predecessor['actual']); prior = value(head['plan'])
+        require(head['plan'] == head['native_invocations'][-1]['plan']
+                and 'derived_bank' in prior and prior['derived_bank'] == partition['derived_adoption']
+                and prior['continuation_scope'] in ('adopted_derived_bank','derived_bank_remaining')
+                and prior.get('retain_admission_after_healthy_harvest') is True
+                and prior.get('retain_admission_after_ready_harvest') is True
+                and transition['predecessor_plan'] == head['plan']
+                and transition['previous_lineage'] == prior['native_source_migration']
+                and transition['previous_source'] == prior['sources']['native_queue']
+                and transition['previous_runtime_completed_actor_source'] == prior['sources']['completed_actor']
+                and transition['source'] == sources['native_queue'] == prior['sources']['native_queue']
+                and transition['completed_actor_source'] == sources['completed_actor']
+                and transition['mixed_owner_source'] == sources['mixed_owner']
+                and transition['lineage_source'] == sources['source_lineage']
+                and transition['driver_source'] == sources['driver']
+                and transition['migration_validator_source'] == sources['ready_migration'] ==
+                    prior['sources']['ready_migration'], 'after_derived_exact_endpoint')
+        peer, adoption = value(transition['source_review']), value(transition['root_source_adoption'])
+        selected = {key:sources[key] for key in ('native_queue','completed_actor','mixed_owner','source_lineage','driver','ready_migration')}
+        selected['binder'] = transition['binder_source']
+        require(peer.get('accepted_original_after_derived_source') is True
+                and peer.get('accepted_original_after_derived_ready_source') is True
+                and peer.get('findings') == [] and peer['sources'] == selected
+                and peer['previous_completed_actor_source'] == prior['sources']['completed_actor']
+                and adoption['schema'] == 'causes.original_after_derived_ready_source_adoption.v1'
+                and adoption.get('accepted_original_after_derived_ready_source') is True
+                and adoption.get('root_authorized') is True and adoption.get('runtime_authorized') is False
+                and adoption['accepted_source_for_prospective_transition'] is True
+                and adoption['sources'] == selected and adoption['independent_review'] == transition['source_review']
+                and adoption['findings'] == [], 'after_derived_source_acceptance')
+        derived_links = partition['links']
+        require(derived_links and all(link['kind'] == 'derived' for link in derived_links)
+                and derived_links[-1]['custody'] == predecessor, 'after_derived_only_same_adoption')
+        first = value(derived_links[0]['plan'])
+        require(first['continuation_scope'] == 'adopted_derived_bank'
+                and first['predecessor_custody'] == partition['original_base'], 'after_derived_first_invocation')
+        retained_sources = []
+        for index, link in enumerate(derived_links):
+            step = value(link['plan'])
+            require(step['derived_bank'] == partition['derived_adoption']
+                    and step['continuation_scope'] == ('derived_bank_remaining' if index else 'adopted_derived_bank')
+                    and step['native_source_migration'] == first['native_source_migration']
+                    and step.get('retain_admission_after_healthy_harvest') is True
+                    and step.get('retain_admission_after_ready_harvest') is True
+                    and all(step['sources'][key] == first['sources'][key]
+                            for key in ('native_queue','completed_actor','ready_migration')),
+                    'after_derived_continuation_sources')
+            # resolve() already joins each accepted closure to its exact driver,
+            # predecessor, suffix, failure state and complete invocation list.
+            for ref in step['sources'].values():
+                require(type(ref) is dict and set(ref) == {'path','bytes','sha256'}
+                        and type(ref['bytes']) is int and 0 <= ref['bytes'] <= 8 * 1024**2,
+                        'after_derived_retained_source_pin')
+                data = read(ref)
+                require(type(data) is bytes and len(data) == ref['bytes']
+                        and hashlib.sha256(data).hexdigest() == ref['sha256'],
+                        'after_derived_retained_source_bytes')
+                retained_sources.append(ref)
+        lineage = validate_ready_continuation(first['native_source_migration'],
+            predecessor=first['predecessor_custody'], sources=first['sources'], read=read,
+            validate_migration=validate_migration)
+        required = list(refs.values()) + partition['required_pins'] + lineage['required_pins']
+        required.extend(retained_sources)
+        for ref in selected.values():
+            data = read(ref)
+            require(type(data) is bytes and len(data) == ref['bytes']
+                    and hashlib.sha256(data).hexdigest() == ref['sha256'], 'after_derived_source_bytes')
+            required.append(ref)
+        unique = {}
+        for ref in required:
+            require(ref['path'] not in unique or unique[ref['path']] == ref,
+                    'after_derived_conflicting_pin')
+            unique[ref['path']] = ref
+        return dict(kind='original_after_derived_ready', runtime_authorized=False, original_migration=lineage['original_migration'],
+                    predecessor=predecessor, owner_partition=transition['owner_partition'],
+                    first_derived_plan=derived_links[0]['plan'], derived_invocations=len(derived_links),
+                    required_pins=list(unique.values()))
+    except mixed_owner.MixedOwnerError as error:
+        raise SourceLineageError(str(error)) from error
+    except (KeyError, TypeError, IndexError) as error:
+        raise SourceLineageError('after_derived_shape') from error
