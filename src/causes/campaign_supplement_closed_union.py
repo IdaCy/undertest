@@ -162,7 +162,8 @@ def admission_review_partition(saved, peer, mids, prior_count):
     # Some independently reviewed clean deltas record counts instead of repeating
     # every ID. The caller has already checked their exact actual/source/flags,
     # native rows, claims, terminals and ordered complete-ID partition.
-    require(peer.get('schema') == 'causes.completed_actor_saved_closure_review.v1'
+    independent = peer.get('schema') == 'causes.completed_actor_saved_closure_independent_review.v1'
+    require((peer.get('schema') == 'causes.completed_actor_saved_closure_review.v1' or independent)
             and peer.get('current_tranche_qualified') is True
             and saved.get('current_tranche_qualified') is True
             and peer.get('new_invalid_ids') == saved['new_invalid_ids'] == []
@@ -175,6 +176,64 @@ def admission_review_partition(saved, peer, mids, prior_count):
             'closed_clean_admission_review')
     partition = peer.get('partition')
     require(type(partition) is dict, 'closed_clean_admission_partition')
+    if independent:
+        # These reviews use either flat or cumulative count names. Check every
+        # present alias, not just the first one. Occupancy is only a cardinality
+        # witness: the clean-current proof and ordered qualified IDs above are
+        # still required before any count-only representation is accepted.
+        groups = (
+            (('active',), 0),
+            (('prior_occupied',), prior_count),
+            (('occupied', 'cumulative_occupied'), saved['occupied']),
+            (('terminal', 'cumulative_terminal'), saved['terminal']),
+            (('scientifically_qualified_total', 'qualified_custody_total',
+              'cumulative_qualified'), saved['scientifically_qualified_total']),
+            (('unstarted', 'untouched'), len(saved['unstarted_ids'])),
+        )
+        for names, value in groups:
+            aliases = [name for name in names if name in partition]
+            require(aliases and all(type(partition[name]) is int and partition[name] == value
+                                    for name in aliases), 'closed_independent_admission_counts')
+        require(any(name in partition for name in ('new_qualified', 'new_admission_qualified'))
+                or all(name in partition for name in ('new_occupied', 'new_terminal')),
+                'closed_independent_admission_current_counts')
+        optional = dict(new_qualified=len(mids), new_admission_qualified=len(mids),
+                        new_occupied=len(mids), new_terminal=len(mids), new_invalid=0,
+                        owner_members=saved['occupied'] + len(saved['unstarted_ids']),
+                        full_population=saved['occupied'] + len(saved['unstarted_ids']),
+                        unresolved=0, unresolved_claimed=0, ambiguous=0,
+                        consecutive_failures=saved['consecutive_failures'])
+        require(all(type(partition[name]) is int and partition[name] == value
+                    for name, value in optional.items() if name in partition),
+                'closed_independent_admission_counts')
+        if 'missingness' in peer:
+            missingness = peer['missingness']
+            expected_missingness = dict(current_integrity_failures=0,
+                current_native_technical_missing=0, new_qualification_invalid=0,
+                inherited_invalid=len(saved['cumulative_invalid_ids']))
+            require(type(missingness) is dict
+                    and all(type(missingness.get(name)) is int and missingness[name] == value
+                            for name, value in expected_missingness.items()),
+                    'closed_independent_admission_missingness')
+        else:
+            # The flat review attests clean admission, not response completeness.
+            # Its absent missingness block supplies no technical-outcome facts.
+            require(all(name in partition for name in ('new_invalid', 'occupied', 'terminal', 'unstarted'))
+                    and any(name in partition for name in ('new_qualified', 'new_admission_qualified'))
+                    and any(name in partition for name in ('scientifically_qualified_total', 'qualified_custody_total'))
+                    and not any(name in partition for name in ('cumulative_occupied', 'cumulative_terminal',
+                        'cumulative_qualified', 'untouched', 'new_occupied', 'new_terminal')),
+                    'closed_independent_admission_flat_profile')
+        if 'admission_summary' in peer:
+            summary = peer['admission_summary']
+            counts = dict(total=len(mids), qualified=len(mids), unqualified=0,
+                          unique_measurement_ids=len(mids))
+            require(type(summary) is dict and summary.get('exact_current_partition') is True
+                    and summary.get('findings') == []
+                    and all(type(summary.get(name)) is int and summary[name] == value
+                            for name, value in counts.items()),
+                    'closed_independent_admission_summary')
+        return saved['new_scientifically_qualified_ids'], [], []
     qualified_fields = [name for name in ('new_qualified', 'new_admission_qualified')
                         if name in partition]
     require(len(qualified_fields) == 1, 'closed_clean_admission_count_field')
