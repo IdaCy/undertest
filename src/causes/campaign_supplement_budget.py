@@ -10,6 +10,12 @@ import resource
 import stat
 
 from causes import campaign_supplement as core
+from shared.bounded_timing import span
+
+
+TIMING_PRECHECK = 1
+TIMING_INVENTORY = 2
+TIMING_VALIDATION = 3
 
 
 def require(value, reason):
@@ -80,34 +86,37 @@ class AdmissionBudget:
         self.reserve_bytes = reserve_bytes
         self.previous = None
 
-    def before_admission(self, claimed):
-        require(type(claimed) is int and claimed >= 0, 'retention_claim_count')
-        require(resource.getrlimit(resource.RLIMIT_FSIZE) ==
-                (self.maximum_file_bytes, self.maximum_file_bytes),
-                'retention_process_file_limit_changed')
-        current = inventory(self.root)
-        require(all(row['bytes'] <= self.maximum_file_bytes
-                    for row in current['files'].values()), 'retention_oversized_file')
-        if self.previous is not None:
-            old = self.previous['files']
-            require(set(old) <= set(current['files']), 'retention_file_disappeared')
-            for path, row in old.items():
-                fresh = current['files'][path]
-                require((row['device'], row['inode']) ==
-                        (fresh['device'], fresh['inode']) and fresh['bytes'] >= row['bytes'],
-                        'retention_file_replaced_or_shrunk')
-            written = len(set(current['files']) - set(old)) + sum(
-                current['files'][path]['bytes'] > row['bytes'] for path, row in old.items())
-            require(written <= self.maximum_written_files and
-                    current['bytes'] - self.previous['bytes'] <= self.reserve_bytes,
-                    'retention_reviewed_write_window_exceeded')
-        if claimed >= self.maximum_claims:
-            raise core.AdmissionHold('fixed_admission_tranche_complete')
-        if current['bytes'] + self.reserve_bytes > self.maximum_retained_bytes:
-            raise core.AdmissionHold('retained_evidence_budget_reserved')
-        self.previous = current
-        return {'claimed': claimed, 'maximum_claims': self.maximum_claims,
-                'retained_bytes': current['bytes'], 'reserve_bytes': self.reserve_bytes,
-                'maximum_retained_bytes': self.maximum_retained_bytes,
-                'maximum_file_bytes': self.maximum_file_bytes,
-                'maximum_written_files': self.maximum_written_files}
+    def before_admission(self, claimed, *, timing=None):
+        with span(timing, TIMING_PRECHECK):
+            require(type(claimed) is int and claimed >= 0, 'retention_claim_count')
+            require(resource.getrlimit(resource.RLIMIT_FSIZE) ==
+                    (self.maximum_file_bytes, self.maximum_file_bytes),
+                    'retention_process_file_limit_changed')
+        with span(timing, TIMING_INVENTORY):
+            current = inventory(self.root)
+        with span(timing, TIMING_VALIDATION):
+            require(all(row['bytes'] <= self.maximum_file_bytes
+                        for row in current['files'].values()), 'retention_oversized_file')
+            if self.previous is not None:
+                old = self.previous['files']
+                require(set(old) <= set(current['files']), 'retention_file_disappeared')
+                for path, row in old.items():
+                    fresh = current['files'][path]
+                    require((row['device'], row['inode']) ==
+                            (fresh['device'], fresh['inode']) and fresh['bytes'] >= row['bytes'],
+                            'retention_file_replaced_or_shrunk')
+                written = len(set(current['files']) - set(old)) + sum(
+                    current['files'][path]['bytes'] > row['bytes'] for path, row in old.items())
+                require(written <= self.maximum_written_files and
+                        current['bytes'] - self.previous['bytes'] <= self.reserve_bytes,
+                        'retention_reviewed_write_window_exceeded')
+            if claimed >= self.maximum_claims:
+                raise core.AdmissionHold('fixed_admission_tranche_complete')
+            if current['bytes'] + self.reserve_bytes > self.maximum_retained_bytes:
+                raise core.AdmissionHold('retained_evidence_budget_reserved')
+            self.previous = current
+            return {'claimed': claimed, 'maximum_claims': self.maximum_claims,
+                    'retained_bytes': current['bytes'], 'reserve_bytes': self.reserve_bytes,
+                    'maximum_retained_bytes': self.maximum_retained_bytes,
+                    'maximum_file_bytes': self.maximum_file_bytes,
+                    'maximum_written_files': self.maximum_written_files}
